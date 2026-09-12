@@ -34,6 +34,21 @@ func alert(dedup string) *model.Alert {
 	return &model.Alert{Category: "server_offline", Level: "warning", ObjectKind: "Server", ObjectID: "1", DedupKey: dedup}
 }
 
+// mustUser 建一个用户；mustToken 给它签一把令牌，返回令牌 id（tasks.claimed_by 的外键指向它）。
+func mustUser(t *testing.T, s *store.Store, name string) *model.User {
+	t.Helper()
+	u := &model.User{Username: name, PasswordHash: "x", Role: "admin"}
+	mustInsert(t, s, u)
+	return u
+}
+
+func mustToken(t *testing.T, s *store.Store, owner, name string) int64 {
+	t.Helper()
+	tok := &model.ApiToken{Owner: owner, Name: name, TokenHash: "hash-" + name, Preset: "ops"}
+	mustInsert(t, s, tok)
+	return tok.ID
+}
+
 func mustInsert(t *testing.T, s *store.Store, m any) {
 	t.Helper()
 	if err := s.Insert(context.Background(), m); err != nil {
@@ -238,7 +253,12 @@ func TestConditionalUpdateClaim(t *testing.T) {
 		s := newStore(bdb)
 		base := task("k")
 		mustInsert(t, s, base)
+		mustUser(t, s, "claimer")
 		const writers = 2
+		tokens := make([]int64, writers)
+		for i := range tokens {
+			tokens[i] = mustToken(t, s, "claimer", "runtime-"+string(rune('a'+i)))
+		}
 		results := make([]error, writers)
 		var wg sync.WaitGroup
 		start := make(chan struct{})
@@ -248,7 +268,7 @@ func TestConditionalUpdateClaim(t *testing.T) {
 				defer wg.Done()
 				m := *base
 				m.Status = "claimed"
-				who := int64(100 + i)
+				who := tokens[i]
 				m.ClaimedBy = &who
 				<-start
 				results[i] = s.UpdateAction(ctx, &m, []string{"status", "claimed_by"}, store.Cond{Column: "status", Value: "open"})
@@ -260,7 +280,7 @@ func TestConditionalUpdateClaim(t *testing.T) {
 		for i, err := range results {
 			if err == nil {
 				succeeded++
-				winner = int64(100 + i)
+				winner = tokens[i]
 				continue
 			}
 			e := wantCode(t, err, v1.CodeConflict)

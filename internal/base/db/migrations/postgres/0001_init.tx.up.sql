@@ -68,72 +68,6 @@ CREATE TABLE config_snapshots (
 
 --bun:split
 
-CREATE TABLE evidence_packages (
-  id BIGSERIAL PRIMARY KEY,
-  category TEXT NOT NULL,
-  server_id BIGINT,
-  collected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  items JSONB NOT NULL DEFAULT '{}',
-  collect_error TEXT,
-  size_bytes BIGINT NOT NULL DEFAULT 0,
-  expires_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
---bun:split
-
-CREATE TABLE alerts (
-  id BIGSERIAL PRIMARY KEY,
-  category TEXT NOT NULL,
-  level TEXT NOT NULL,
-  object_kind TEXT NOT NULL,
-  object_id TEXT NOT NULL,
-  dedup_key TEXT NOT NULL CHECK (dedup_key <> ''),
-  conditions JSONB NOT NULL DEFAULT '[]',
-  evidence_id BIGINT,
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'claimed', 'recovered', 'resolved')),
-  resolve_reason TEXT,
-  occurrence_count BIGINT NOT NULL DEFAULT 1,
-  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  resource_version BIGINT NOT NULL DEFAULT 1,
-  deleted_at TIMESTAMPTZ,
-  FOREIGN KEY (evidence_id) REFERENCES evidence_packages (id) ON DELETE SET NULL
-);
-
---bun:split
-
-CREATE UNIQUE INDEX alerts_dedup_key_active ON alerts (dedup_key) WHERE status <> 'resolved';
-
---bun:split
-
-CREATE TABLE jobs (
-  id BIGSERIAL PRIMARY KEY,
-  job_id TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  server_id BIGINT,
-  args JSONB NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'failed', 'unknown')),
-  started_at TIMESTAMPTZ,
-  finished_at TIMESTAMPTZ,
-  exit_code BIGINT,
-  output TEXT,
-  output_truncated BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  resource_version BIGINT NOT NULL DEFAULT 1,
-  deleted_at TIMESTAMPTZ
-);
-
---bun:split
-
-CREATE UNIQUE INDEX jobs_job_id_key ON jobs (job_id);
-
---bun:split
-
 CREATE TABLE notify_channels (
   id BIGSERIAL PRIMARY KEY,
   name TEXT NOT NULL,
@@ -177,13 +111,60 @@ CREATE UNIQUE INDEX notify_deliveries_delivery_id_key ON notify_deliveries (deli
 
 --bun:split
 
-CREATE TABLE alert_deliveries (
-  alert_id BIGINT NOT NULL,
-  delivery_id BIGINT NOT NULL,
-  PRIMARY KEY (alert_id, delivery_id),
-  FOREIGN KEY (alert_id) REFERENCES alerts (id) ON DELETE CASCADE,
-  FOREIGN KEY (delivery_id) REFERENCES notify_deliveries (id) ON DELETE CASCADE
+CREATE TABLE package_node_traffic_suspensions (
+  username TEXT NOT NULL,
+  package_id BIGINT NOT NULL,
+  node_id BIGINT NOT NULL,
+  kind TEXT NOT NULL,
+  credential_json JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (username, package_id, node_id, kind)
 );
+
+--bun:split
+
+CREATE TABLE package_user_node_traffic_baselines (
+  username TEXT NOT NULL,
+  package_id BIGINT NOT NULL,
+  node_id BIGINT NOT NULL,
+  baseline DOUBLE PRECISION NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (username, package_id, node_id)
+);
+
+--bun:split
+
+CREATE TABLE packages (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  traffic_limit_bytes BIGINT NOT NULL DEFAULT 0,
+  cycle_days BIGINT NOT NULL DEFAULT 30,
+  is_reset BOOLEAN NOT NULL DEFAULT FALSE,
+  reset_day BIGINT NOT NULL DEFAULT 1,
+  nodes JSONB NOT NULL DEFAULT '[]',
+  device_limit BIGINT NOT NULL DEFAULT 0,
+  speed_limit_mbps DOUBLE PRECISION NOT NULL DEFAULT 0,
+  auto_speed_limit_json JSONB NOT NULL DEFAULT '[]',
+  traffic_mode TEXT NOT NULL DEFAULT 'oneway' CHECK (traffic_mode IN ('oneway', 'twoway')),
+  template_filename TEXT NOT NULL DEFAULT '',
+  surge_template_filename TEXT NOT NULL DEFAULT '',
+  short_code TEXT NOT NULL DEFAULT '',
+  node_multipliers JSONB NOT NULL DEFAULT '{}',
+  node_traffic_limits JSONB NOT NULL DEFAULT '{}',
+  node_speed_limits JSONB NOT NULL DEFAULT '{}',
+  node_device_limits JSONB NOT NULL DEFAULT '{}',
+  node_name_overrides JSONB NOT NULL DEFAULT '{}',
+  node_name_override_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX packages_name_key ON packages (name);
 
 --bun:split
 
@@ -205,6 +186,627 @@ CREATE TABLE plans (
 
 --bun:split
 
+CREATE TABLE servers (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  ipv6_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  domain TEXT NOT NULL DEFAULT '',
+  domain_v6 TEXT NOT NULL DEFAULT '',
+  connection_mode TEXT NOT NULL DEFAULT 'auto' CHECK (connection_mode IN ('auto', 'websocket', 'http', 'pull')),
+  pull_address TEXT NOT NULL DEFAULT '',
+  pull_address_v6 TEXT NOT NULL DEFAULT '',
+  pull_port BIGINT NOT NULL DEFAULT 0,
+  listen_port BIGINT NOT NULL DEFAULT 0,
+  lock_entry_ip BOOLEAN NOT NULL DEFAULT FALSE,
+  use_443 BOOLEAN NOT NULL DEFAULT FALSE,
+  steal_mode TEXT NOT NULL DEFAULT 'tunnel' CHECK (steal_mode IN ('tunnel', 'fallback')),
+  site_type TEXT NOT NULL DEFAULT '',
+  site_value TEXT NOT NULL DEFAULT '',
+  port_range_min BIGINT NOT NULL DEFAULT 0,
+  port_range_max BIGINT NOT NULL DEFAULT 0,
+  traffic_limit BIGINT NOT NULL DEFAULT 0,
+  traffic_reset_day BIGINT NOT NULL DEFAULT 0,
+  traffic_stats_mode TEXT NOT NULL DEFAULT 'both' CHECK (traffic_stats_mode IN ('both', 'upload', 'download', 'max')),
+  traffic_source TEXT NOT NULL DEFAULT 'core' CHECK (traffic_source IN ('core', 'system')),
+  include_in_traffic_stats BOOLEAN NOT NULL DEFAULT FALSE,
+  traffic_calibration BIGINT NOT NULL DEFAULT 0,
+  region TEXT NOT NULL DEFAULT '',
+  region_country TEXT NOT NULL DEFAULT '',
+  region_name TEXT NOT NULL DEFAULT '',
+  region_city TEXT NOT NULL DEFAULT '',
+  renewal_price DOUBLE PRECISION NOT NULL DEFAULT 0,
+  renewal_cycle TEXT NOT NULL DEFAULT 'month',
+  renewal_currency TEXT NOT NULL DEFAULT 'CNY',
+  provider_name TEXT NOT NULL DEFAULT '',
+  provider_url TEXT NOT NULL DEFAULT '',
+  telecom_paid_peer BOOLEAN NOT NULL DEFAULT FALSE,
+  expires_at TIMESTAMPTZ,
+  ddns_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  ddns_provider_id BIGINT NOT NULL DEFAULT 0,
+  ddns_record_name TEXT NOT NULL DEFAULT '',
+  core_log_level TEXT NOT NULL DEFAULT 'warn',
+  core_dns JSONB NOT NULL DEFAULT '{}',
+  core_stats_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  sort_order BIGINT NOT NULL DEFAULT 0,
+  token TEXT NOT NULL,
+  agent_token TEXT NOT NULL DEFAULT '',
+  pull_token TEXT NOT NULL DEFAULT '',
+  token_expires_at TIMESTAMPTZ,
+  agent_token_expires_at TIMESTAMPTZ,
+  last_token_refresh TIMESTAMPTZ,
+  last_agent_token_refresh TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'connected', 'offline')),
+  last_heartbeat TIMESTAMPTZ,
+  ip_address TEXT,
+  ip_address_v6 TEXT NOT NULL DEFAULT '',
+  boot_time TIMESTAMPTZ,
+  boot_count BIGINT NOT NULL DEFAULT 0,
+  core_boot_time TIMESTAMPTZ,
+  core_boot_count BIGINT NOT NULL DEFAULT 0,
+  core_running BOOLEAN NOT NULL DEFAULT FALSE,
+  core_version TEXT NOT NULL DEFAULT '',
+  current_upload_speed BIGINT NOT NULL DEFAULT 0,
+  current_download_speed BIGINT NOT NULL DEFAULT 0,
+  speed_updated_at TIMESTAMPTZ,
+  offline_since TIMESTAMPTZ,
+  offline_notified BOOLEAN NOT NULL DEFAULT FALSE,
+  warp_installed BOOLEAN NOT NULL DEFAULT FALSE,
+  same_host_as_master BOOLEAN NOT NULL DEFAULT FALSE,
+  time_offset_seconds BIGINT,
+  push_fail_count BIGINT NOT NULL DEFAULT 0,
+  last_push_fail TIMESTAMPTZ,
+  fallback_to_pull BOOLEAN NOT NULL DEFAULT FALSE,
+  fallback_at TIMESTAMPTZ,
+  last_pull_at TIMESTAMPTZ,
+  system_rx_cycle BIGINT NOT NULL DEFAULT 0,
+  system_tx_cycle BIGINT NOT NULL DEFAULT 0,
+  system_last_seen_rx BIGINT NOT NULL DEFAULT 0,
+  system_last_seen_tx BIGINT NOT NULL DEFAULT 0,
+  system_boot_time_unix BIGINT NOT NULL DEFAULT 0,
+  system_traffic_updated_at TIMESTAMPTZ,
+  traffic_reset_baseline BIGINT NOT NULL DEFAULT 0,
+  last_traffic_reset_at TIMESTAMPTZ,
+  ddns_last_synced_at TIMESTAMPTZ,
+  ddns_last_error TEXT NOT NULL DEFAULT '',
+  ddns_pending BOOLEAN NOT NULL DEFAULT FALSE,
+  provider_updated_at TIMESTAMPTZ,
+  rotation_pending BOOLEAN NOT NULL DEFAULT FALSE,
+  last_rotated_at TIMESTAMPTZ,
+  revoke_pending BOOLEAN NOT NULL DEFAULT FALSE,
+  applied_hash TEXT NOT NULL DEFAULT '',
+  applied_generation BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX servers_name_key ON servers (name);
+
+--bun:split
+
+CREATE UNIQUE INDEX servers_token_key ON servers (token);
+
+--bun:split
+
+CREATE INDEX servers_status_idx ON servers (status);
+
+--bun:split
+
+CREATE TABLE batch_inbounds (
+  id BIGSERIAL PRIMARY KEY,
+  batch_id TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  server_id BIGINT NOT NULL,
+  protocol TEXT NOT NULL,
+  port BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX batch_inbounds_batch_idx ON batch_inbounds (batch_id);
+
+--bun:split
+
+CREATE INDEX batch_inbounds_server_idx ON batch_inbounds (server_id);
+
+--bun:split
+
+CREATE INDEX batch_inbounds_tag_idx ON batch_inbounds (tag);
+
+--bun:split
+
+CREATE TABLE batch_outbounds (
+  id BIGSERIAL PRIMARY KEY,
+  batch_id TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  server_id BIGINT NOT NULL,
+  protocol TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX batch_outbounds_batch_idx ON batch_outbounds (batch_id);
+
+--bun:split
+
+CREATE INDEX batch_outbounds_server_idx ON batch_outbounds (server_id);
+
+--bun:split
+
+CREATE INDEX batch_outbounds_tag_idx ON batch_outbounds (tag);
+
+--bun:split
+
+CREATE TABLE evidence_packages (
+  id BIGSERIAL PRIMARY KEY,
+  category TEXT NOT NULL,
+  server_id BIGINT,
+  collected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  items JSONB NOT NULL DEFAULT '{}',
+  collect_error TEXT,
+  size_bytes BIGINT NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE SET NULL
+);
+
+--bun:split
+
+CREATE TABLE alerts (
+  id BIGSERIAL PRIMARY KEY,
+  category TEXT NOT NULL,
+  level TEXT NOT NULL,
+  object_kind TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  dedup_key TEXT NOT NULL CHECK (dedup_key <> ''),
+  conditions JSONB NOT NULL DEFAULT '[]',
+  evidence_id BIGINT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'claimed', 'recovered', 'resolved')),
+  resolve_reason TEXT,
+  occurrence_count BIGINT NOT NULL DEFAULT 1,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (evidence_id) REFERENCES evidence_packages (id) ON DELETE SET NULL
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX alerts_dedup_key_active ON alerts (dedup_key) WHERE status <> 'resolved';
+
+--bun:split
+
+CREATE TABLE alert_deliveries (
+  alert_id BIGINT NOT NULL,
+  delivery_id BIGINT NOT NULL,
+  PRIMARY KEY (alert_id, delivery_id),
+  FOREIGN KEY (alert_id) REFERENCES alerts (id) ON DELETE CASCADE,
+  FOREIGN KEY (delivery_id) REFERENCES notify_deliveries (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE TABLE inbounds (
+  id BIGSERIAL PRIMARY KEY,
+  server_id BIGINT NOT NULL,
+  tag TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  port BIGINT NOT NULL,
+  listen TEXT NOT NULL DEFAULT '',
+  tls JSONB NOT NULL DEFAULT '{}',
+  transport JSONB NOT NULL DEFAULT '{}',
+  settings JSONB NOT NULL DEFAULT '{}',
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  sort_order BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX inbounds_server_tag_key ON inbounds (server_id, tag);
+
+--bun:split
+
+CREATE TABLE jobs (
+  id BIGSERIAL PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  server_id BIGINT,
+  args JSONB NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'failed', 'unknown')),
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  exit_code BIGINT,
+  output TEXT,
+  output_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE SET NULL
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX jobs_job_id_key ON jobs (job_id);
+
+--bun:split
+
+CREATE TABLE outbounds (
+  id BIGSERIAL PRIMARY KEY,
+  server_id BIGINT NOT NULL,
+  tag TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  settings JSONB NOT NULL DEFAULT '{}',
+  is_warp BOOLEAN NOT NULL DEFAULT FALSE,
+  balancer_group TEXT NOT NULL DEFAULT '',
+  probe JSONB NOT NULL DEFAULT '{}',
+  last_probe_ok BOOLEAN NOT NULL DEFAULT FALSE,
+  last_probe_latency_ms BIGINT,
+  last_probed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX outbounds_server_tag_key ON outbounds (server_id, tag);
+
+--bun:split
+
+CREATE TABLE return_routes (
+  id BIGSERIAL PRIMARY KEY,
+  server_id BIGINT NOT NULL,
+  carrier TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  probe JSONB NOT NULL DEFAULT '{}',
+  route_type TEXT NOT NULL DEFAULT 'Unknown',
+  region TEXT NOT NULL DEFAULT '',
+  entry_ip TEXT NOT NULL DEFAULT '',
+  entry_asn TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  tested_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX return_routes_server_carrier_key ON return_routes (server_id, carrier);
+
+--bun:split
+
+CREATE INDEX return_routes_tested_at_idx ON return_routes (tested_at);
+
+--bun:split
+
+CREATE TABLE routing_rules (
+  id BIGSERIAL PRIMARY KEY,
+  server_id BIGINT NOT NULL,
+  sort_order BIGINT NOT NULL DEFAULT 0,
+  match JSONB NOT NULL DEFAULT '{}',
+  outbound_tag TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  catch_all BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX routing_rules_server_order_idx ON routing_rules (server_id, sort_order);
+
+--bun:split
+
+CREATE TABLE user_routed_outbound_actions (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  action TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--bun:split
+
+CREATE INDEX user_routed_outbound_actions_user_idx ON user_routed_outbound_actions (username, created_at);
+
+--bun:split
+
+CREATE TABLE users (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  email TEXT,
+  nickname TEXT,
+  avatar_url TEXT,
+  role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+  remark TEXT,
+  traffic_limit_override BIGINT,
+  speed_limit_override DOUBLE PRECISION,
+  device_limit_override BIGINT,
+  node_speed_limit_overrides JSONB NOT NULL DEFAULT '{}',
+  node_device_limit_overrides JSONB NOT NULL DEFAULT '{}',
+  tg_notify_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT FALSE,
+  telegram_id BIGINT,
+  telegram_username TEXT NOT NULL DEFAULT '',
+  telegram_bound_at TIMESTAMPTZ,
+  password_hash TEXT NOT NULL,
+  totp_secret TEXT NOT NULL DEFAULT '',
+  totp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  recovery_codes JSONB NOT NULL DEFAULT '[]',
+  is_over_limit BOOLEAN NOT NULL DEFAULT FALSE,
+  over_limit_enforced BOOLEAN NOT NULL DEFAULT FALSE,
+  disabled_access_enforced BOOLEAN NOT NULL DEFAULT FALSE,
+  traffic_warned_80 BOOLEAN NOT NULL DEFAULT FALSE,
+  last_reset_at TIMESTAMPTZ,
+  last_package_id BIGINT,
+  last_package_end_date TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX users_username_key ON users (username);
+
+--bun:split
+
+CREATE INDEX users_email_idx ON users (email);
+
+--bun:split
+
+CREATE UNIQUE INDEX users_telegram_id_key ON users (telegram_id) WHERE telegram_id IS NOT NULL;
+
+--bun:split
+
+CREATE TABLE api_tokens (
+  id BIGSERIAL PRIMARY KEY,
+  owner TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  token_hash TEXT NOT NULL,
+  scopes JSONB NOT NULL DEFAULT '{}',
+  preset TEXT NOT NULL DEFAULT 'readonly' CHECK (preset IN ('readonly', 'ops', 'full')),
+  expires_at TIMESTAMPTZ,
+  runtime TEXT,
+  revoked BOOLEAN NOT NULL DEFAULT FALSE,
+  revoked_at TIMESTAMPTZ,
+  last_used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (owner) REFERENCES users (username) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX api_tokens_token_hash_key ON api_tokens (token_hash);
+
+--bun:split
+
+CREATE INDEX api_tokens_owner_idx ON api_tokens (owner);
+
+--bun:split
+
+CREATE TABLE nodes (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  server_id BIGINT,
+  raw_url TEXT NOT NULL,
+  node_name TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  parsed_config JSONB NOT NULL,
+  clash_config TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  tag TEXT NOT NULL DEFAULT '手动输入',
+  tags JSONB NOT NULL DEFAULT '[]',
+  original_server TEXT,
+  original_domain TEXT,
+  inbound_tag TEXT,
+  chain_proxy_node_id BIGINT,
+  relay_group_name TEXT,
+  relay_group_node_ids JSONB NOT NULL DEFAULT '[]',
+  node_type TEXT NOT NULL DEFAULT 'physical',
+  parent_node_id BIGINT,
+  routed_outbound_tag TEXT,
+  routed_outbound_json JSONB,
+  routed_rule_marktag TEXT,
+  routed_admin_email TEXT,
+  routed_admin_credential TEXT,
+  routed_owner TEXT NOT NULL DEFAULT 'shared',
+  relay_orig_server TEXT,
+  relay_orig_port BIGINT NOT NULL DEFAULT 0,
+  ip_family TEXT NOT NULL DEFAULT '',
+  detached BOOLEAN NOT NULL DEFAULT FALSE,
+  detach_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE SET NULL
+);
+
+--bun:split
+
+CREATE INDEX nodes_username_idx ON nodes (username);
+
+--bun:split
+
+CREATE INDEX nodes_enabled_idx ON nodes (enabled);
+
+--bun:split
+
+CREATE INDEX nodes_parent_idx ON nodes (parent_node_id);
+
+--bun:split
+
+CREATE INDEX nodes_protocol_idx ON nodes (protocol);
+
+--bun:split
+
+CREATE INDEX nodes_tag_idx ON nodes (tag);
+
+--bun:split
+
+CREATE INDEX nodes_type_idx ON nodes (node_type);
+
+--bun:split
+
+CREATE TABLE node_reachability (
+  node_id BIGINT NOT NULL,
+  reachable BOOLEAN NOT NULL DEFAULT FALSE,
+  consecutive_fail BIGINT NOT NULL DEFAULT 0,
+  since TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  announced_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (node_id),
+  FOREIGN KEY (node_id) REFERENCES nodes (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE TABLE package_assignments (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  package_id BIGINT NOT NULL,
+  package_start_date TIMESTAMPTZ,
+  package_end_date TIMESTAMPTZ,
+  is_reset BOOLEAN NOT NULL DEFAULT FALSE,
+  reset_day BIGINT NOT NULL DEFAULT 1,
+  traffic_limit_override BIGINT,
+  is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+  short_code TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  last_reset_at TIMESTAMPTZ,
+  traffic_warned_80 BOOLEAN NOT NULL DEFAULT FALSE,
+  over_limit_enforced BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (package_id) REFERENCES packages (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX package_assignments_short_code_key ON package_assignments (short_code);
+
+--bun:split
+
+CREATE INDEX package_assignments_user_status_idx ON package_assignments (username, status);
+
+--bun:split
+
+CREATE INDEX package_assignments_package_status_idx ON package_assignments (package_id, status);
+
+--bun:split
+
+CREATE TABLE package_assignment_inbound_configs (
+  id BIGSERIAL PRIMARY KEY,
+  assignment_id BIGINT NOT NULL,
+  username TEXT NOT NULL,
+  server_id BIGINT NOT NULL,
+  inbound_tag TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  email TEXT NOT NULL,
+  credential_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (assignment_id) REFERENCES package_assignments (id) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX package_assignment_inbound_configs_key ON package_assignment_inbound_configs (assignment_id, server_id, inbound_tag);
+
+--bun:split
+
+CREATE INDEX package_assignment_inbound_configs_server_idx ON package_assignment_inbound_configs (server_id);
+
+--bun:split
+
+CREATE INDEX package_assignment_inbound_configs_username_idx ON package_assignment_inbound_configs (username);
+
+--bun:split
+
+CREATE TABLE package_assignment_subaccounts (
+  id BIGSERIAL PRIMARY KEY,
+  assignment_id BIGINT NOT NULL,
+  username TEXT NOT NULL,
+  routed_node_id BIGINT NOT NULL,
+  email TEXT NOT NULL,
+  credential_json JSONB NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (assignment_id) REFERENCES package_assignments (id) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX package_assignment_subaccounts_assignment_node_key ON package_assignment_subaccounts (assignment_id, routed_node_id);
+
+--bun:split
+
+CREATE UNIQUE INDEX package_assignment_subaccounts_node_email_key ON package_assignment_subaccounts (routed_node_id, email);
+
+--bun:split
+
+CREATE INDEX package_assignment_subaccounts_email_idx ON package_assignment_subaccounts (email);
+
+--bun:split
+
+CREATE INDEX package_assignment_subaccounts_username_idx ON package_assignment_subaccounts (username);
+
+--bun:split
+
+CREATE TABLE sessions (
+  token_hash TEXT NOT NULL,
+  username TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (token_hash),
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX sessions_username_idx ON sessions (username);
+
+--bun:split
+
+CREATE INDEX sessions_expires_at_idx ON sessions (expires_at);
+
+--bun:split
+
 CREATE TABLE tasks (
   id BIGSERIAL PRIMARY KEY,
   title TEXT NOT NULL,
@@ -223,9 +825,143 @@ CREATE TABLE tasks (
   resource_version BIGINT NOT NULL DEFAULT 1,
   deleted_at TIMESTAMPTZ,
   FOREIGN KEY (alert_id) REFERENCES alerts (id) ON DELETE SET NULL,
-  FOREIGN KEY (evidence_id) REFERENCES evidence_packages (id) ON DELETE SET NULL
+  FOREIGN KEY (evidence_id) REFERENCES evidence_packages (id) ON DELETE SET NULL,
+  FOREIGN KEY (claimed_by) REFERENCES api_tokens (id) ON DELETE SET NULL
 );
 
 --bun:split
 
 CREATE UNIQUE INDEX tasks_dedup_key_active ON tasks (dedup_key) WHERE status IN ('open', 'claimed') AND dedup_key <> '';
+
+--bun:split
+
+CREATE TABLE user_inbound_configs (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  server_id BIGINT NOT NULL,
+  inbound_tag TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  credential_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX user_inbound_configs_key ON user_inbound_configs (username, server_id, inbound_tag);
+
+--bun:split
+
+CREATE TABLE user_outbounds (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  server_id BIGINT NOT NULL,
+  inbound_tag TEXT NOT NULL,
+  outbound_tag TEXT NOT NULL,
+  outbound_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE TABLE user_settings (
+  username TEXT NOT NULL,
+  force_sync_external BOOLEAN NOT NULL DEFAULT FALSE,
+  match_rule TEXT NOT NULL DEFAULT 'node_name',
+  cache_expire_minutes BIGINT NOT NULL DEFAULT 0,
+  sync_traffic BOOLEAN NOT NULL DEFAULT FALSE,
+  sync_scope TEXT NOT NULL DEFAULT 'saved_only',
+  keep_node_name BOOLEAN NOT NULL DEFAULT FALSE,
+  custom_rules_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  enable_short_link BOOLEAN NOT NULL DEFAULT FALSE,
+  use_new_template_system BOOLEAN NOT NULL DEFAULT FALSE,
+  enable_proxy_provider BOOLEAN NOT NULL DEFAULT FALSE,
+  node_name_filter TEXT NOT NULL DEFAULT '剩余|流量|到期|订阅|时间|重置',
+  node_order JSONB NOT NULL DEFAULT '[]',
+  default_template_filename TEXT NOT NULL DEFAULT '',
+  append_sub_info BOOLEAN NOT NULL DEFAULT FALSE,
+  debug_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  debug_log_path TEXT NOT NULL DEFAULT '',
+  debug_started_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (username),
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE TABLE user_subaccounts (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  routed_node_id BIGINT NOT NULL,
+  email TEXT NOT NULL,
+  credential_json JSONB NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX user_subaccounts_node_user_key ON user_subaccounts (routed_node_id, username);
+
+--bun:split
+
+CREATE UNIQUE INDEX user_subaccounts_node_email_key ON user_subaccounts (routed_node_id, email);
+
+--bun:split
+
+CREATE INDEX user_subaccounts_email_idx ON user_subaccounts (email);
+
+--bun:split
+
+CREATE INDEX user_subaccounts_username_idx ON user_subaccounts (username);
+
+--bun:split
+
+CREATE TABLE user_tokens (
+  username TEXT NOT NULL,
+  token TEXT NOT NULL,
+  user_short_code TEXT NOT NULL DEFAULT '',
+  custom_user_short_code TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (username),
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX user_tokens_user_short_code_key ON user_tokens (user_short_code) WHERE user_short_code <> '';
+
+--bun:split
+
+CREATE UNIQUE INDEX user_tokens_custom_user_short_code_key ON user_tokens (custom_user_short_code) WHERE custom_user_short_code <> '';
+
+--bun:split
+
+CREATE TABLE websites (
+  id BIGSERIAL PRIMARY KEY,
+  server_id BIGINT NOT NULL,
+  domain TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('static', 'proxy', 'decoy')),
+  target TEXT NOT NULL DEFAULT '',
+  certificate_id BIGINT,
+  use_443 BOOLEAN NOT NULL DEFAULT FALSE,
+  scanned JSONB NOT NULL DEFAULT '{}',
+  managed BOOLEAN NOT NULL DEFAULT FALSE,
+  conf_path TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version BIGINT NOT NULL DEFAULT 1,
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX websites_server_domain_key ON websites (server_id, domain);

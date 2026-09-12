@@ -1,7 +1,6 @@
 package schema
 
 // 12 张 agent-native 表：Satchel 新增、mmwx 没有对应物的表（附录 A.4、第 05 章、第 10 章、第 13 章 M0）。
-// 指向 remote_servers、users 的外键等下个 change 录了那两张表再补。
 
 // 列定义的简写：分档不写默认 spec，公共列按名字自动归 meta。
 func col(name string, t Type) Column { return Column{Name: name, Type: t} }
@@ -12,6 +11,7 @@ func (c Column) cls(k Class) Column       { c.Class = k; return c }
 func (c Column) enum(v ...string) Column  { c.Enum = v; return c }
 func (c Column) check(expr string) Column { c.Check = expr; return c }
 func (c Column) masked() Column           { c.Masked = true; return c }
+func (c Column) immutable() Column        { c.Immutable = true; return c }
 
 // naturalKey 是 kind 自然键（用户起的名字）的唯一索引：撞上它报 name_taken。
 // job_id、delivery_id 这类系统生成的幂等 id 不是名字，撞上报 conflict。
@@ -60,6 +60,7 @@ func agentNativeTables() []Table {
 			ForeignKeys: []ForeignKey{
 				fk("alert_id", "alerts", "SET NULL"),
 				fk("evidence_id", "evidence_packages", "SET NULL"),
+				fk("claimed_by", "api_tokens", "SET NULL"),
 			},
 		},
 		{
@@ -94,6 +95,7 @@ func agentNativeTables() []Table {
 				col("size_bytes", TypeInt).def("0").cls(ClassStatus),
 				col("expires_at", TypeTime).null().cls(ClassStatus),
 			),
+			ForeignKeys: []ForeignKey{fk("server_id", "servers", "SET NULL")},
 		},
 		{
 			Name: "automation_rules", Kind: "AutomationRule", KindClass: KindConfig,
@@ -198,7 +200,8 @@ func agentNativeTables() []Table {
 				col("output", TypeText).null().cls(ClassStatus),
 				col("output_truncated", TypeBool).def("FALSE").cls(ClassStatus),
 			),
-			Indexes: []Index{{Name: "jobs_job_id_key", Columns: []string{"job_id"}, Unique: true}},
+			Indexes:     []Index{{Name: "jobs_job_id_key", Columns: []string{"job_id"}, Unique: true}},
+			ForeignKeys: []ForeignKey{fk("server_id", "servers", "SET NULL")},
 		},
 		{
 			Name: "batch_op_counters", GoName: "BatchOpCounter", AppendOnly: true,

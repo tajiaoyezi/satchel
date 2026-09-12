@@ -203,6 +203,12 @@ func (s *Store) UpdateSpec(ctx context.Context, model any, force bool, columns .
 	if !tg.table.HasVersion() {
 		return v1.Newf(v1.CodeBadRequest, "%s 没有 resource_version，不能经 UpdateSpec 写", tg.label())
 	}
+	for _, name := range columns {
+		if c, _ := tg.table.Column(name); c.Immutable {
+			return v1.Newf(v1.CodeBadRequest, "%s 的 %s 创建后不能改", tg.label(), name).
+				WithState("column", name)
+		}
+	}
 	id, err := tg.id()
 	if err != nil {
 		return err

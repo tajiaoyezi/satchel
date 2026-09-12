@@ -7,7 +7,7 @@ import (
 )
 
 // 表名清单，按外键拓扑顺序；加表要同时改这里。
-const goldenTables = "audit_logs,automation_rules,batch_op_counters,config_snapshots,evidence_packages,alerts,jobs,notify_channels,notify_deliveries,alert_deliveries,plans,tasks"
+const goldenTables = "audit_logs,automation_rules,batch_op_counters,config_snapshots,notify_channels,notify_deliveries,package_node_traffic_suspensions,package_user_node_traffic_baselines,packages,plans,servers,batch_inbounds,batch_outbounds,evidence_packages,alerts,alert_deliveries,inbounds,jobs,outbounds,return_routes,routing_rules,user_routed_outbound_actions,users,api_tokens,nodes,node_reachability,package_assignments,package_assignment_inbound_configs,package_assignment_subaccounts,sessions,tasks,user_inbound_configs,user_outbounds,user_settings,user_subaccounts,user_tokens,websites"
 
 func TestDefaultTables(t *testing.T) {
 	r := Default()
@@ -41,7 +41,7 @@ func TestKindTablesCarryVersionColumnsByClass(t *testing.T) {
 }
 
 func TestAppendOnlyTables(t *testing.T) {
-	want := map[string]bool{"audit_logs": true, "config_snapshots": true, "batch_op_counters": true}
+	want := map[string]bool{"audit_logs": true, "config_snapshots": true, "batch_op_counters": true, "user_routed_outbound_actions": true}
 	for _, tbl := range Default().Tables() {
 		if tbl.AppendOnly != want[tbl.Name] {
 			t.Errorf("表 %s 的 append-only = %v，想要 %v", tbl.Name, tbl.AppendOnly, want[tbl.Name])
@@ -63,6 +63,9 @@ func TestNaturalKeysAndChecks(t *testing.T) {
 	wantNatural := map[string]string{
 		"automation_rules": "automation_rules_name_key",
 		"notify_channels":  "notify_channels_name_key",
+		"users":            "users_username_key",
+		"packages":         "packages_name_key",
+		"servers":          "servers_name_key",
 	}
 	for _, tbl := range r.Tables() {
 		for _, ix := range tbl.Indexes {
@@ -114,6 +117,11 @@ func TestMaskedColumnsAppearInGeneratedKinds(t *testing.T) {
 			masked = masked[:strings.Index(masked, "}")]
 			if !strings.Contains(masked, strconv.Quote(c.Name)) {
 				t.Errorf("kind %s 的打码列 %s 不在生成的 MaskedFields 里，得到 {%s}", tbl.Kind, c.Name, masked)
+			}
+			// 打码列在 Spec / Status 结构体里必须是 Secret / SecretJSON，序列化默认打码。
+			field := GoName(c.Name)
+			if !strings.Contains(text, field+" Secret ") && !strings.Contains(text, field+" *Secret ") && !strings.Contains(text, field+" SecretJSON ") {
+				t.Errorf("kind %s 的打码列 %s 在生成的结构体里应当是 Secret / SecretJSON 类型", tbl.Kind, c.Name)
 			}
 		}
 	}

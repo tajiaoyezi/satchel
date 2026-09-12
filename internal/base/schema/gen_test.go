@@ -114,6 +114,7 @@ func TestGenerateKinds(t *testing.T) {
 			col("created_at", TypeTime),
 		},
 	})
+	r.tables["widgets"].Columns[1].Immutable = true // name
 	src, err := GenerateKinds(r)
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +131,7 @@ func TestGenerateKinds(t *testing.T) {
 		`SpecFields: []string{"name", "size"}`,
 		`StatusFields: []string{"seen", "approved_by", "token"}`,
 		`MaskedFields: []string{"token"}`,
+		`ImmutableFields: []string{"name"}`,
 		`"seen": "status"`,
 		`"approved_by": "human"`,
 		`"resource_version": "meta"`,

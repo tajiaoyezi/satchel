@@ -43,7 +43,7 @@ go test ./...
 
 ### 重新生成
 
-表结构的唯一来源是 `internal/base/schema` 的注册表。改了注册表之后重新生成，并把生成物一起提交：
+表结构的唯一来源是 `internal/base/schema` 的注册表，按功能簇分文件：`tables_agent.go`（Satchel 新增的 12 张 agent-native 表）、`tables_users.go`、`tables_packages.go`、`tables_servers.go`、`tables_nodes.go`（mmwx 的核心 kind 五簇）。现在共 37 张表、21 个 kind；每张 kind 表有整数 id、resource_version 与 deleted_at，每一列标了分档（spec、status、动作专属、人类专属、主控自身类）与是否打码。用户的订阅令牌、会话、订阅设置、凭据表、批量追踪、可达性这些附属表不是 kind，保留 mmwx 的主键形状，没有版本与软删除列。改了注册表之后重新生成，并把生成物一起提交：
 
 ```sh
 go generate ./internal/base/schema/

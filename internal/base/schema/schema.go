@@ -97,6 +97,8 @@ type Column struct {
 	Check string
 	// Masked 表示输出时按第 05 章打码。
 	Masked bool
+	// Immutable 表示创建后不能改（自然主键，如 users.username）：UpdateSpec 与 apply 都拒绝改它。只能标在 spec 列上。
+	Immutable bool
 }
 
 // Checks 返回这一列的全部 CHECK 谓词：Enum 展开成 IN 列表，Check 原样。
@@ -333,6 +335,12 @@ func (r *Registry) Validate() error {
 			}
 			if c.Type == TypeBool && c.Default != "" && !strings.EqualFold(c.Default, "FALSE") {
 				add("表 %s 的列 %s：布尔列的默认值只能是 FALSE（Go 的零值分不清没填与 false）", t.Name, c.Name)
+			}
+			if c.Immutable && c.Class != ClassSpec {
+				add("表 %s 的列 %s：Immutable 只能标在 spec 列上", t.Name, c.Name)
+			}
+			if c.Masked && c.Type != TypeText && c.Type != TypeJSON {
+				add("表 %s 的列 %s：打码只能标在文本或 JSON 列上", t.Name, c.Name)
 			}
 		}
 		pk := t.PKColumns()

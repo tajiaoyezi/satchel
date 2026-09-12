@@ -40,6 +40,27 @@ type Alert struct {
 	DeletedAt       *time.Time      `bun:"deleted_at"`
 }
 
+// ApiToken 对应表 api_tokens（kind ApiToken，action）。
+type ApiToken struct {
+	bun.BaseModel `bun:"table:api_tokens"`
+
+	ID              int64           `bun:"id,pk,autoincrement"`
+	Owner           string          `bun:"owner"`
+	Name            string          `bun:"name"`
+	TokenHash       string          `bun:"token_hash"`
+	Scopes          json.RawMessage `bun:"scopes"`
+	Preset          string          `bun:"preset"`
+	ExpiresAt       *time.Time      `bun:"expires_at"`
+	Runtime         *string         `bun:"runtime"`
+	Revoked         bool            `bun:"revoked"`
+	RevokedAt       *time.Time      `bun:"revoked_at"`
+	LastUsedAt      *time.Time      `bun:"last_used_at"`
+	CreatedAt       time.Time       `bun:"created_at"`
+	UpdatedAt       time.Time       `bun:"updated_at"`
+	ResourceVersion int64           `bun:"resource_version"`
+	DeletedAt       *time.Time      `bun:"deleted_at"`
+}
+
 // AuditLog 对应表 audit_logs（kind AuditLog，system），append-only。
 type AuditLog struct {
 	bun.BaseModel `bun:"table:audit_logs"`
@@ -79,6 +100,19 @@ type AutomationRule struct {
 	DeletedAt       *time.Time      `bun:"deleted_at"`
 }
 
+// BatchInbound 对应表 batch_inbounds。
+type BatchInbound struct {
+	bun.BaseModel `bun:"table:batch_inbounds"`
+
+	ID        int64     `bun:"id,pk,autoincrement"`
+	BatchID   string    `bun:"batch_id"`
+	Tag       string    `bun:"tag"`
+	ServerID  int64     `bun:"server_id"`
+	Protocol  string    `bun:"protocol"`
+	Port      int64     `bun:"port"`
+	CreatedAt time.Time `bun:"created_at"`
+}
+
 // BatchOpCounter 对应表 batch_op_counters，append-only。
 type BatchOpCounter struct {
 	bun.BaseModel `bun:"table:batch_op_counters"`
@@ -89,6 +123,18 @@ type BatchOpCounter struct {
 	At      time.Time `bun:"at"`
 	Objects int64     `bun:"objects"`
 	Command string    `bun:"command"`
+}
+
+// BatchOutbound 对应表 batch_outbounds。
+type BatchOutbound struct {
+	bun.BaseModel `bun:"table:batch_outbounds"`
+
+	ID        int64     `bun:"id,pk,autoincrement"`
+	BatchID   string    `bun:"batch_id"`
+	Tag       string    `bun:"tag"`
+	ServerID  int64     `bun:"server_id"`
+	Protocol  string    `bun:"protocol"`
+	CreatedAt time.Time `bun:"created_at"`
 }
 
 // ConfigSnapshot 对应表 config_snapshots（kind ConfigSnapshot，system），append-only。
@@ -123,6 +169,27 @@ type EvidencePackage struct {
 	UpdatedAt    time.Time       `bun:"updated_at"`
 }
 
+// Inbound 对应表 inbounds（kind Inbound，config）。
+type Inbound struct {
+	bun.BaseModel `bun:"table:inbounds"`
+
+	ID              int64           `bun:"id,pk,autoincrement"`
+	ServerID        int64           `bun:"server_id"`
+	Tag             string          `bun:"tag"`
+	Protocol        string          `bun:"protocol"`
+	Port            int64           `bun:"port"`
+	Listen          string          `bun:"listen"`
+	TLS             json.RawMessage `bun:"tls"`
+	Transport       json.RawMessage `bun:"transport"`
+	Settings        json.RawMessage `bun:"settings"`
+	Enabled         bool            `bun:"enabled"`
+	SortOrder       int64           `bun:"sort_order"`
+	CreatedAt       time.Time       `bun:"created_at"`
+	UpdatedAt       time.Time       `bun:"updated_at"`
+	ResourceVersion int64           `bun:"resource_version"`
+	DeletedAt       *time.Time      `bun:"deleted_at"`
+}
+
 // Job 对应表 jobs（kind Job，action）。
 type Job struct {
 	bun.BaseModel `bun:"table:jobs"`
@@ -142,6 +209,57 @@ type Job struct {
 	UpdatedAt       time.Time       `bun:"updated_at"`
 	ResourceVersion int64           `bun:"resource_version"`
 	DeletedAt       *time.Time      `bun:"deleted_at"`
+}
+
+// NodeReachability 对应表 node_reachability。
+type NodeReachability struct {
+	bun.BaseModel `bun:"table:node_reachability"`
+
+	NodeID           int64     `bun:"node_id,pk"`
+	Reachable        bool      `bun:"reachable"`
+	ConsecutiveFail  int64     `bun:"consecutive_fail"`
+	Since            time.Time `bun:"since"`
+	AnnouncedBlocked bool      `bun:"announced_blocked"`
+}
+
+// Node 对应表 nodes（kind Node，config）。
+type Node struct {
+	bun.BaseModel `bun:"table:nodes"`
+
+	ID                    int64           `bun:"id,pk,autoincrement"`
+	Username              string          `bun:"username"`
+	ServerID              *int64          `bun:"server_id"`
+	RawURL                string          `bun:"raw_url"`
+	NodeName              string          `bun:"node_name"`
+	Protocol              string          `bun:"protocol"`
+	ParsedConfig          json.RawMessage `bun:"parsed_config"`
+	ClashConfig           string          `bun:"clash_config"`
+	Enabled               bool            `bun:"enabled"`
+	Tag                   string          `bun:"tag"`
+	Tags                  json.RawMessage `bun:"tags"`
+	OriginalServer        *string         `bun:"original_server"`
+	OriginalDomain        *string         `bun:"original_domain"`
+	InboundTag            *string         `bun:"inbound_tag"`
+	ChainProxyNodeID      *int64          `bun:"chain_proxy_node_id"`
+	RelayGroupName        *string         `bun:"relay_group_name"`
+	RelayGroupNodeIds     json.RawMessage `bun:"relay_group_node_ids"`
+	NodeType              string          `bun:"node_type"`
+	ParentNodeID          *int64          `bun:"parent_node_id"`
+	RoutedOutboundTag     *string         `bun:"routed_outbound_tag"`
+	RoutedOutboundJSON    json.RawMessage `bun:"routed_outbound_json"`
+	RoutedRuleMarktag     *string         `bun:"routed_rule_marktag"`
+	RoutedAdminEmail      *string         `bun:"routed_admin_email"`
+	RoutedAdminCredential *string         `bun:"routed_admin_credential"`
+	RoutedOwner           string          `bun:"routed_owner"`
+	RelayOrigServer       *string         `bun:"relay_orig_server"`
+	RelayOrigPort         int64           `bun:"relay_orig_port"`
+	IPFamily              string          `bun:"ip_family"`
+	Detached              bool            `bun:"detached"`
+	DetachReason          *string         `bun:"detach_reason"`
+	CreatedAt             time.Time       `bun:"created_at"`
+	UpdatedAt             time.Time       `bun:"updated_at"`
+	ResourceVersion       int64           `bun:"resource_version"`
+	DeletedAt             *time.Time      `bun:"deleted_at"`
 }
 
 // NotifyChannel 对应表 notify_channels（kind NotifyChannel，config）。
@@ -180,6 +298,135 @@ type NotifyDelivery struct {
 	UpdatedAt     time.Time       `bun:"updated_at"`
 }
 
+// Outbound 对应表 outbounds（kind Outbound，config）。
+type Outbound struct {
+	bun.BaseModel `bun:"table:outbounds"`
+
+	ID                 int64           `bun:"id,pk,autoincrement"`
+	ServerID           int64           `bun:"server_id"`
+	Tag                string          `bun:"tag"`
+	Protocol           string          `bun:"protocol"`
+	Settings           json.RawMessage `bun:"settings"`
+	IsWarp             bool            `bun:"is_warp"`
+	BalancerGroup      string          `bun:"balancer_group"`
+	Probe              json.RawMessage `bun:"probe"`
+	LastProbeOk        bool            `bun:"last_probe_ok"`
+	LastProbeLatencyMs *int64          `bun:"last_probe_latency_ms"`
+	LastProbedAt       *time.Time      `bun:"last_probed_at"`
+	CreatedAt          time.Time       `bun:"created_at"`
+	UpdatedAt          time.Time       `bun:"updated_at"`
+	ResourceVersion    int64           `bun:"resource_version"`
+	DeletedAt          *time.Time      `bun:"deleted_at"`
+}
+
+// PackageAssignmentInboundConfig 对应表 package_assignment_inbound_configs。
+type PackageAssignmentInboundConfig struct {
+	bun.BaseModel `bun:"table:package_assignment_inbound_configs"`
+
+	ID             int64           `bun:"id,pk,autoincrement"`
+	AssignmentID   int64           `bun:"assignment_id"`
+	Username       string          `bun:"username"`
+	ServerID       int64           `bun:"server_id"`
+	InboundTag     string          `bun:"inbound_tag"`
+	Protocol       string          `bun:"protocol"`
+	Email          string          `bun:"email"`
+	CredentialJSON json.RawMessage `bun:"credential_json"`
+	CreatedAt      time.Time       `bun:"created_at"`
+}
+
+// PackageAssignmentSubaccount 对应表 package_assignment_subaccounts。
+type PackageAssignmentSubaccount struct {
+	bun.BaseModel `bun:"table:package_assignment_subaccounts"`
+
+	ID             int64           `bun:"id,pk,autoincrement"`
+	AssignmentID   int64           `bun:"assignment_id"`
+	Username       string          `bun:"username"`
+	RoutedNodeID   int64           `bun:"routed_node_id"`
+	Email          string          `bun:"email"`
+	CredentialJSON json.RawMessage `bun:"credential_json"`
+	IsActive       bool            `bun:"is_active"`
+	CreatedAt      time.Time       `bun:"created_at"`
+	UpdatedAt      time.Time       `bun:"updated_at"`
+}
+
+// PackageAssignment 对应表 package_assignments（kind PackageAssignment，config）。
+type PackageAssignment struct {
+	bun.BaseModel `bun:"table:package_assignments"`
+
+	ID                   int64      `bun:"id,pk,autoincrement"`
+	Username             string     `bun:"username"`
+	PackageID            int64      `bun:"package_id"`
+	PackageStartDate     *time.Time `bun:"package_start_date"`
+	PackageEndDate       *time.Time `bun:"package_end_date"`
+	IsReset              bool       `bun:"is_reset"`
+	ResetDay             int64      `bun:"reset_day"`
+	TrafficLimitOverride *int64     `bun:"traffic_limit_override"`
+	IsPrimary            bool       `bun:"is_primary"`
+	ShortCode            string     `bun:"short_code"`
+	Status               string     `bun:"status"`
+	LastResetAt          *time.Time `bun:"last_reset_at"`
+	TrafficWarned80      bool       `bun:"traffic_warned_80"`
+	OverLimitEnforced    bool       `bun:"over_limit_enforced"`
+	CreatedAt            time.Time  `bun:"created_at"`
+	UpdatedAt            time.Time  `bun:"updated_at"`
+	ResourceVersion      int64      `bun:"resource_version"`
+	DeletedAt            *time.Time `bun:"deleted_at"`
+}
+
+// PackageNodeTrafficSuspension 对应表 package_node_traffic_suspensions。
+type PackageNodeTrafficSuspension struct {
+	bun.BaseModel `bun:"table:package_node_traffic_suspensions"`
+
+	Username       string          `bun:"username,pk"`
+	PackageID      int64           `bun:"package_id,pk"`
+	NodeID         int64           `bun:"node_id,pk"`
+	Kind           string          `bun:"kind,pk"`
+	CredentialJSON json.RawMessage `bun:"credential_json"`
+	CreatedAt      time.Time       `bun:"created_at"`
+}
+
+// PackageUserNodeTrafficBaseline 对应表 package_user_node_traffic_baselines。
+type PackageUserNodeTrafficBaseline struct {
+	bun.BaseModel `bun:"table:package_user_node_traffic_baselines"`
+
+	Username  string    `bun:"username,pk"`
+	PackageID int64     `bun:"package_id,pk"`
+	NodeID    int64     `bun:"node_id,pk"`
+	Baseline  float64   `bun:"baseline"`
+	UpdatedAt time.Time `bun:"updated_at"`
+}
+
+// Package 对应表 packages（kind Package，config）。
+type Package struct {
+	bun.BaseModel `bun:"table:packages"`
+
+	ID                      int64           `bun:"id,pk,autoincrement"`
+	Name                    string          `bun:"name"`
+	Description             *string         `bun:"description"`
+	TrafficLimitBytes       int64           `bun:"traffic_limit_bytes"`
+	CycleDays               int64           `bun:"cycle_days"`
+	IsReset                 bool            `bun:"is_reset"`
+	ResetDay                int64           `bun:"reset_day"`
+	Nodes                   json.RawMessage `bun:"nodes"`
+	DeviceLimit             int64           `bun:"device_limit"`
+	SpeedLimitMbps          float64         `bun:"speed_limit_mbps"`
+	AutoSpeedLimitJSON      json.RawMessage `bun:"auto_speed_limit_json"`
+	TrafficMode             string          `bun:"traffic_mode"`
+	TemplateFilename        string          `bun:"template_filename"`
+	SurgeTemplateFilename   string          `bun:"surge_template_filename"`
+	ShortCode               string          `bun:"short_code"`
+	NodeMultipliers         json.RawMessage `bun:"node_multipliers"`
+	NodeTrafficLimits       json.RawMessage `bun:"node_traffic_limits"`
+	NodeSpeedLimits         json.RawMessage `bun:"node_speed_limits"`
+	NodeDeviceLimits        json.RawMessage `bun:"node_device_limits"`
+	NodeNameOverrides       json.RawMessage `bun:"node_name_overrides"`
+	NodeNameOverrideEnabled bool            `bun:"node_name_override_enabled"`
+	CreatedAt               time.Time       `bun:"created_at"`
+	UpdatedAt               time.Time       `bun:"updated_at"`
+	ResourceVersion         int64           `bun:"resource_version"`
+	DeletedAt               *time.Time      `bun:"deleted_at"`
+}
+
 // Plan 对应表 plans（kind Plan，action）。
 type Plan struct {
 	bun.BaseModel `bun:"table:plans"`
@@ -197,6 +444,152 @@ type Plan struct {
 	UpdatedAt       time.Time       `bun:"updated_at"`
 	ResourceVersion int64           `bun:"resource_version"`
 	DeletedAt       *time.Time      `bun:"deleted_at"`
+}
+
+// ReturnRoute 对应表 return_routes（kind ReturnRoute，config）。
+type ReturnRoute struct {
+	bun.BaseModel `bun:"table:return_routes"`
+
+	ID              int64           `bun:"id,pk,autoincrement"`
+	ServerID        int64           `bun:"server_id"`
+	Carrier         string          `bun:"carrier"`
+	Enabled         bool            `bun:"enabled"`
+	Probe           json.RawMessage `bun:"probe"`
+	RouteType       string          `bun:"route_type"`
+	Region          string          `bun:"region"`
+	EntryIP         string          `bun:"entry_ip"`
+	EntryAsn        string          `bun:"entry_asn"`
+	Reason          string          `bun:"reason"`
+	TestedAt        *time.Time      `bun:"tested_at"`
+	CreatedAt       time.Time       `bun:"created_at"`
+	UpdatedAt       time.Time       `bun:"updated_at"`
+	ResourceVersion int64           `bun:"resource_version"`
+	DeletedAt       *time.Time      `bun:"deleted_at"`
+}
+
+// RoutingRule 对应表 routing_rules（kind RoutingRule，config）。
+type RoutingRule struct {
+	bun.BaseModel `bun:"table:routing_rules"`
+
+	ID              int64           `bun:"id,pk,autoincrement"`
+	ServerID        int64           `bun:"server_id"`
+	SortOrder       int64           `bun:"sort_order"`
+	Match           json.RawMessage `bun:"match"`
+	OutboundTag     string          `bun:"outbound_tag"`
+	Enabled         bool            `bun:"enabled"`
+	CatchAll        bool            `bun:"catch_all"`
+	CreatedAt       time.Time       `bun:"created_at"`
+	UpdatedAt       time.Time       `bun:"updated_at"`
+	ResourceVersion int64           `bun:"resource_version"`
+	DeletedAt       *time.Time      `bun:"deleted_at"`
+}
+
+// Server 对应表 servers（kind Server，config）。
+type Server struct {
+	bun.BaseModel `bun:"table:servers"`
+
+	ID                     int64           `bun:"id,pk,autoincrement"`
+	Name                   string          `bun:"name"`
+	Ipv6Enabled            bool            `bun:"ipv6_enabled"`
+	Domain                 string          `bun:"domain"`
+	DomainV6               string          `bun:"domain_v6"`
+	ConnectionMode         string          `bun:"connection_mode"`
+	PullAddress            string          `bun:"pull_address"`
+	PullAddressV6          string          `bun:"pull_address_v6"`
+	PullPort               int64           `bun:"pull_port"`
+	ListenPort             int64           `bun:"listen_port"`
+	LockEntryIP            bool            `bun:"lock_entry_ip"`
+	Use443                 bool            `bun:"use_443"`
+	StealMode              string          `bun:"steal_mode"`
+	SiteType               string          `bun:"site_type"`
+	SiteValue              string          `bun:"site_value"`
+	PortRangeMin           int64           `bun:"port_range_min"`
+	PortRangeMax           int64           `bun:"port_range_max"`
+	TrafficLimit           int64           `bun:"traffic_limit"`
+	TrafficResetDay        int64           `bun:"traffic_reset_day"`
+	TrafficStatsMode       string          `bun:"traffic_stats_mode"`
+	TrafficSource          string          `bun:"traffic_source"`
+	IncludeInTrafficStats  bool            `bun:"include_in_traffic_stats"`
+	TrafficCalibration     int64           `bun:"traffic_calibration"`
+	Region                 string          `bun:"region"`
+	RegionCountry          string          `bun:"region_country"`
+	RegionName             string          `bun:"region_name"`
+	RegionCity             string          `bun:"region_city"`
+	RenewalPrice           float64         `bun:"renewal_price"`
+	RenewalCycle           string          `bun:"renewal_cycle"`
+	RenewalCurrency        string          `bun:"renewal_currency"`
+	ProviderName           string          `bun:"provider_name"`
+	ProviderURL            string          `bun:"provider_url"`
+	TelecomPaidPeer        bool            `bun:"telecom_paid_peer"`
+	ExpiresAt              *time.Time      `bun:"expires_at"`
+	DdnsEnabled            bool            `bun:"ddns_enabled"`
+	DdnsProviderID         int64           `bun:"ddns_provider_id"`
+	DdnsRecordName         string          `bun:"ddns_record_name"`
+	CoreLogLevel           string          `bun:"core_log_level"`
+	CoreDNS                json.RawMessage `bun:"core_dns"`
+	CoreStatsEnabled       bool            `bun:"core_stats_enabled"`
+	SortOrder              int64           `bun:"sort_order"`
+	Token                  string          `bun:"token"`
+	AgentToken             string          `bun:"agent_token"`
+	PullToken              string          `bun:"pull_token"`
+	TokenExpiresAt         *time.Time      `bun:"token_expires_at"`
+	AgentTokenExpiresAt    *time.Time      `bun:"agent_token_expires_at"`
+	LastTokenRefresh       *time.Time      `bun:"last_token_refresh"`
+	LastAgentTokenRefresh  *time.Time      `bun:"last_agent_token_refresh"`
+	Status                 string          `bun:"status"`
+	LastHeartbeat          *time.Time      `bun:"last_heartbeat"`
+	IPAddress              *string         `bun:"ip_address"`
+	IPAddressV6            string          `bun:"ip_address_v6"`
+	BootTime               *time.Time      `bun:"boot_time"`
+	BootCount              int64           `bun:"boot_count"`
+	CoreBootTime           *time.Time      `bun:"core_boot_time"`
+	CoreBootCount          int64           `bun:"core_boot_count"`
+	CoreRunning            bool            `bun:"core_running"`
+	CoreVersion            string          `bun:"core_version"`
+	CurrentUploadSpeed     int64           `bun:"current_upload_speed"`
+	CurrentDownloadSpeed   int64           `bun:"current_download_speed"`
+	SpeedUpdatedAt         *time.Time      `bun:"speed_updated_at"`
+	OfflineSince           *time.Time      `bun:"offline_since"`
+	OfflineNotified        bool            `bun:"offline_notified"`
+	WarpInstalled          bool            `bun:"warp_installed"`
+	SameHostAsMaster       bool            `bun:"same_host_as_master"`
+	TimeOffsetSeconds      *int64          `bun:"time_offset_seconds"`
+	PushFailCount          int64           `bun:"push_fail_count"`
+	LastPushFail           *time.Time      `bun:"last_push_fail"`
+	FallbackToPull         bool            `bun:"fallback_to_pull"`
+	FallbackAt             *time.Time      `bun:"fallback_at"`
+	LastPullAt             *time.Time      `bun:"last_pull_at"`
+	SystemRxCycle          int64           `bun:"system_rx_cycle"`
+	SystemTxCycle          int64           `bun:"system_tx_cycle"`
+	SystemLastSeenRx       int64           `bun:"system_last_seen_rx"`
+	SystemLastSeenTx       int64           `bun:"system_last_seen_tx"`
+	SystemBootTimeUnix     int64           `bun:"system_boot_time_unix"`
+	SystemTrafficUpdatedAt *time.Time      `bun:"system_traffic_updated_at"`
+	TrafficResetBaseline   int64           `bun:"traffic_reset_baseline"`
+	LastTrafficResetAt     *time.Time      `bun:"last_traffic_reset_at"`
+	DdnsLastSyncedAt       *time.Time      `bun:"ddns_last_synced_at"`
+	DdnsLastError          string          `bun:"ddns_last_error"`
+	DdnsPending            bool            `bun:"ddns_pending"`
+	ProviderUpdatedAt      *time.Time      `bun:"provider_updated_at"`
+	RotationPending        bool            `bun:"rotation_pending"`
+	LastRotatedAt          *time.Time      `bun:"last_rotated_at"`
+	RevokePending          bool            `bun:"revoke_pending"`
+	AppliedHash            string          `bun:"applied_hash"`
+	AppliedGeneration      int64           `bun:"applied_generation"`
+	CreatedAt              time.Time       `bun:"created_at"`
+	UpdatedAt              time.Time       `bun:"updated_at"`
+	ResourceVersion        int64           `bun:"resource_version"`
+	DeletedAt              *time.Time      `bun:"deleted_at"`
+}
+
+// Session 对应表 sessions。
+type Session struct {
+	bun.BaseModel `bun:"table:sessions"`
+
+	TokenHash string    `bun:"token_hash,pk"`
+	Username  string    `bun:"username"`
+	ExpiresAt time.Time `bun:"expires_at"`
+	CreatedAt time.Time `bun:"created_at"`
 }
 
 // Task 对应表 tasks（kind Task，action）。
@@ -219,4 +612,149 @@ type Task struct {
 	UpdatedAt       time.Time  `bun:"updated_at"`
 	ResourceVersion int64      `bun:"resource_version"`
 	DeletedAt       *time.Time `bun:"deleted_at"`
+}
+
+// UserInboundConfig 对应表 user_inbound_configs。
+type UserInboundConfig struct {
+	bun.BaseModel `bun:"table:user_inbound_configs"`
+
+	ID             int64           `bun:"id,pk,autoincrement"`
+	Username       string          `bun:"username"`
+	ServerID       int64           `bun:"server_id"`
+	InboundTag     string          `bun:"inbound_tag"`
+	Protocol       string          `bun:"protocol"`
+	CredentialJSON json.RawMessage `bun:"credential_json"`
+	CreatedAt      time.Time       `bun:"created_at"`
+}
+
+// UserOutbound 对应表 user_outbounds。
+type UserOutbound struct {
+	bun.BaseModel `bun:"table:user_outbounds"`
+
+	ID           int64           `bun:"id,pk,autoincrement"`
+	Username     string          `bun:"username"`
+	ServerID     int64           `bun:"server_id"`
+	InboundTag   string          `bun:"inbound_tag"`
+	OutboundTag  string          `bun:"outbound_tag"`
+	OutboundJSON json.RawMessage `bun:"outbound_json"`
+	CreatedAt    time.Time       `bun:"created_at"`
+}
+
+// UserRoutedOutboundAction 对应表 user_routed_outbound_actions，append-only。
+type UserRoutedOutboundAction struct {
+	bun.BaseModel `bun:"table:user_routed_outbound_actions"`
+
+	ID        int64     `bun:"id,pk,autoincrement"`
+	Username  string    `bun:"username"`
+	Action    string    `bun:"action"`
+	CreatedAt time.Time `bun:"created_at"`
+}
+
+// UserSettings 对应表 user_settings。
+type UserSettings struct {
+	bun.BaseModel `bun:"table:user_settings"`
+
+	Username                string          `bun:"username,pk"`
+	ForceSyncExternal       bool            `bun:"force_sync_external"`
+	MatchRule               string          `bun:"match_rule"`
+	CacheExpireMinutes      int64           `bun:"cache_expire_minutes"`
+	SyncTraffic             bool            `bun:"sync_traffic"`
+	SyncScope               string          `bun:"sync_scope"`
+	KeepNodeName            bool            `bun:"keep_node_name"`
+	CustomRulesEnabled      bool            `bun:"custom_rules_enabled"`
+	EnableShortLink         bool            `bun:"enable_short_link"`
+	UseNewTemplateSystem    bool            `bun:"use_new_template_system"`
+	EnableProxyProvider     bool            `bun:"enable_proxy_provider"`
+	NodeNameFilter          string          `bun:"node_name_filter"`
+	NodeOrder               json.RawMessage `bun:"node_order"`
+	DefaultTemplateFilename string          `bun:"default_template_filename"`
+	AppendSubInfo           bool            `bun:"append_sub_info"`
+	DebugEnabled            bool            `bun:"debug_enabled"`
+	DebugLogPath            string          `bun:"debug_log_path"`
+	DebugStartedAt          *time.Time      `bun:"debug_started_at"`
+	CreatedAt               time.Time       `bun:"created_at"`
+	UpdatedAt               time.Time       `bun:"updated_at"`
+}
+
+// UserSubaccount 对应表 user_subaccounts。
+type UserSubaccount struct {
+	bun.BaseModel `bun:"table:user_subaccounts"`
+
+	ID             int64           `bun:"id,pk,autoincrement"`
+	Username       string          `bun:"username"`
+	RoutedNodeID   int64           `bun:"routed_node_id"`
+	Email          string          `bun:"email"`
+	CredentialJSON json.RawMessage `bun:"credential_json"`
+	IsActive       bool            `bun:"is_active"`
+	CreatedAt      time.Time       `bun:"created_at"`
+	UpdatedAt      time.Time       `bun:"updated_at"`
+}
+
+// UserToken 对应表 user_tokens。
+type UserToken struct {
+	bun.BaseModel `bun:"table:user_tokens"`
+
+	Username            string    `bun:"username,pk"`
+	Token               string    `bun:"token"`
+	UserShortCode       string    `bun:"user_short_code"`
+	CustomUserShortCode string    `bun:"custom_user_short_code"`
+	UpdatedAt           time.Time `bun:"updated_at"`
+}
+
+// User 对应表 users（kind User，config）。
+type User struct {
+	bun.BaseModel `bun:"table:users"`
+
+	ID                       int64           `bun:"id,pk,autoincrement"`
+	Username                 string          `bun:"username"`
+	Email                    *string         `bun:"email"`
+	Nickname                 *string         `bun:"nickname"`
+	AvatarURL                *string         `bun:"avatar_url"`
+	Role                     string          `bun:"role"`
+	Remark                   *string         `bun:"remark"`
+	TrafficLimitOverride     *int64          `bun:"traffic_limit_override"`
+	SpeedLimitOverride       *float64        `bun:"speed_limit_override"`
+	DeviceLimitOverride      *int64          `bun:"device_limit_override"`
+	NodeSpeedLimitOverrides  json.RawMessage `bun:"node_speed_limit_overrides"`
+	NodeDeviceLimitOverrides json.RawMessage `bun:"node_device_limit_overrides"`
+	TgNotifyEnabled          bool            `bun:"tg_notify_enabled"`
+	IsActive                 bool            `bun:"is_active"`
+	TelegramID               *int64          `bun:"telegram_id"`
+	TelegramUsername         string          `bun:"telegram_username"`
+	TelegramBoundAt          *time.Time      `bun:"telegram_bound_at"`
+	PasswordHash             string          `bun:"password_hash"`
+	TotpSecret               string          `bun:"totp_secret"`
+	TotpEnabled              bool            `bun:"totp_enabled"`
+	RecoveryCodes            json.RawMessage `bun:"recovery_codes"`
+	IsOverLimit              bool            `bun:"is_over_limit"`
+	OverLimitEnforced        bool            `bun:"over_limit_enforced"`
+	DisabledAccessEnforced   bool            `bun:"disabled_access_enforced"`
+	TrafficWarned80          bool            `bun:"traffic_warned_80"`
+	LastResetAt              *time.Time      `bun:"last_reset_at"`
+	LastPackageID            *int64          `bun:"last_package_id"`
+	LastPackageEndDate       *time.Time      `bun:"last_package_end_date"`
+	CreatedAt                time.Time       `bun:"created_at"`
+	UpdatedAt                time.Time       `bun:"updated_at"`
+	ResourceVersion          int64           `bun:"resource_version"`
+	DeletedAt                *time.Time      `bun:"deleted_at"`
+}
+
+// Website 对应表 websites（kind Website，config）。
+type Website struct {
+	bun.BaseModel `bun:"table:websites"`
+
+	ID              int64           `bun:"id,pk,autoincrement"`
+	ServerID        int64           `bun:"server_id"`
+	Domain          string          `bun:"domain"`
+	Type            string          `bun:"type"`
+	Target          string          `bun:"target"`
+	CertificateID   *int64          `bun:"certificate_id"`
+	Use443          bool            `bun:"use_443"`
+	Scanned         json.RawMessage `bun:"scanned"`
+	Managed         bool            `bun:"managed"`
+	ConfPath        string          `bun:"conf_path"`
+	CreatedAt       time.Time       `bun:"created_at"`
+	UpdatedAt       time.Time       `bun:"updated_at"`
+	ResourceVersion int64           `bun:"resource_version"`
+	DeletedAt       *time.Time      `bun:"deleted_at"`
 }

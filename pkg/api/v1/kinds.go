@@ -15,6 +15,8 @@ type KindInfo struct {
 	StatusFields []string
 	// MaskedFields 是输出时要按第 05 章打码的字段名（密钥、令牌之类）。
 	MaskedFields []string
+	// ImmutableFields 是创建后不能改的 spec 字段（自然主键，如 User 的 username）：apply 改它要拒绝。
+	ImmutableFields []string
 	// notApplyable 是 apply 拒收清单：字段名 → 它所属的分档。spec 之外的每个字段都在这里，元数据也算。
 	notApplyable map[string]string
 }
@@ -27,6 +29,16 @@ func (k KindInfo) NotApplyable() []string {
 	}
 	sort.Strings(fields)
 	return fields
+}
+
+// Immutable 报告字段是不是创建后不能改的 spec 字段：apply 更新已有对象时 MUST 拒绝改它（M1 实现）。
+func (k KindInfo) Immutable(field string) bool {
+	for _, f := range k.ImmutableFields {
+		if f == field {
+			return true
+		}
+	}
+	return false
 }
 
 // RejectReason 返回字段被 apply 拒收的分档：meta、status、action、human、master_self、readonly。

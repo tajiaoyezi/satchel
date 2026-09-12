@@ -48,6 +48,17 @@ func statusColumns(t *Table) []Column {
 	return out
 }
 
+// immutableColumns 返回创建后不能改的 spec 列。
+func immutableColumns(t *Table) []Column {
+	var out []Column
+	for _, c := range t.Columns {
+		if c.Immutable {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // maskedColumns 返回标了打码的列（不含 meta）。
 func maskedColumns(t *Table) []Column {
 	var out []Column
@@ -59,6 +70,24 @@ func maskedColumns(t *Table) []Column {
 	return out
 }
 
+// kindGoType 是列在 Spec / Status 结构体里的类型：打码列用 Secret / SecretJSON，序列化默认打码，
+// 忘了打码的输出路径也写不出原文；其它列与 bun 模型同型。
+func kindGoType(c Column) string {
+	if !c.Masked {
+		return goType(c)
+	}
+	switch c.Type {
+	case TypeJSON:
+		return "SecretJSON"
+	case TypeText:
+		if c.Nullable {
+			return "*Secret"
+		}
+		return "Secret"
+	}
+	return goType(c)
+}
+
 func writeStruct(b *bytes.Buffer, name string, cols []Column) {
 	if len(cols) == 0 {
 		fmt.Fprintf(b, "type %s struct{}\n\n", name)
@@ -66,7 +95,7 @@ func writeStruct(b *bytes.Buffer, name string, cols []Column) {
 	}
 	fmt.Fprintf(b, "type %s struct {\n", name)
 	for _, c := range cols {
-		fmt.Fprintf(b, "\t%s %s `json:\"%s\"`\n", GoName(c.Name), goType(c), c.Name)
+		fmt.Fprintf(b, "\t%s %s `json:\"%s\"`\n", GoName(c.Name), kindGoType(c), c.Name)
 	}
 	b.WriteString("}\n\n")
 }
@@ -110,6 +139,8 @@ func GenerateKinds(r *Registry) ([]byte, error) {
 		writeStringSlice(&b, statusColumns(t))
 		b.WriteString(",\n\t\tMaskedFields: ")
 		writeStringSlice(&b, maskedColumns(t))
+		b.WriteString(",\n\t\tImmutableFields: ")
+		writeStringSlice(&b, immutableColumns(t))
 		b.WriteString(",\n\t\tnotApplyable: map[string]string{")
 		first := true
 		for _, c := range t.Columns {

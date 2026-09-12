@@ -27,6 +27,23 @@ type AlertStatus struct {
 	LastSeenAt      time.Time       `json:"last_seen_at"`
 }
 
+// ApiTokenSpec 是 kind ApiToken（action）的 spec 字段。
+type ApiTokenSpec struct{}
+
+// ApiTokenStatus 是 kind ApiToken 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type ApiTokenStatus struct {
+	Owner      string          `json:"owner"`
+	Name       string          `json:"name"`
+	TokenHash  Secret          `json:"token_hash"`
+	Scopes     json.RawMessage `json:"scopes"`
+	Preset     string          `json:"preset"`
+	ExpiresAt  *time.Time      `json:"expires_at"`
+	Runtime    *string         `json:"runtime"`
+	Revoked    bool            `json:"revoked"`
+	RevokedAt  *time.Time      `json:"revoked_at"`
+	LastUsedAt *time.Time      `json:"last_used_at"`
+}
+
 // AuditLogSpec 是 kind AuditLog（system）的 spec 字段。
 type AuditLogSpec struct {
 	At          time.Time `json:"at"`
@@ -93,6 +110,23 @@ type EvidencePackageStatus struct {
 	ExpiresAt    *time.Time      `json:"expires_at"`
 }
 
+// InboundSpec 是 kind Inbound（config）的 spec 字段。
+type InboundSpec struct {
+	ServerID  int64           `json:"server_id"`
+	Tag       string          `json:"tag"`
+	Protocol  string          `json:"protocol"`
+	Port      int64           `json:"port"`
+	Listen    string          `json:"listen"`
+	TLS       SecretJSON      `json:"tls"`
+	Transport json.RawMessage `json:"transport"`
+	Settings  SecretJSON      `json:"settings"`
+	Enabled   bool            `json:"enabled"`
+	SortOrder int64           `json:"sort_order"`
+}
+
+// InboundStatus 是 kind Inbound 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type InboundStatus struct{}
+
 // JobSpec 是 kind Job（action）的 spec 字段。
 type JobSpec struct {
 	JobID    string          `json:"job_id"`
@@ -111,6 +145,43 @@ type JobStatus struct {
 	OutputTruncated bool       `json:"output_truncated"`
 }
 
+// NodeSpec 是 kind Node（config）的 spec 字段。
+type NodeSpec struct {
+	Username              string          `json:"username"`
+	ServerID              *int64          `json:"server_id"`
+	RawURL                string          `json:"raw_url"`
+	NodeName              string          `json:"node_name"`
+	Protocol              string          `json:"protocol"`
+	ParsedConfig          json.RawMessage `json:"parsed_config"`
+	ClashConfig           string          `json:"clash_config"`
+	Enabled               bool            `json:"enabled"`
+	Tag                   string          `json:"tag"`
+	Tags                  json.RawMessage `json:"tags"`
+	OriginalServer        *string         `json:"original_server"`
+	OriginalDomain        *string         `json:"original_domain"`
+	InboundTag            *string         `json:"inbound_tag"`
+	ChainProxyNodeID      *int64          `json:"chain_proxy_node_id"`
+	RelayGroupName        *string         `json:"relay_group_name"`
+	RelayGroupNodeIds     json.RawMessage `json:"relay_group_node_ids"`
+	NodeType              string          `json:"node_type"`
+	ParentNodeID          *int64          `json:"parent_node_id"`
+	RoutedOutboundTag     *string         `json:"routed_outbound_tag"`
+	RoutedOutboundJSON    SecretJSON      `json:"routed_outbound_json"`
+	RoutedRuleMarktag     *string         `json:"routed_rule_marktag"`
+	RoutedAdminEmail      *string         `json:"routed_admin_email"`
+	RoutedAdminCredential *Secret         `json:"routed_admin_credential"`
+	RoutedOwner           string          `json:"routed_owner"`
+	RelayOrigServer       *string         `json:"relay_orig_server"`
+	RelayOrigPort         int64           `json:"relay_orig_port"`
+	IPFamily              string          `json:"ip_family"`
+}
+
+// NodeStatus 是 kind Node 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type NodeStatus struct {
+	Detached     bool    `json:"detached"`
+	DetachReason *string `json:"detach_reason"`
+}
+
 // NotifyChannelSpec 是 kind NotifyChannel（config）的 spec 字段。
 type NotifyChannelSpec struct {
 	Name    string          `json:"name"`
@@ -122,7 +193,7 @@ type NotifyChannelSpec struct {
 // NotifyChannelStatus 是 kind NotifyChannel 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
 type NotifyChannelStatus struct {
 	Target          string     `json:"target"`
-	Secret          string     `json:"secret"`
+	Secret          Secret     `json:"secret"`
 	LastDeliveredAt *time.Time `json:"last_delivered_at"`
 	LastError       *string    `json:"last_error"`
 }
@@ -143,6 +214,72 @@ type NotifyDeliveryStatus struct {
 	LastAttemptAt *time.Time `json:"last_attempt_at"`
 }
 
+// OutboundSpec 是 kind Outbound（config）的 spec 字段。
+type OutboundSpec struct {
+	ServerID      int64           `json:"server_id"`
+	Tag           string          `json:"tag"`
+	Protocol      string          `json:"protocol"`
+	Settings      SecretJSON      `json:"settings"`
+	IsWarp        bool            `json:"is_warp"`
+	BalancerGroup string          `json:"balancer_group"`
+	Probe         json.RawMessage `json:"probe"`
+}
+
+// OutboundStatus 是 kind Outbound 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type OutboundStatus struct {
+	LastProbeOk        bool       `json:"last_probe_ok"`
+	LastProbeLatencyMs *int64     `json:"last_probe_latency_ms"`
+	LastProbedAt       *time.Time `json:"last_probed_at"`
+}
+
+// PackageSpec 是 kind Package（config）的 spec 字段。
+type PackageSpec struct {
+	Name                    string          `json:"name"`
+	Description             *string         `json:"description"`
+	TrafficLimitBytes       int64           `json:"traffic_limit_bytes"`
+	CycleDays               int64           `json:"cycle_days"`
+	IsReset                 bool            `json:"is_reset"`
+	ResetDay                int64           `json:"reset_day"`
+	Nodes                   json.RawMessage `json:"nodes"`
+	DeviceLimit             int64           `json:"device_limit"`
+	SpeedLimitMbps          float64         `json:"speed_limit_mbps"`
+	AutoSpeedLimitJSON      json.RawMessage `json:"auto_speed_limit_json"`
+	TrafficMode             string          `json:"traffic_mode"`
+	TemplateFilename        string          `json:"template_filename"`
+	SurgeTemplateFilename   string          `json:"surge_template_filename"`
+	ShortCode               string          `json:"short_code"`
+	NodeMultipliers         json.RawMessage `json:"node_multipliers"`
+	NodeTrafficLimits       json.RawMessage `json:"node_traffic_limits"`
+	NodeSpeedLimits         json.RawMessage `json:"node_speed_limits"`
+	NodeDeviceLimits        json.RawMessage `json:"node_device_limits"`
+	NodeNameOverrides       json.RawMessage `json:"node_name_overrides"`
+	NodeNameOverrideEnabled bool            `json:"node_name_override_enabled"`
+}
+
+// PackageStatus 是 kind Package 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type PackageStatus struct{}
+
+// PackageAssignmentSpec 是 kind PackageAssignment（config）的 spec 字段。
+type PackageAssignmentSpec struct {
+	Username             string     `json:"username"`
+	PackageID            int64      `json:"package_id"`
+	PackageStartDate     *time.Time `json:"package_start_date"`
+	PackageEndDate       *time.Time `json:"package_end_date"`
+	IsReset              bool       `json:"is_reset"`
+	ResetDay             int64      `json:"reset_day"`
+	TrafficLimitOverride *int64     `json:"traffic_limit_override"`
+	IsPrimary            bool       `json:"is_primary"`
+	ShortCode            string     `json:"short_code"`
+}
+
+// PackageAssignmentStatus 是 kind PackageAssignment 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type PackageAssignmentStatus struct {
+	Status            string     `json:"status"`
+	LastResetAt       *time.Time `json:"last_reset_at"`
+	TrafficWarned80   bool       `json:"traffic_warned_80"`
+	OverLimitEnforced bool       `json:"over_limit_enforced"`
+}
+
 // PlanSpec 是 kind Plan（action）的 spec 字段。
 type PlanSpec struct {
 	Objects       json.RawMessage `json:"objects"`
@@ -157,6 +294,132 @@ type PlanSpec struct {
 type PlanStatus struct {
 	Status  string  `json:"status"`
 	ApplyID *string `json:"apply_id"`
+}
+
+// ReturnRouteSpec 是 kind ReturnRoute（config）的 spec 字段。
+type ReturnRouteSpec struct {
+	ServerID int64           `json:"server_id"`
+	Carrier  string          `json:"carrier"`
+	Enabled  bool            `json:"enabled"`
+	Probe    json.RawMessage `json:"probe"`
+}
+
+// ReturnRouteStatus 是 kind ReturnRoute 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type ReturnRouteStatus struct {
+	RouteType string     `json:"route_type"`
+	Region    string     `json:"region"`
+	EntryIP   string     `json:"entry_ip"`
+	EntryAsn  string     `json:"entry_asn"`
+	Reason    string     `json:"reason"`
+	TestedAt  *time.Time `json:"tested_at"`
+}
+
+// RoutingRuleSpec 是 kind RoutingRule（config）的 spec 字段。
+type RoutingRuleSpec struct {
+	ServerID    int64           `json:"server_id"`
+	SortOrder   int64           `json:"sort_order"`
+	Match       json.RawMessage `json:"match"`
+	OutboundTag string          `json:"outbound_tag"`
+	Enabled     bool            `json:"enabled"`
+	CatchAll    bool            `json:"catch_all"`
+}
+
+// RoutingRuleStatus 是 kind RoutingRule 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type RoutingRuleStatus struct{}
+
+// ServerSpec 是 kind Server（config）的 spec 字段。
+type ServerSpec struct {
+	Name                  string          `json:"name"`
+	Ipv6Enabled           bool            `json:"ipv6_enabled"`
+	Domain                string          `json:"domain"`
+	DomainV6              string          `json:"domain_v6"`
+	ConnectionMode        string          `json:"connection_mode"`
+	PullAddress           string          `json:"pull_address"`
+	PullAddressV6         string          `json:"pull_address_v6"`
+	PullPort              int64           `json:"pull_port"`
+	ListenPort            int64           `json:"listen_port"`
+	LockEntryIP           bool            `json:"lock_entry_ip"`
+	Use443                bool            `json:"use_443"`
+	StealMode             string          `json:"steal_mode"`
+	SiteType              string          `json:"site_type"`
+	SiteValue             string          `json:"site_value"`
+	PortRangeMin          int64           `json:"port_range_min"`
+	PortRangeMax          int64           `json:"port_range_max"`
+	TrafficLimit          int64           `json:"traffic_limit"`
+	TrafficResetDay       int64           `json:"traffic_reset_day"`
+	TrafficStatsMode      string          `json:"traffic_stats_mode"`
+	TrafficSource         string          `json:"traffic_source"`
+	IncludeInTrafficStats bool            `json:"include_in_traffic_stats"`
+	TrafficCalibration    int64           `json:"traffic_calibration"`
+	Region                string          `json:"region"`
+	RegionCountry         string          `json:"region_country"`
+	RegionName            string          `json:"region_name"`
+	RegionCity            string          `json:"region_city"`
+	RenewalPrice          float64         `json:"renewal_price"`
+	RenewalCycle          string          `json:"renewal_cycle"`
+	RenewalCurrency       string          `json:"renewal_currency"`
+	ProviderName          string          `json:"provider_name"`
+	ProviderURL           string          `json:"provider_url"`
+	TelecomPaidPeer       bool            `json:"telecom_paid_peer"`
+	ExpiresAt             *time.Time      `json:"expires_at"`
+	DdnsEnabled           bool            `json:"ddns_enabled"`
+	DdnsProviderID        int64           `json:"ddns_provider_id"`
+	DdnsRecordName        string          `json:"ddns_record_name"`
+	CoreLogLevel          string          `json:"core_log_level"`
+	CoreDNS               json.RawMessage `json:"core_dns"`
+	CoreStatsEnabled      bool            `json:"core_stats_enabled"`
+	SortOrder             int64           `json:"sort_order"`
+}
+
+// ServerStatus 是 kind Server 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type ServerStatus struct {
+	Token                  Secret     `json:"token"`
+	AgentToken             Secret     `json:"agent_token"`
+	PullToken              Secret     `json:"pull_token"`
+	TokenExpiresAt         *time.Time `json:"token_expires_at"`
+	AgentTokenExpiresAt    *time.Time `json:"agent_token_expires_at"`
+	LastTokenRefresh       *time.Time `json:"last_token_refresh"`
+	LastAgentTokenRefresh  *time.Time `json:"last_agent_token_refresh"`
+	Status                 string     `json:"status"`
+	LastHeartbeat          *time.Time `json:"last_heartbeat"`
+	IPAddress              *string    `json:"ip_address"`
+	IPAddressV6            string     `json:"ip_address_v6"`
+	BootTime               *time.Time `json:"boot_time"`
+	BootCount              int64      `json:"boot_count"`
+	CoreBootTime           *time.Time `json:"core_boot_time"`
+	CoreBootCount          int64      `json:"core_boot_count"`
+	CoreRunning            bool       `json:"core_running"`
+	CoreVersion            string     `json:"core_version"`
+	CurrentUploadSpeed     int64      `json:"current_upload_speed"`
+	CurrentDownloadSpeed   int64      `json:"current_download_speed"`
+	SpeedUpdatedAt         *time.Time `json:"speed_updated_at"`
+	OfflineSince           *time.Time `json:"offline_since"`
+	OfflineNotified        bool       `json:"offline_notified"`
+	WarpInstalled          bool       `json:"warp_installed"`
+	SameHostAsMaster       bool       `json:"same_host_as_master"`
+	TimeOffsetSeconds      *int64     `json:"time_offset_seconds"`
+	PushFailCount          int64      `json:"push_fail_count"`
+	LastPushFail           *time.Time `json:"last_push_fail"`
+	FallbackToPull         bool       `json:"fallback_to_pull"`
+	FallbackAt             *time.Time `json:"fallback_at"`
+	LastPullAt             *time.Time `json:"last_pull_at"`
+	SystemRxCycle          int64      `json:"system_rx_cycle"`
+	SystemTxCycle          int64      `json:"system_tx_cycle"`
+	SystemLastSeenRx       int64      `json:"system_last_seen_rx"`
+	SystemLastSeenTx       int64      `json:"system_last_seen_tx"`
+	SystemBootTimeUnix     int64      `json:"system_boot_time_unix"`
+	SystemTrafficUpdatedAt *time.Time `json:"system_traffic_updated_at"`
+	TrafficResetBaseline   int64      `json:"traffic_reset_baseline"`
+	LastTrafficResetAt     *time.Time `json:"last_traffic_reset_at"`
+	DdnsLastSyncedAt       *time.Time `json:"ddns_last_synced_at"`
+	DdnsLastError          string     `json:"ddns_last_error"`
+	DdnsPending            bool       `json:"ddns_pending"`
+	ProviderUpdatedAt      *time.Time `json:"provider_updated_at"`
+	RotationPending        bool       `json:"rotation_pending"`
+	LastRotatedAt          *time.Time `json:"last_rotated_at"`
+	RevokePending          bool       `json:"revoke_pending"`
+	AppliedHash            string     `json:"applied_hash"`
+	AppliedGeneration      int64      `json:"applied_generation"`
 }
 
 // TaskSpec 是 kind Task（action）的 spec 字段。
@@ -178,86 +441,247 @@ type TaskStatus struct {
 	ExpiresAt    *time.Time `json:"expires_at"`
 }
 
+// UserSpec 是 kind User（config）的 spec 字段。
+type UserSpec struct {
+	Username                 string          `json:"username"`
+	Email                    *string         `json:"email"`
+	Nickname                 *string         `json:"nickname"`
+	AvatarURL                *string         `json:"avatar_url"`
+	Role                     string          `json:"role"`
+	Remark                   *string         `json:"remark"`
+	TrafficLimitOverride     *int64          `json:"traffic_limit_override"`
+	SpeedLimitOverride       *float64        `json:"speed_limit_override"`
+	DeviceLimitOverride      *int64          `json:"device_limit_override"`
+	NodeSpeedLimitOverrides  json.RawMessage `json:"node_speed_limit_overrides"`
+	NodeDeviceLimitOverrides json.RawMessage `json:"node_device_limit_overrides"`
+	TgNotifyEnabled          bool            `json:"tg_notify_enabled"`
+}
+
+// UserStatus 是 kind User 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type UserStatus struct {
+	IsActive               bool       `json:"is_active"`
+	TelegramID             *int64     `json:"telegram_id"`
+	TelegramUsername       string     `json:"telegram_username"`
+	TelegramBoundAt        *time.Time `json:"telegram_bound_at"`
+	PasswordHash           Secret     `json:"password_hash"`
+	TotpSecret             Secret     `json:"totp_secret"`
+	TotpEnabled            bool       `json:"totp_enabled"`
+	RecoveryCodes          SecretJSON `json:"recovery_codes"`
+	IsOverLimit            bool       `json:"is_over_limit"`
+	OverLimitEnforced      bool       `json:"over_limit_enforced"`
+	DisabledAccessEnforced bool       `json:"disabled_access_enforced"`
+	TrafficWarned80        bool       `json:"traffic_warned_80"`
+	LastResetAt            *time.Time `json:"last_reset_at"`
+	LastPackageID          *int64     `json:"last_package_id"`
+	LastPackageEndDate     *time.Time `json:"last_package_end_date"`
+}
+
+// WebsiteSpec 是 kind Website（config）的 spec 字段。
+type WebsiteSpec struct {
+	ServerID      int64  `json:"server_id"`
+	Domain        string `json:"domain"`
+	Type          string `json:"type"`
+	Target        string `json:"target"`
+	CertificateID *int64 `json:"certificate_id"`
+	Use443        bool   `json:"use_443"`
+}
+
+// WebsiteStatus 是 kind Website 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type WebsiteStatus struct {
+	Scanned  json.RawMessage `json:"scanned"`
+	Managed  bool            `json:"managed"`
+	ConfPath string          `json:"conf_path"`
+}
+
 // generatedKinds 是 kind 清单，Kinds、Lookup、KindsOf 与 DecodeSpec 都查它。
 var generatedKinds = []KindInfo{
 	{
-		Name:         "Alert",
-		Class:        ClassAction,
-		SpecFields:   []string{"category", "level", "object_kind", "object_id", "dedup_key"},
-		StatusFields: []string{"conditions", "evidence_id", "status", "resolve_reason", "occurrence_count", "first_seen_at", "last_seen_at"},
-		MaskedFields: []string{},
-		notApplyable: map[string]string{"id": "meta", "conditions": "status", "evidence_id": "status", "status": "status", "resolve_reason": "status", "occurrence_count": "status", "first_seen_at": "status", "last_seen_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+		Name:            "Alert",
+		Class:           ClassAction,
+		SpecFields:      []string{"category", "level", "object_kind", "object_id", "dedup_key"},
+		StatusFields:    []string{"conditions", "evidence_id", "status", "resolve_reason", "occurrence_count", "first_seen_at", "last_seen_at"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "conditions": "status", "evidence_id": "status", "status": "status", "resolve_reason": "status", "occurrence_count": "status", "first_seen_at": "status", "last_seen_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
-		Name:         "AuditLog",
-		Class:        ClassSystem,
-		SpecFields:   []string{"at", "actor", "actor_kind", "token_id", "command", "args_digest", "full_command", "output", "plan_id", "result"},
-		StatusFields: []string{},
-		MaskedFields: []string{},
-		notApplyable: map[string]string{"id": "meta"},
+		Name:            "ApiToken",
+		Class:           ClassAction,
+		SpecFields:      []string{},
+		StatusFields:    []string{"owner", "name", "token_hash", "scopes", "preset", "expires_at", "runtime", "revoked", "revoked_at", "last_used_at"},
+		MaskedFields:    []string{"token_hash"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "owner": "human", "name": "human", "token_hash": "human", "scopes": "human", "preset": "human", "expires_at": "human", "runtime": "human", "revoked": "human", "revoked_at": "human", "last_used_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
-		Name:         "AutomationRule",
-		Class:        ClassConfig,
-		SpecFields:   []string{"name", "trigger", "condition", "action", "max_targets", "deadline_minutes", "enabled"},
-		StatusFields: []string{"proposed_by", "status", "approved_by", "approved_at"},
-		MaskedFields: []string{},
-		notApplyable: map[string]string{"id": "meta", "proposed_by": "action", "status": "human", "approved_by": "human", "approved_at": "human", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+		Name:            "AuditLog",
+		Class:           ClassSystem,
+		SpecFields:      []string{"at", "actor", "actor_kind", "token_id", "command", "args_digest", "full_command", "output", "plan_id", "result"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta"},
 	},
 	{
-		Name:         "ConfigSnapshot",
-		Class:        ClassSystem,
-		SpecFields:   []string{"object_kind", "object_id", "object_version", "content", "content_hash", "source", "status", "apply_id"},
-		StatusFields: []string{},
-		MaskedFields: []string{},
-		notApplyable: map[string]string{"id": "meta", "created_at": "meta"},
+		Name:            "AutomationRule",
+		Class:           ClassConfig,
+		SpecFields:      []string{"name", "trigger", "condition", "action", "max_targets", "deadline_minutes", "enabled"},
+		StatusFields:    []string{"proposed_by", "status", "approved_by", "approved_at"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "proposed_by": "action", "status": "human", "approved_by": "human", "approved_at": "human", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
-		Name:         "EvidencePackage",
-		Class:        ClassSystem,
-		SpecFields:   []string{"category", "server_id"},
-		StatusFields: []string{"collected_at", "items", "collect_error", "size_bytes", "expires_at"},
-		MaskedFields: []string{},
-		notApplyable: map[string]string{"id": "meta", "collected_at": "status", "items": "status", "collect_error": "status", "size_bytes": "status", "expires_at": "status", "created_at": "meta", "updated_at": "meta"},
+		Name:            "ConfigSnapshot",
+		Class:           ClassSystem,
+		SpecFields:      []string{"object_kind", "object_id", "object_version", "content", "content_hash", "source", "status", "apply_id"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta"},
 	},
 	{
-		Name:         "Job",
-		Class:        ClassAction,
-		SpecFields:   []string{"job_id", "kind", "server_id", "args"},
-		StatusFields: []string{"status", "started_at", "finished_at", "exit_code", "output", "output_truncated"},
-		MaskedFields: []string{},
-		notApplyable: map[string]string{"id": "meta", "status": "status", "started_at": "status", "finished_at": "status", "exit_code": "status", "output": "status", "output_truncated": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+		Name:            "EvidencePackage",
+		Class:           ClassSystem,
+		SpecFields:      []string{"category", "server_id"},
+		StatusFields:    []string{"collected_at", "items", "collect_error", "size_bytes", "expires_at"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "collected_at": "status", "items": "status", "collect_error": "status", "size_bytes": "status", "expires_at": "status", "created_at": "meta", "updated_at": "meta"},
 	},
 	{
-		Name:         "NotifyChannel",
-		Class:        ClassConfig,
-		SpecFields:   []string{"name", "type", "events", "enabled"},
-		StatusFields: []string{"target", "secret", "last_delivered_at", "last_error"},
-		MaskedFields: []string{"secret"},
-		notApplyable: map[string]string{"id": "meta", "target": "master_self", "secret": "master_self", "last_delivered_at": "status", "last_error": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+		Name:            "Inbound",
+		Class:           ClassConfig,
+		SpecFields:      []string{"server_id", "tag", "protocol", "port", "listen", "tls", "transport", "settings", "enabled", "sort_order"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{"tls", "settings"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
-		Name:         "NotifyDelivery",
-		Class:        ClassSystem,
-		SpecFields:   []string{"delivery_id", "channel_id", "type", "payload"},
-		StatusFields: []string{"attempts", "status", "last_error", "last_attempt_at"},
-		MaskedFields: []string{},
-		notApplyable: map[string]string{"id": "meta", "attempts": "status", "status": "status", "last_error": "status", "last_attempt_at": "status", "created_at": "meta", "updated_at": "meta"},
+		Name:            "Job",
+		Class:           ClassAction,
+		SpecFields:      []string{"job_id", "kind", "server_id", "args"},
+		StatusFields:    []string{"status", "started_at", "finished_at", "exit_code", "output", "output_truncated"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "status": "status", "started_at": "status", "finished_at": "status", "exit_code": "status", "output": "status", "output_truncated": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
-		Name:         "Plan",
-		Class:        ClassAction,
-		SpecFields:   []string{"objects", "diff", "affected_count", "share_identity", "share_scope", "expires_at"},
-		StatusFields: []string{"status", "apply_id"},
-		MaskedFields: []string{},
-		notApplyable: map[string]string{"id": "meta", "status": "status", "apply_id": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+		Name:            "Node",
+		Class:           ClassConfig,
+		SpecFields:      []string{"username", "server_id", "raw_url", "node_name", "protocol", "parsed_config", "clash_config", "enabled", "tag", "tags", "original_server", "original_domain", "inbound_tag", "chain_proxy_node_id", "relay_group_name", "relay_group_node_ids", "node_type", "parent_node_id", "routed_outbound_tag", "routed_outbound_json", "routed_rule_marktag", "routed_admin_email", "routed_admin_credential", "routed_owner", "relay_orig_server", "relay_orig_port", "ip_family"},
+		StatusFields:    []string{"detached", "detach_reason"},
+		MaskedFields:    []string{"routed_outbound_json", "routed_admin_credential"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "detached": "action", "detach_reason": "action", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
-		Name:         "Task",
-		Class:        ClassAction,
-		SpecFields:   []string{"title", "body", "source", "dedup_key", "alert_id", "evidence_id"},
-		StatusFields: []string{"status", "claimed_by", "lease_until", "cancel_reason", "expires_at"},
-		MaskedFields: []string{},
-		notApplyable: map[string]string{"id": "meta", "status": "action", "claimed_by": "action", "lease_until": "action", "cancel_reason": "status", "expires_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+		Name:            "NotifyChannel",
+		Class:           ClassConfig,
+		SpecFields:      []string{"name", "type", "events", "enabled"},
+		StatusFields:    []string{"target", "secret", "last_delivered_at", "last_error"},
+		MaskedFields:    []string{"secret"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "target": "master_self", "secret": "master_self", "last_delivered_at": "status", "last_error": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "NotifyDelivery",
+		Class:           ClassSystem,
+		SpecFields:      []string{"delivery_id", "channel_id", "type", "payload"},
+		StatusFields:    []string{"attempts", "status", "last_error", "last_attempt_at"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "attempts": "status", "status": "status", "last_error": "status", "last_attempt_at": "status", "created_at": "meta", "updated_at": "meta"},
+	},
+	{
+		Name:            "Outbound",
+		Class:           ClassConfig,
+		SpecFields:      []string{"server_id", "tag", "protocol", "settings", "is_warp", "balancer_group", "probe"},
+		StatusFields:    []string{"last_probe_ok", "last_probe_latency_ms", "last_probed_at"},
+		MaskedFields:    []string{"settings"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "last_probe_ok": "status", "last_probe_latency_ms": "status", "last_probed_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "Package",
+		Class:           ClassConfig,
+		SpecFields:      []string{"name", "description", "traffic_limit_bytes", "cycle_days", "is_reset", "reset_day", "nodes", "device_limit", "speed_limit_mbps", "auto_speed_limit_json", "traffic_mode", "template_filename", "surge_template_filename", "short_code", "node_multipliers", "node_traffic_limits", "node_speed_limits", "node_device_limits", "node_name_overrides", "node_name_override_enabled"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "PackageAssignment",
+		Class:           ClassConfig,
+		SpecFields:      []string{"username", "package_id", "package_start_date", "package_end_date", "is_reset", "reset_day", "traffic_limit_override", "is_primary", "short_code"},
+		StatusFields:    []string{"status", "last_reset_at", "traffic_warned_80", "over_limit_enforced"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "status": "status", "last_reset_at": "status", "traffic_warned_80": "status", "over_limit_enforced": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "Plan",
+		Class:           ClassAction,
+		SpecFields:      []string{"objects", "diff", "affected_count", "share_identity", "share_scope", "expires_at"},
+		StatusFields:    []string{"status", "apply_id"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "status": "status", "apply_id": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "ReturnRoute",
+		Class:           ClassConfig,
+		SpecFields:      []string{"server_id", "carrier", "enabled", "probe"},
+		StatusFields:    []string{"route_type", "region", "entry_ip", "entry_asn", "reason", "tested_at"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "route_type": "status", "region": "status", "entry_ip": "status", "entry_asn": "status", "reason": "status", "tested_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "RoutingRule",
+		Class:           ClassConfig,
+		SpecFields:      []string{"server_id", "sort_order", "match", "outbound_tag", "enabled", "catch_all"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "Server",
+		Class:           ClassConfig,
+		SpecFields:      []string{"name", "ipv6_enabled", "domain", "domain_v6", "connection_mode", "pull_address", "pull_address_v6", "pull_port", "listen_port", "lock_entry_ip", "use_443", "steal_mode", "site_type", "site_value", "port_range_min", "port_range_max", "traffic_limit", "traffic_reset_day", "traffic_stats_mode", "traffic_source", "include_in_traffic_stats", "traffic_calibration", "region", "region_country", "region_name", "region_city", "renewal_price", "renewal_cycle", "renewal_currency", "provider_name", "provider_url", "telecom_paid_peer", "expires_at", "ddns_enabled", "ddns_provider_id", "ddns_record_name", "core_log_level", "core_dns", "core_stats_enabled", "sort_order"},
+		StatusFields:    []string{"token", "agent_token", "pull_token", "token_expires_at", "agent_token_expires_at", "last_token_refresh", "last_agent_token_refresh", "status", "last_heartbeat", "ip_address", "ip_address_v6", "boot_time", "boot_count", "core_boot_time", "core_boot_count", "core_running", "core_version", "current_upload_speed", "current_download_speed", "speed_updated_at", "offline_since", "offline_notified", "warp_installed", "same_host_as_master", "time_offset_seconds", "push_fail_count", "last_push_fail", "fallback_to_pull", "fallback_at", "last_pull_at", "system_rx_cycle", "system_tx_cycle", "system_last_seen_rx", "system_last_seen_tx", "system_boot_time_unix", "system_traffic_updated_at", "traffic_reset_baseline", "last_traffic_reset_at", "ddns_last_synced_at", "ddns_last_error", "ddns_pending", "provider_updated_at", "rotation_pending", "last_rotated_at", "revoke_pending", "applied_hash", "applied_generation"},
+		MaskedFields:    []string{"token", "agent_token", "pull_token"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "token": "action", "agent_token": "action", "pull_token": "action", "token_expires_at": "action", "agent_token_expires_at": "action", "last_token_refresh": "action", "last_agent_token_refresh": "action", "status": "status", "last_heartbeat": "status", "ip_address": "status", "ip_address_v6": "status", "boot_time": "status", "boot_count": "status", "core_boot_time": "status", "core_boot_count": "status", "core_running": "status", "core_version": "status", "current_upload_speed": "status", "current_download_speed": "status", "speed_updated_at": "status", "offline_since": "status", "offline_notified": "status", "warp_installed": "status", "same_host_as_master": "status", "time_offset_seconds": "status", "push_fail_count": "status", "last_push_fail": "status", "fallback_to_pull": "status", "fallback_at": "status", "last_pull_at": "status", "system_rx_cycle": "status", "system_tx_cycle": "status", "system_last_seen_rx": "status", "system_last_seen_tx": "status", "system_boot_time_unix": "status", "system_traffic_updated_at": "status", "traffic_reset_baseline": "status", "last_traffic_reset_at": "status", "ddns_last_synced_at": "status", "ddns_last_error": "status", "ddns_pending": "status", "provider_updated_at": "status", "rotation_pending": "status", "last_rotated_at": "status", "revoke_pending": "status", "applied_hash": "status", "applied_generation": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "Task",
+		Class:           ClassAction,
+		SpecFields:      []string{"title", "body", "source", "dedup_key", "alert_id", "evidence_id"},
+		StatusFields:    []string{"status", "claimed_by", "lease_until", "cancel_reason", "expires_at"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "status": "action", "claimed_by": "action", "lease_until": "action", "cancel_reason": "status", "expires_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "User",
+		Class:           ClassConfig,
+		SpecFields:      []string{"username", "email", "nickname", "avatar_url", "role", "remark", "traffic_limit_override", "speed_limit_override", "device_limit_override", "node_speed_limit_overrides", "node_device_limit_overrides", "tg_notify_enabled"},
+		StatusFields:    []string{"is_active", "telegram_id", "telegram_username", "telegram_bound_at", "password_hash", "totp_secret", "totp_enabled", "recovery_codes", "is_over_limit", "over_limit_enforced", "disabled_access_enforced", "traffic_warned_80", "last_reset_at", "last_package_id", "last_package_end_date"},
+		MaskedFields:    []string{"password_hash", "totp_secret", "recovery_codes"},
+		ImmutableFields: []string{"username"},
+		notApplyable:    map[string]string{"id": "meta", "is_active": "action", "telegram_id": "action", "telegram_username": "action", "telegram_bound_at": "action", "password_hash": "human", "totp_secret": "human", "totp_enabled": "human", "recovery_codes": "human", "is_over_limit": "status", "over_limit_enforced": "status", "disabled_access_enforced": "status", "traffic_warned_80": "status", "last_reset_at": "status", "last_package_id": "status", "last_package_end_date": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "Website",
+		Class:           ClassConfig,
+		SpecFields:      []string{"server_id", "domain", "type", "target", "certificate_id", "use_443"},
+		StatusFields:    []string{"scanned", "managed", "conf_path"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "scanned": "status", "managed": "status", "conf_path": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 }
