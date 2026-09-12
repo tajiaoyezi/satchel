@@ -10,6 +10,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/satchel/satchel/internal/base/schema"
+	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
 // ColumnInfo 是库里一列的实际情况。Type 是该方言的类型词（SQLite 声明的类型，PostgreSQL 归一成 DDL 写法）。
@@ -36,26 +37,89 @@ type ForeignKeyInfo struct {
 	OnDelete   string
 }
 
-// TableInfo 是库里一张表的实际结构。
+// TableInfo 是库里一张表的实际结构。Checks 是表上全部 CHECK 约束的谓词原文（不含 CHECK 关键字）。
 type TableInfo struct {
 	Name        string
 	Columns     []ColumnInfo
 	PrimaryKey  []string
 	Indexes     []IndexInfo
 	ForeignKeys []ForeignKeyInfo
+	Checks      []string
 }
 
 var internalTables = map[string]bool{MigrationsTable: true, MigrationLocksTable: true}
 
 // Introspect 反查库里的实际表结构，按表名排序；迁移表与 SQLite 的内部表不算。
 func Introspect(ctx context.Context, db *bun.DB) ([]TableInfo, error) {
+	var tables []TableInfo
+	var err error
 	switch DialectOf(db) {
 	case schema.SQLite:
-		return introspectSQLite(ctx, db)
+		tables, err = introspectSQLite(ctx, db)
 	case schema.Postgres:
-		return introspectPostgres(ctx, db)
+		tables, err = introspectPostgres(ctx, db)
+	default:
+		return nil, v1.New(v1.CodeInternal, "不认识的数据库方言")
 	}
-	return nil, fmt.Errorf("不认识的数据库方言 %s", db.Dialect().Name())
+	if err != nil {
+		return nil, v1.Wrap(v1.CodeDatabase, "反查表结构失败", err)
+	}
+	return tables, nil
+}
+
+// extractChecks 从 CREATE TABLE 语句里扫出每个 CHECK (...) 的谓词，跳过单引号字符串里的内容。
+func extractChecks(createSQL string) []string {
+	var out []string
+	upper := strings.ToUpper(createSQL)
+	inQuote := false
+	for i := 0; i < len(createSQL); i++ {
+		ch := createSQL[i]
+		if ch == '\'' {
+			inQuote = !inQuote
+			continue
+		}
+		if inQuote || !strings.HasPrefix(upper[i:], "CHECK") {
+			continue
+		}
+		if i > 0 && isIdentChar(createSQL[i-1]) {
+			continue
+		}
+		j := i + len("CHECK")
+		for j < len(createSQL) && (createSQL[j] == ' ' || createSQL[j] == '\t' || createSQL[j] == '\n') {
+			j++
+		}
+		if j >= len(createSQL) || createSQL[j] != '(' {
+			continue
+		}
+		depth, k, quoted := 0, j, false
+		for ; k < len(createSQL); k++ {
+			switch createSQL[k] {
+			case '\'':
+				quoted = !quoted
+			case '(':
+				if !quoted {
+					depth++
+				}
+			case ')':
+				if !quoted {
+					depth--
+				}
+			}
+			if depth == 0 && !quoted {
+				break
+			}
+		}
+		if k >= len(createSQL) {
+			break
+		}
+		out = append(out, strings.TrimSpace(createSQL[j+1:k]))
+		i = k
+	}
+	return out
+}
+
+func isIdentChar(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 func introspectSQLite(ctx context.Context, db *bun.DB) ([]TableInfo, error) {
@@ -171,6 +235,11 @@ func introspectSQLite(ctx context.Context, db *bun.DB) ([]TableInfo, error) {
 		for _, id := range order {
 			t.ForeignKeys = append(t.ForeignKeys, *byID[id])
 		}
+		var createSQL string
+		if err := db.NewRaw("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(ctx, &createSQL); err != nil {
+			return nil, err
+		}
+		t.Checks = extractChecks(createSQL)
 		tables = append(tables, t)
 	}
 	return tables, nil
@@ -294,6 +363,18 @@ func introspectPostgres(ctx context.Context, db *bun.DB) ([]TableInfo, error) {
 		}
 		for _, n := range order {
 			t.ForeignKeys = append(t.ForeignKeys, *byName[n])
+		}
+		var checks []string
+		if err := db.NewRaw(`SELECT pg_get_constraintdef(con.oid)
+			FROM pg_constraint con
+			JOIN pg_class c ON c.oid = con.conrelid
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE con.contype = 'c' AND n.nspname = current_schema() AND c.relname = ?
+			ORDER BY con.conname`, name).Scan(ctx, &checks); err != nil {
+			return nil, err
+		}
+		for _, def := range checks {
+			t.Checks = append(t.Checks, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(def), "CHECK")))
 		}
 		tables = append(tables, t)
 	}

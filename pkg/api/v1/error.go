@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -9,6 +10,8 @@ import (
 type Code string
 
 // 错误码。退出码的对应关系见 exitCodes；没列在那里的一律退出码 1。
+// name_taken 只用于自然键冲突；其它唯一约束冲突与前置条件不满足用 conflict；
+// config 是配置文件或环境变量不合法，与命令行用法错误（bad_request、退出码 2）分开。
 const (
 	CodeBadRequest            Code = "bad_request"
 	CodeUnsupportedAPIVersion Code = "unsupported_api_version"
@@ -22,8 +25,11 @@ const (
 	CodePartialFailure        Code = "partial_failure"
 	CodeHumanRequired         Code = "human_required"
 	CodeNameTaken             Code = "name_taken"
+	CodeConflict              Code = "conflict"
 	CodeAppendOnly            Code = "append_only"
+	CodeSchemaMismatch        Code = "schema_mismatch"
 	CodeDatabase              Code = "database"
+	CodeConfig                Code = "config"
 	CodeInternal              Code = "internal"
 )
 
@@ -61,6 +67,20 @@ func (e *Error) Error() string {
 
 // Unwrap 返回被包装的底层错误。
 func (e *Error) Unwrap() error { return e.cause }
+
+// MarshalJSON 保证四个字段总在、类型不漂：state 为空时输出 {} 而不是 null。
+func (e *Error) MarshalJSON() ([]byte, error) {
+	state := e.State
+	if state == nil {
+		state = map[string]any{}
+	}
+	return json.Marshal(struct {
+		Code   Code           `json:"code"`
+		Reason string         `json:"reason"`
+		State  map[string]any `json:"state"`
+		Next   string         `json:"next"`
+	}{e.Code, e.Reason, state, e.Next})
+}
 
 // WithState 记一项当前相关状态。
 func (e *Error) WithState(key string, value any) *Error {

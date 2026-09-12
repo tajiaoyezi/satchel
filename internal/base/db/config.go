@@ -3,13 +3,14 @@ package db
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+
+	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
 // Driver 是数据库驱动名，也是 database.json 里 driver 字段的值。
@@ -54,10 +55,10 @@ func DataDir(flag string) string {
 	return DefaultDataDir
 }
 
-// EnsureDataDir 创建数据目录，权限 0700。
+// EnsureDataDir 创建数据目录，权限 0700。只有 SQLite 模式需要它，postgres 模式不碰数据目录。
 func EnsureDataDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("创建数据目录 %s 失败：%w", dir, err)
+		return v1.Wrap(v1.CodeDatabase, "创建数据目录 "+dir+" 失败", err)
 	}
 	return nil
 }
@@ -70,11 +71,11 @@ func LoadConfig(dataDir string) (Config, error) {
 	switch {
 	case err == nil:
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			return cfg, fmt.Errorf("解析 %s 失败：%w", path, err)
+			return cfg, v1.Wrap(v1.CodeConfig, "解析 "+path+" 失败：不是合法的 JSON", err)
 		}
 	case errors.Is(err, fs.ErrNotExist):
 	default:
-		return cfg, fmt.Errorf("读取 %s 失败：%w", path, err)
+		return cfg, v1.Wrap(v1.CodeDatabase, "读取 "+path+" 失败", err)
 	}
 	if err := cfg.applyEnv(); err != nil {
 		return cfg, err
@@ -101,7 +102,7 @@ func LoadConfig(dataDir string) (Config, error) {
 			cfg.User = "satchel"
 		}
 	default:
-		return cfg, fmt.Errorf("不支持的数据库驱动 %q，只认 sqlite 与 postgres", cfg.Driver)
+		return cfg, v1.Newf(v1.CodeConfig, "不支持的数据库驱动 %q，只认 sqlite 与 postgres", cfg.Driver)
 	}
 	return cfg, nil
 }
@@ -114,7 +115,7 @@ func SaveConfig(dataDir string, cfg Config) error {
 	}
 	path := filepath.Join(dataDir, ConfigFile)
 	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("写入 %s 失败：%w", path, err)
+		return v1.Wrap(v1.CodeDatabase, "写入 "+path+" 失败", err)
 	}
 	return nil
 }
@@ -133,7 +134,7 @@ func (c *Config) applyEnv() error {
 	if v := os.Getenv("SATCHEL_DATABASE_PORT"); v != "" {
 		port, err := strconv.Atoi(v)
 		if err != nil {
-			return fmt.Errorf("SATCHEL_DATABASE_PORT=%q 不是端口号", v)
+			return v1.Newf(v1.CodeConfig, "SATCHEL_DATABASE_PORT=%q 不是端口号", v)
 		}
 		c.Port = port
 	}

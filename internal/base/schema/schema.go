@@ -93,16 +93,36 @@ type Column struct {
 	Class   Class
 	// Enum 非空时生成 CHECK (col IN (...))，只用于文本列。
 	Enum []string
+	// Check 非空时生成 CHECK (<Check>)，任意谓词，如 dedup_key <> ''。
+	Check string
 	// Masked 表示输出时按第 05 章打码。
 	Masked bool
 }
 
+// Checks 返回这一列的全部 CHECK 谓词：Enum 展开成 IN 列表，Check 原样。
+func (c Column) Checks() []string {
+	var out []string
+	if len(c.Enum) > 0 {
+		quoted := make([]string, len(c.Enum))
+		for i, v := range c.Enum {
+			quoted[i] = "'" + strings.ReplaceAll(v, "'", "''") + "'"
+		}
+		out = append(out, c.Name+" IN ("+strings.Join(quoted, ", ")+")")
+	}
+	if c.Check != "" {
+		out = append(out, c.Check)
+	}
+	return out
+}
+
 // Index 是一个索引；Where 非空就是部分索引。
+// NaturalKey 标记这是 kind 的自然键唯一索引：撞上它报 name_taken，其它唯一约束报 conflict。
 type Index struct {
-	Name    string
-	Columns []string
-	Unique  bool
-	Where   string
+	Name       string
+	Columns    []string
+	Unique     bool
+	Where      string
+	NaturalKey bool
 }
 
 // ForeignKey 是一条外键。OnDelete 取 CASCADE、SET NULL、RESTRICT 或空（数据库默认 NO ACTION）。
@@ -311,6 +331,9 @@ func (r *Registry) Validate() error {
 			if c.Type == TypeSerial && c.Nullable {
 				add("表 %s 的列 %s：自增主键不能可空", t.Name, c.Name)
 			}
+			if c.Type == TypeBool && c.Default != "" && !strings.EqualFold(c.Default, "FALSE") {
+				add("表 %s 的列 %s：布尔列的默认值只能是 FALSE（Go 的零值分不清没填与 false）", t.Name, c.Name)
+			}
 		}
 		pk := t.PKColumns()
 		for _, col := range pk {
@@ -347,6 +370,9 @@ func (r *Registry) Validate() error {
 			indexNames[ix.Name] = t.Name
 			if len(ix.Columns) == 0 {
 				add("索引 %s 没有列", ix.Name)
+			}
+			if ix.NaturalKey && !ix.Unique {
+				add("索引 %s 标了自然键却不是唯一索引", ix.Name)
 			}
 			for _, col := range ix.Columns {
 				if _, ok := t.Column(col); !ok {

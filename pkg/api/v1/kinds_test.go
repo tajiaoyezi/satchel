@@ -111,6 +111,33 @@ func TestDecodeSpecRejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestDecodeSpecRejectsNonObject(t *testing.T) {
+	var spec TaskSpec
+	for _, in := range []string{`null`, `[]`, `"x"`, `1`, ``} {
+		err := DecodeSpec("Task", []byte(in), &spec)
+		if e := codeOf(t, err); e.Code != CodeBadRequest {
+			t.Errorf("spec 为 %q 应当是 bad_request，得到 %v", in, err)
+		}
+	}
+}
+
+func TestMaskedFields(t *testing.T) {
+	ch, ok := Lookup("NotifyChannel")
+	if !ok || !contains(ch.MaskedFields, "secret") {
+		t.Fatalf("NotifyChannel 的打码清单应当含 secret，得到 %v", ch.MaskedFields)
+	}
+	for _, k := range Kinds() {
+		for _, f := range k.MaskedFields {
+			if contains(k.SpecFields, f) {
+				continue
+			}
+			if !contains(k.StatusFields, f) {
+				t.Errorf("kind %s 的打码字段 %s 既不在 spec 也不在 status 里", k.Name, f)
+			}
+		}
+	}
+}
+
 func TestDecodeSpecAcceptsValidSpec(t *testing.T) {
 	var spec TaskSpec
 	if err := DecodeSpec("Task", []byte(`{"title":"看看东京那台","source":"admin","dedup_key":""}`), &spec); err != nil {

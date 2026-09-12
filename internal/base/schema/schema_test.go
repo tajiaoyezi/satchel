@@ -134,3 +134,34 @@ func TestGoName(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRejectsTrueBoolDefault(t *testing.T) {
+	r := New()
+	r.Add(serialTable("a", col("enabled", TypeBool).def("TRUE")))
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "列 enabled") || !strings.Contains(err.Error(), "FALSE") {
+		t.Fatalf("默认 TRUE 的布尔列应当被拒并点名，得到 %v", err)
+	}
+	r = New()
+	r.Add(serialTable("b", col("enabled", TypeBool).def("FALSE"), col("flag", TypeBool)))
+	if err := r.Validate(); err != nil {
+		t.Fatalf("默认 FALSE 或没有默认值的布尔列应当通过，得到 %v", err)
+	}
+}
+
+func TestValidateRejectsNonUniqueNaturalKey(t *testing.T) {
+	r := New()
+	r.Add(serialTable("a", col("name", TypeText)))
+	r.tables["a"].Indexes = []Index{{Name: "a_name", Columns: []string{"name"}, NaturalKey: true}}
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "自然键") {
+		t.Fatalf("非唯一索引标自然键应当被拒，得到 %v", err)
+	}
+}
+
+func TestColumnChecks(t *testing.T) {
+	c := col("status", TypeText).enum("a", "b").check("status <> ''")
+	got := strings.Join(c.Checks(), " | ")
+	if got != "status IN ('a', 'b') | status <> ''" {
+		t.Fatalf("Checks 不对：%s", got)
+	}
+}

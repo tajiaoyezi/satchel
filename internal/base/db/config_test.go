@@ -113,3 +113,19 @@ func TestEnsureDataDir(t *testing.T) {
 		t.Fatalf("数据目录权限应当是 0700，得到 %o", perm)
 	}
 }
+
+func TestLoadConfigPostgresWithoutDataDir(t *testing.T) {
+	clearEnv(t)
+	dir := filepath.Join(t.TempDir(), "never-created")
+	t.Setenv("SATCHEL_DATABASE_DRIVER", "postgres")
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatalf("postgres 模式不该要求数据目录存在：%v", err)
+	}
+	if cfg.Driver != DriverPostgres {
+		t.Fatalf("驱动应当是 postgres，得到 %s", cfg.Driver)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("LoadConfig 不该创建数据目录")
+	}
+}

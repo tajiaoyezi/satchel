@@ -25,6 +25,26 @@ func New(db *bun.DB, reg *schema.Registry) *Store {
 	return &Store{db: db, reg: reg}
 }
 
+// Cond 是更新的前置条件：列必须等于 Value（Value 为 nil 或 nil 指针表示必须为 NULL）。
+// 不满足时更新不落地，报 conflict 并带上该列的当前值。用它做「只许从状态 A 转到 B」的原子更新。
+type Cond struct {
+	Column string
+	Value  any
+}
+
+// isNull 报告前置条件的值是不是空：无类型 nil，或模型字段那种带类型的 nil 指针都算。
+func (c Cond) isNull() bool {
+	if c.Value == nil {
+		return true
+	}
+	v := reflect.ValueOf(c.Value)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice:
+		return v.IsNil()
+	}
+	return false
+}
+
 // target 是一次操作的目标：注册表里的表、bun 的表元数据、模型结构体的值。
 type target struct {
 	table  *schema.Table
@@ -72,25 +92,36 @@ func (t *target) id() (int64, error) {
 	return f.Int(), nil
 }
 
-func (t *target) setTime(column string, now time.Time) {
+func (t *target) version() int64 {
+	f, ok := t.field("resource_version")
+	if !ok {
+		return 0
+	}
+	return f.Int()
+}
+
+// setTime 把模型里的时间列设为 now，返回把它改回原值的函数：写没落地时模型不该带着库里没有的时间。
+func (t *target) setTime(column string, now time.Time) (restore func()) {
 	f, ok := t.field(column)
 	if !ok {
-		return
+		return func() {}
 	}
+	previous := reflect.ValueOf(f.Interface())
 	if f.Kind() == reflect.Ptr {
 		f.Set(reflect.ValueOf(&now))
-		return
+	} else {
+		f.Set(reflect.ValueOf(now))
 	}
-	f.Set(reflect.ValueOf(now))
+	return func() { f.Set(previous) }
 }
 
 func now() time.Time {
 	return time.Now().UTC().Truncate(time.Microsecond)
 }
 
-// Insert 插入一行，自增主键与库默认值回填到 model。
+// Insert 插入一行，自增主键与库默认值回填到 model。自增主键一律由库分配，调用方预填的 id 被忽略。
 // created_at、updated_at 与其它带 CURRENT_TIMESTAMP 默认值的非空时间列，模型里是零值时填当前时间；
-// 其它有默认值、模型里是零值的列（布尔除外，布尔按模型的值写）交给库默认值。
+// 其它有默认值、模型里是零值的列交给库默认值（布尔列的默认值只能是 FALSE，与零值一致）。
 func (s *Store) Insert(ctx context.Context, model any) error {
 	tg, err := s.resolve(model)
 	if err != nil {
@@ -99,6 +130,10 @@ func (s *Store) Insert(ctx context.Context, model any) error {
 	ts := now()
 	var exclude []string
 	for _, c := range tg.table.Columns {
+		if c.Type == schema.TypeSerial {
+			exclude = append(exclude, c.Name)
+			continue
+		}
 		f, ok := tg.field(c.Name)
 		if !ok || !f.IsZero() {
 			continue
@@ -107,12 +142,12 @@ func (s *Store) Insert(ctx context.Context, model any) error {
 			tg.setTime(c.Name, ts)
 			continue
 		}
-		if c.Default != "" && c.Type != schema.TypeBool {
+		if c.Default != "" {
 			exclude = append(exclude, c.Name)
 		}
 	}
 	_, err = s.db.NewInsert().Model(model).ExcludeColumn(exclude...).Returning("*").Exec(ctx)
-	return translate(err)
+	return s.translate(tg.table, err)
 }
 
 // Get 按主键 id 读一行；没有时返回 not_found。已软删除的行照样返回，调用方看 deleted_at。
@@ -128,7 +163,7 @@ func (s *Store) Get(ctx context.Context, model any, id int64) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return notFound(tg, id)
 	}
-	return translate(err)
+	return s.translate(tg.table, err)
 }
 
 func notFound(tg *target, id int64) error {
@@ -172,62 +207,86 @@ func (s *Store) UpdateSpec(ctx context.Context, model any, force bool, columns .
 	if err != nil {
 		return err
 	}
-	expected, _ := tg.field("resource_version")
+	expected := tg.version()
 	q := s.db.NewUpdate().Model(model).Column(columns...).Where("id = ?", id)
 	if !force {
-		q = q.Where("resource_version = ?", expected.Int())
+		q = q.Where("resource_version = ?", expected)
 	}
-	return s.bumpVersion(ctx, tg, q, id, expected.Int(), force)
+	ok, err := s.execBump(ctx, tg, q)
+	if err != nil || ok {
+		return err
+	}
+	current, exists, err := s.currentVersion(ctx, tg, id)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return notFound(tg, id)
+	}
+	return versionConflict(tg, expected, current)
 }
 
-// bumpVersion 给更新语句加上 updated_at 与 resource_version + 1，执行并处理零行的情况。
-func (s *Store) bumpVersion(ctx context.Context, tg *target, q *bun.UpdateQuery, id, expected int64, force bool) error {
-	tg.setTime("updated_at", now())
+// execBump 给更新语句加上 updated_at 与 resource_version + 1 并执行；返回是否写到了行。
+// 没写到行时把模型的 updated_at 改回去，模型不带库里没有的时间。
+func (s *Store) execBump(ctx context.Context, tg *target, q *bun.UpdateQuery) (bool, error) {
+	restore := tg.setTime("updated_at", now())
 	q = q.Column("updated_at", "resource_version").
 		Value("resource_version", "resource_version + 1").
 		Returning("resource_version, updated_at")
 	res, err := q.Exec(ctx)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return translate(err)
-	}
-	if err == nil {
-		// bun 走 RETURNING 时，RowsAffected 是扫回的行数；零行说明 WHERE 没匹配到。
-		if n, _ := res.RowsAffected(); n > 0 {
-			return nil
+	if err != nil {
+		restore()
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
 		}
+		return false, s.translate(tg.table, err)
 	}
-	var current int64
-	err = s.db.NewSelect().Table(tg.table.Name).Column("resource_version").Where("id = ?", id).Scan(ctx, &current)
+	// bun 走 RETURNING 时，RowsAffected 是扫回的行数；零行说明 WHERE 没匹配到。
+	if n, _ := res.RowsAffected(); n > 0 {
+		return true, nil
+	}
+	restore()
+	return false, nil
+}
+
+func (s *Store) currentVersion(ctx context.Context, tg *target, id int64) (version int64, exists bool, err error) {
+	err = s.db.NewSelect().Table(tg.table.Name).Column("resource_version").Where("id = ?", id).Scan(ctx, &version)
 	if errors.Is(err, sql.ErrNoRows) {
-		return notFound(tg, id)
+		return 0, false, nil
 	}
 	if err != nil {
-		return translate(err)
+		return 0, false, s.translate(tg.table, err)
 	}
-	if force {
-		return v1.Wrap(v1.CodeDatabase, "更新没有写到任何行", errors.New("零行"))
-	}
+	return version, true, nil
+}
+
+func versionConflict(tg *target, expected, current int64) error {
 	return v1.Newf(v1.CodeVersionConflict, "%s 已被别人改过：期望 resourceVersion %d，存储中是 %d", tg.label(), expected, current).
 		WithState("resourceVersion", current).
 		WithNext("重新读取对象，在最新的 resourceVersion 上再改")
 }
 
-// UpdateStatus 写 status 档的列，不动 resource_version。
-func (s *Store) UpdateStatus(ctx context.Context, model any, columns ...string) error {
-	return s.updateClass(ctx, model, "UpdateStatus", schema.ClassStatus, columns)
+// UpdateStatus 写 status 档的列，不动 resource_version；conds 是可选的前置条件。
+func (s *Store) UpdateStatus(ctx context.Context, model any, columns []string, conds ...Cond) error {
+	return s.updateClass(ctx, model, "UpdateStatus", schema.ClassStatus, columns, conds)
 }
 
-// UpdateAction 写动作专属的列，不动 resource_version。
-func (s *Store) UpdateAction(ctx context.Context, model any, columns ...string) error {
-	return s.updateClass(ctx, model, "UpdateAction", schema.ClassAction, columns)
+// UpdateAction 写动作专属的列，不动 resource_version；conds 是可选的前置条件。
+func (s *Store) UpdateAction(ctx context.Context, model any, columns []string, conds ...Cond) error {
+	return s.updateClass(ctx, model, "UpdateAction", schema.ClassAction, columns, conds)
 }
 
-// UpdateHuman 写人类专属的列，不动 resource_version。
-func (s *Store) UpdateHuman(ctx context.Context, model any, columns ...string) error {
-	return s.updateClass(ctx, model, "UpdateHuman", schema.ClassHuman, columns)
+// UpdateHuman 写人类专属的列，不动 resource_version；conds 是可选的前置条件。
+func (s *Store) UpdateHuman(ctx context.Context, model any, columns []string, conds ...Cond) error {
+	return s.updateClass(ctx, model, "UpdateHuman", schema.ClassHuman, columns, conds)
 }
 
-func (s *Store) updateClass(ctx context.Context, model any, verb string, class schema.Class, columns []string) error {
+// UpdateMasterSelf 写主控自身类的列，不动 resource_version；conds 是可选的前置条件。
+func (s *Store) UpdateMasterSelf(ctx context.Context, model any, columns []string, conds ...Cond) error {
+	return s.updateClass(ctx, model, "UpdateMasterSelf", schema.ClassMasterSelf, columns, conds)
+}
+
+func (s *Store) updateClass(ctx context.Context, model any, verb string, class schema.Class, columns []string, conds []Cond) error {
 	tg, err := s.resolve(model)
 	if err != nil {
 		return err
@@ -235,35 +294,74 @@ func (s *Store) updateClass(ctx context.Context, model any, verb string, class s
 	if err := s.checkColumns(tg, verb, class, columns); err != nil {
 		return err
 	}
+	for _, c := range conds {
+		if _, ok := tg.table.Column(c.Column); !ok {
+			return v1.Newf(v1.CodeBadRequest, "表 %s 没有列 %s，不能作为前置条件", tg.table.Name, c.Column)
+		}
+	}
 	id, err := tg.id()
 	if err != nil {
 		return err
 	}
+	// 复制一份再追加：columns 是调用方的切片，直接 append 会改写它后面的元素。
+	columns = append([]string(nil), columns...)
+	restore := func() {}
 	if _, ok := tg.field("updated_at"); ok {
-		tg.setTime("updated_at", now())
+		restore = tg.setTime("updated_at", now())
 		columns = append(columns, "updated_at")
 	}
-	res, err := s.db.NewUpdate().Model(model).Column(columns...).Where("id = ?", id).Exec(ctx)
-	if err != nil {
-		return translate(err)
+	q := s.db.NewUpdate().Model(model).Column(columns...).Where("id = ?", id)
+	for _, c := range conds {
+		if c.isNull() {
+			q = q.Where("? IS NULL", bun.Ident(c.Column))
+		} else {
+			q = q.Where("? = ?", bun.Ident(c.Column), c.Value)
+		}
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	res, err := q.Exec(ctx)
+	if err != nil {
+		restore()
+		return s.translate(tg.table, err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	restore()
+	if len(conds) == 0 {
 		return notFound(tg, id)
 	}
-	return nil
+	condColumns := make([]string, len(conds))
+	for i, c := range conds {
+		condColumns[i] = c.Column
+	}
+	current := map[string]any{}
+	err = s.db.NewSelect().Table(tg.table.Name).Column(condColumns...).Where("id = ?", id).Scan(ctx, &current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return notFound(tg, id)
+	}
+	if err != nil {
+		return s.translate(tg.table, err)
+	}
+	e := v1.Newf(v1.CodeConflict, "%s 的前置条件不满足，没有改动", tg.label()).
+		WithNext("重新读取对象，按它现在的状态决定下一步")
+	for _, col := range condColumns {
+		e.WithState(col, current[col])
+	}
+	return e
 }
 
-// SoftDelete 写 deleted_at 并抬版本。
-func (s *Store) SoftDelete(ctx context.Context, model any) error {
-	return s.setDeleted(ctx, model, true)
+// SoftDelete 写 deleted_at 并抬版本：以 model 里的 resource_version 为期望值做校验（force 跳过比对）；
+// 已删除的对象再删报 bad_request。
+func (s *Store) SoftDelete(ctx context.Context, model any, force bool) error {
+	return s.setDeleted(ctx, model, force, true)
 }
 
-// Restore 清空 deleted_at 并抬版本；id 不变。
-func (s *Store) Restore(ctx context.Context, model any) error {
-	return s.setDeleted(ctx, model, false)
+// Restore 清空 deleted_at 并抬版本，id 不变：同样带版本校验；未删除的对象报 bad_request。
+func (s *Store) Restore(ctx context.Context, model any, force bool) error {
+	return s.setDeleted(ctx, model, force, false)
 }
 
-func (s *Store) setDeleted(ctx context.Context, model any, deleted bool) error {
+func (s *Store) setDeleted(ctx context.Context, model any, force, deleted bool) error {
 	tg, err := s.resolve(model)
 	if err != nil {
 		return err
@@ -279,12 +377,47 @@ func (s *Store) setDeleted(ctx context.Context, model any, deleted bool) error {
 	if err != nil {
 		return err
 	}
+	expected := tg.version()
+	previous := deletedAt.Interface()
 	if deleted {
 		tg.setTime("deleted_at", now())
 	} else {
 		deletedAt.Set(reflect.Zero(deletedAt.Type()))
 	}
-	expected, _ := tg.field("resource_version")
 	q := s.db.NewUpdate().Model(model).Column("deleted_at").Where("id = ?", id)
-	return s.bumpVersion(ctx, tg, q, id, expected.Int(), true)
+	if deleted {
+		q = q.Where("deleted_at IS NULL")
+	} else {
+		q = q.Where("deleted_at IS NOT NULL")
+	}
+	if !force {
+		q = q.Where("resource_version = ?", expected)
+	}
+	ok, err = s.execBump(ctx, tg, q)
+	if err == nil && ok {
+		return nil
+	}
+	deletedAt.Set(reflect.ValueOf(previous))
+	if err != nil {
+		return err
+	}
+	var row struct {
+		ResourceVersion int64      `bun:"resource_version"`
+		DeletedAt       *time.Time `bun:"deleted_at"`
+	}
+	err = s.db.NewSelect().Table(tg.table.Name).Column("resource_version", "deleted_at").Where("id = ?", id).Scan(ctx, &row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return notFound(tg, id)
+	}
+	if err != nil {
+		return s.translate(tg.table, err)
+	}
+	if deleted && row.DeletedAt != nil {
+		return v1.Newf(v1.CodeBadRequest, "%s 已经是软删除状态，不能重复删除", tg.label()).
+			WithState("deletedAt", *row.DeletedAt)
+	}
+	if !deleted && row.DeletedAt == nil {
+		return v1.Newf(v1.CodeBadRequest, "%s 没有被删除，不需要恢复", tg.label())
+	}
+	return versionConflict(tg, expected, row.ResourceVersion)
 }

@@ -28,6 +28,7 @@ func allTypesRegistry() *Registry {
 			col("state", TypeText).def("'new'").enum("new", "done"),
 			col("raw", TypeBlob).null(),
 			col("parent_id", TypeInt).null(),
+			col("label", TypeText).check("label <> ''"),
 		},
 		Indexes: []Index{
 			{Name: "things_state_active", Columns: []string{"state"}, Where: "state <> 'done'"},
@@ -57,6 +58,7 @@ func TestDDLSQLite(t *testing.T) {
 		"seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
 		"payload TEXT NOT NULL DEFAULT '{}'",
 		"state TEXT NOT NULL DEFAULT 'new' CHECK (state IN ('new', 'done'))",
+		"label TEXT NOT NULL CHECK (label <> '')",
 		"raw BLOB,",
 		"PRIMARY KEY (thing_id, parent_id)",
 		"CREATE UNIQUE INDEX parents_name_key ON parents (name);",
@@ -85,6 +87,7 @@ func TestDDLPostgres(t *testing.T) {
 		"seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
 		"payload JSONB NOT NULL DEFAULT '{}'",
 		"state TEXT NOT NULL DEFAULT 'new' CHECK (state IN ('new', 'done'))",
+		"label TEXT NOT NULL CHECK (label <> '')",
 		"raw BYTEA,",
 		"PRIMARY KEY (thing_id, parent_id)",
 		"CREATE UNIQUE INDEX parents_name_key ON parents (name);",

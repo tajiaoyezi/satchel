@@ -6,12 +6,8 @@ import (
 	"os"
 
 	"github.com/satchel/satchel/internal/projection/cli"
-	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
 func main() {
-	if err := cli.NewRootCommand().Execute(); err != nil {
-		// cobra 已把错误打到 stderr，这里只按第 05 章的退出码表定退出码。
-		os.Exit(v1.ExitCodeOf(err))
-	}
+	os.Exit(cli.Execute(os.Args[1:], os.Stdout, os.Stderr))
 }

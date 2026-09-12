@@ -1,8 +1,13 @@
 package schema
 
 import (
+	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -37,6 +42,64 @@ func TestGenerateModels(t *testing.T) {
 	}
 }
 
+// typeCheckKinds 把生成的 kinds 文件与 pkg/api/v1 里手写的非测试文件一起做类型检查，
+// 抓住「生成了没人用的 import」这类只有编译才能发现的问题。
+func typeCheckKinds(t *testing.T, generated []byte) {
+	t.Helper()
+	dir := filepath.Join("..", "..", "..", "pkg", "api", "v1")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || strings.HasPrefix(name, "zz_generated") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
+	f, err := parser.ParseFile(fset, "zz_generated_kinds.go", generated, 0)
+	if err != nil {
+		t.Fatalf("生成物不是合法的 Go：%v\n%s", err, generated)
+	}
+	files = append(files, f)
+	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
+	if _, err := conf.Check("v1", fset, files, nil); err != nil {
+		t.Fatalf("生成物类型检查失败：%v\n%s", err, generated)
+	}
+}
+
+// 唯一的时间列是 created_at（meta 列）时，Spec / Status 里没有 time.Time，不能生成 import "time"。
+func TestGenerateKindsImportsOnlyWhatStructsUse(t *testing.T) {
+	r := New()
+	r.Add(Table{
+		Name: "notes", Kind: "Note", KindClass: KindConfig,
+		Columns: []Column{col("id", TypeSerial), col("title", TypeText), col("created_at", TypeTime)},
+	})
+	src, err := GenerateKinds(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), `"time"`) {
+		t.Fatalf("不该 import time：\n%s", src)
+	}
+	typeCheckKinds(t, src)
+}
+
+func TestGenerateKindsForDefaultRegistryTypeChecks(t *testing.T) {
+	src, err := GenerateKinds(Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	typeCheckKinds(t, src)
+}
+
 func TestGenerateKinds(t *testing.T) {
 	r := New()
 	r.Add(Table{
@@ -47,6 +110,7 @@ func TestGenerateKinds(t *testing.T) {
 			col("size", TypeInt).null(),
 			col("seen", TypeTime).null().cls(ClassStatus),
 			col("approved_by", TypeText).null().cls(ClassHuman),
+			col("token", TypeText).cls(ClassMasterSelf).masked(),
 			col("created_at", TypeTime),
 		},
 	})
@@ -64,7 +128,8 @@ func TestGenerateKinds(t *testing.T) {
 		"ApprovedBy *string `json:\"approved_by\"`",
 		`Class: ClassConfig`,
 		`SpecFields: []string{"name", "size"}`,
-		`StatusFields: []string{"seen", "approved_by"}`,
+		`StatusFields: []string{"seen", "approved_by", "token"}`,
+		`MaskedFields: []string{"token"}`,
 		`"seen": "status"`,
 		`"approved_by": "human"`,
 		`"resource_version": "meta"`,

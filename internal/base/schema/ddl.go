@@ -120,12 +120,8 @@ func columnDDL(c Column, d Dialect, serialPK bool) string {
 	if c.Default != "" {
 		s += " DEFAULT " + c.Default
 	}
-	if len(c.Enum) > 0 {
-		quoted := make([]string, len(c.Enum))
-		for i, v := range c.Enum {
-			quoted[i] = "'" + strings.ReplaceAll(v, "'", "''") + "'"
-		}
-		s += " CHECK (" + c.Name + " IN (" + strings.Join(quoted, ", ") + "))"
+	for _, check := range c.Checks() {
+		s += " CHECK (" + check + ")"
 	}
 	return s
 }

@@ -185,6 +185,7 @@ var generatedKinds = []KindInfo{
 		Class:        ClassAction,
 		SpecFields:   []string{"category", "level", "object_kind", "object_id", "dedup_key"},
 		StatusFields: []string{"conditions", "evidence_id", "status", "resolve_reason", "occurrence_count", "first_seen_at", "last_seen_at"},
+		MaskedFields: []string{},
 		notApplyable: map[string]string{"id": "meta", "conditions": "status", "evidence_id": "status", "status": "status", "resolve_reason": "status", "occurrence_count": "status", "first_seen_at": "status", "last_seen_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
@@ -192,6 +193,7 @@ var generatedKinds = []KindInfo{
 		Class:        ClassSystem,
 		SpecFields:   []string{"at", "actor", "actor_kind", "token_id", "command", "args_digest", "full_command", "output", "plan_id", "result"},
 		StatusFields: []string{},
+		MaskedFields: []string{},
 		notApplyable: map[string]string{"id": "meta"},
 	},
 	{
@@ -199,6 +201,7 @@ var generatedKinds = []KindInfo{
 		Class:        ClassConfig,
 		SpecFields:   []string{"name", "trigger", "condition", "action", "max_targets", "deadline_minutes", "enabled"},
 		StatusFields: []string{"proposed_by", "status", "approved_by", "approved_at"},
+		MaskedFields: []string{},
 		notApplyable: map[string]string{"id": "meta", "proposed_by": "action", "status": "human", "approved_by": "human", "approved_at": "human", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
@@ -206,6 +209,7 @@ var generatedKinds = []KindInfo{
 		Class:        ClassSystem,
 		SpecFields:   []string{"object_kind", "object_id", "object_version", "content", "content_hash", "source", "status", "apply_id"},
 		StatusFields: []string{},
+		MaskedFields: []string{},
 		notApplyable: map[string]string{"id": "meta", "created_at": "meta"},
 	},
 	{
@@ -213,6 +217,7 @@ var generatedKinds = []KindInfo{
 		Class:        ClassSystem,
 		SpecFields:   []string{"category", "server_id"},
 		StatusFields: []string{"collected_at", "items", "collect_error", "size_bytes", "expires_at"},
+		MaskedFields: []string{},
 		notApplyable: map[string]string{"id": "meta", "collected_at": "status", "items": "status", "collect_error": "status", "size_bytes": "status", "expires_at": "status", "created_at": "meta", "updated_at": "meta"},
 	},
 	{
@@ -220,6 +225,7 @@ var generatedKinds = []KindInfo{
 		Class:        ClassAction,
 		SpecFields:   []string{"job_id", "kind", "server_id", "args"},
 		StatusFields: []string{"status", "started_at", "finished_at", "exit_code", "output", "output_truncated"},
+		MaskedFields: []string{},
 		notApplyable: map[string]string{"id": "meta", "status": "status", "started_at": "status", "finished_at": "status", "exit_code": "status", "output": "status", "output_truncated": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
@@ -227,6 +233,7 @@ var generatedKinds = []KindInfo{
 		Class:        ClassConfig,
 		SpecFields:   []string{"name", "type", "events", "enabled"},
 		StatusFields: []string{"target", "secret", "last_delivered_at", "last_error"},
+		MaskedFields: []string{"secret"},
 		notApplyable: map[string]string{"id": "meta", "target": "master_self", "secret": "master_self", "last_delivered_at": "status", "last_error": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
@@ -234,6 +241,7 @@ var generatedKinds = []KindInfo{
 		Class:        ClassSystem,
 		SpecFields:   []string{"delivery_id", "channel_id", "type", "payload"},
 		StatusFields: []string{"attempts", "status", "last_error", "last_attempt_at"},
+		MaskedFields: []string{},
 		notApplyable: map[string]string{"id": "meta", "attempts": "status", "status": "status", "last_error": "status", "last_attempt_at": "status", "created_at": "meta", "updated_at": "meta"},
 	},
 	{
@@ -241,6 +249,7 @@ var generatedKinds = []KindInfo{
 		Class:        ClassAction,
 		SpecFields:   []string{"objects", "diff", "affected_count", "share_identity", "share_scope", "expires_at"},
 		StatusFields: []string{"status", "apply_id"},
+		MaskedFields: []string{},
 		notApplyable: map[string]string{"id": "meta", "status": "status", "apply_id": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
@@ -248,6 +257,7 @@ var generatedKinds = []KindInfo{
 		Class:        ClassAction,
 		SpecFields:   []string{"title", "body", "source", "dedup_key", "alert_id", "evidence_id"},
 		StatusFields: []string{"status", "claimed_by", "lease_until", "cancel_reason", "expires_at"},
+		MaskedFields: []string{},
 		notApplyable: map[string]string{"id": "meta", "status": "action", "claimed_by": "action", "lease_until": "action", "cancel_reason": "status", "expires_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 }

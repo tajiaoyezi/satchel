@@ -75,10 +75,38 @@ func TestDecodeRejectsExtraTopLevelKey(t *testing.T) {
 	}
 }
 
-func TestDecodeRequiresAPIVersionAndKind(t *testing.T) {
-	for _, in := range []string{`{"kind":"Task"}`, `{"apiVersion":"satchel/v1"}`, `[1]`} {
-		if _, err := Decode[json.RawMessage, json.RawMessage]([]byte(in)); err == nil {
-			t.Errorf("%s 应当被拒绝", in)
+func TestDecodeRequiresEnvelopeKeys(t *testing.T) {
+	cases := map[string]string{
+		`{"kind":"Task","metadata":{"name":"t"},"spec":{}}`:                                                "apiVersion",
+		`{"apiVersion":"satchel/v1","metadata":{"name":"t"},"spec":{}}`:                                    "kind",
+		`{"apiVersion":"satchel/v1","kind":"Task","spec":{}}`:                                              "metadata",
+		`{"apiVersion":"satchel/v1","kind":"Task","metadata":{"name":"t"}}`:                                "spec",
+		`{"apiVersion":"satchel/v1","kind":"Task","metadata":{"name":"t","resource_version":3},"spec":{}}`: "resource_version",
+	}
+	for in, want := range cases {
+		_, err := Decode[json.RawMessage, json.RawMessage]([]byte(in))
+		var e *Error
+		if !errors.As(err, &e) || e.Code != CodeBadRequest || !strings.Contains(e.Reason, want) {
+			t.Errorf("%s 应当是 bad_request 并点名 %s，得到 %v", in, want, err)
 		}
+	}
+	for _, in := range []string{`[1]`, `null`, `"x"`, ``,
+		`{"apiVersion":"satchel/v1","kind":"Task","metadata":null,"spec":{}}`,
+		`{"apiVersion":"satchel/v1","kind":"Task","metadata":{"name":"t"},"spec":null}`,
+		`{"apiVersion":"satchel/v1","kind":"Task","metadata":{"name":"t"},"spec":{},"status":[]}`,
+	} {
+		if _, err := Decode[json.RawMessage, json.RawMessage]([]byte(in)); err == nil {
+			t.Errorf("%q 应当被拒绝", in)
+		}
+	}
+}
+
+func TestDecodeAllowsMissingStatus(t *testing.T) {
+	obj, err := Decode[TaskSpec, TaskStatus]([]byte(`{"apiVersion":"satchel/v1","kind":"Task","metadata":{"name":"t","resourceVersion":1},"spec":{"title":"x"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj.Spec.Title != "x" || obj.Metadata.ResourceVersion != 1 || obj.Status != (TaskStatus{}) {
+		t.Fatalf("解码结果不对：%+v", obj)
 	}
 }

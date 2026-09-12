@@ -13,6 +13,8 @@ type KindInfo struct {
 	SpecFields []string
 	// StatusFields 是 status 里的字段名：status、动作专属、人类专属、主控自身类、只读五档都在这里。
 	StatusFields []string
+	// MaskedFields 是输出时要按第 05 章打码的字段名（密钥、令牌之类）。
+	MaskedFields []string
 	// notApplyable 是 apply 拒收清单：字段名 → 它所属的分档。spec 之外的每个字段都在这里，元数据也算。
 	notApplyable map[string]string
 }
@@ -85,9 +87,9 @@ func DecodeSpec(kind Kind, data []byte, into any) error {
 	if !ok {
 		return Newf(CodeBadRequest, "没有 kind %s", kind)
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return Wrap(CodeBadRequest, "spec 不是合法的 JSON 对象", err)
+	fields, err := decodeObject(data, "spec")
+	if err != nil {
+		return err
 	}
 	specSet := make(map[string]bool, len(info.SpecFields))
 	for _, f := range info.SpecFields {

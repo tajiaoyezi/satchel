@@ -23,6 +23,9 @@ func TestExitCodeOf(t *testing.T) {
 		{New(CodeConfirmRequired, "x"), ExitConfirmRequired},
 		{New(CodePartialFailure, "x"), ExitPartialFailure},
 		{New(CodeHumanRequired, "x"), ExitHumanRequired},
+		{New(CodeConflict, "x"), ExitFailure},
+		{New(CodeSchemaMismatch, "x"), ExitFailure},
+		{New(CodeConfig, "x"), ExitFailure},
 		{errors.Join(errors.New("outer"), New(CodeNotFound, "x")), ExitNotFound},
 	}
 	for _, tc := range cases {
@@ -59,7 +62,7 @@ func TestErrorJSONHasFourFields(t *testing.T) {
 		t.Errorf("JSON 应当恰好四个字段：%s", data)
 	}
 	bare, _ := json.Marshal(New(CodeNotFound, "没有这个对象"))
-	if !strings.Contains(string(bare), `"state":null`) || !strings.Contains(string(bare), `"next":""`) {
-		t.Errorf("state 与 next 为空时也要出现：%s", bare)
+	if !strings.Contains(string(bare), `"state":{}`) || !strings.Contains(string(bare), `"next":""`) {
+		t.Errorf("state 为空时应当是 {} 而不是 null，next 为空时也要出现：%s", bare)
 	}
 }

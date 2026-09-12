@@ -6,11 +6,18 @@ package schema
 // 列定义的简写：分档不写默认 spec，公共列按名字自动归 meta。
 func col(name string, t Type) Column { return Column{Name: name, Type: t} }
 
-func (c Column) null() Column            { c.Nullable = true; return c }
-func (c Column) def(d string) Column     { c.Default = d; return c }
-func (c Column) cls(k Class) Column      { c.Class = k; return c }
-func (c Column) enum(v ...string) Column { c.Enum = v; return c }
-func (c Column) masked() Column          { c.Masked = true; return c }
+func (c Column) null() Column             { c.Nullable = true; return c }
+func (c Column) def(d string) Column      { c.Default = d; return c }
+func (c Column) cls(k Class) Column       { c.Class = k; return c }
+func (c Column) enum(v ...string) Column  { c.Enum = v; return c }
+func (c Column) check(expr string) Column { c.Check = expr; return c }
+func (c Column) masked() Column           { c.Masked = true; return c }
+
+// naturalKey 是 kind 自然键（用户起的名字）的唯一索引：撞上它报 name_taken。
+// job_id、delivery_id 这类系统生成的幂等 id 不是名字，撞上报 conflict。
+func naturalKey(name string, columns ...string) Index {
+	return Index{Name: name, Columns: columns, Unique: true, NaturalKey: true}
+}
 
 // withMeta 在前面加 id、后面加 created_at 与 updated_at。
 func withMeta(cols ...Column) []Column {
@@ -62,7 +69,7 @@ func agentNativeTables() []Table {
 				col("level", TypeText),
 				col("object_kind", TypeText),
 				col("object_id", TypeText),
-				col("dedup_key", TypeText),
+				col("dedup_key", TypeText).check("dedup_key <> ''"),
 				col("conditions", TypeJSON).def("'[]'").cls(ClassStatus),
 				col("evidence_id", TypeInt).null().cls(ClassStatus),
 				col("status", TypeText).def("'open'").enum("open", "claimed", "recovered", "resolved").cls(ClassStatus),
@@ -103,7 +110,7 @@ func agentNativeTables() []Table {
 				col("approved_by", TypeText).null().cls(ClassHuman),
 				col("approved_at", TypeTime).null().cls(ClassHuman),
 			),
-			Indexes: []Index{{Name: "automation_rules_name_key", Columns: []string{"name"}, Unique: true}},
+			Indexes: []Index{naturalKey("automation_rules_name_key", "name")},
 		},
 		{
 			Name: "audit_logs", Kind: "AuditLog", KindClass: KindSystem, AppendOnly: true,
@@ -142,13 +149,13 @@ func agentNativeTables() []Table {
 				col("name", TypeText),
 				col("type", TypeText).enum("telegram", "webhook"),
 				col("events", TypeJSON).def("'[]'"),
-				col("enabled", TypeBool).def("TRUE"),
+				col("enabled", TypeBool).def("FALSE"),
 				col("target", TypeText).def("''").cls(ClassMasterSelf),
 				col("secret", TypeText).def("''").cls(ClassMasterSelf).masked(),
 				col("last_delivered_at", TypeTime).null().cls(ClassStatus),
 				col("last_error", TypeText).null().cls(ClassStatus),
 			),
-			Indexes: []Index{{Name: "notify_channels_name_key", Columns: []string{"name"}, Unique: true}},
+			Indexes: []Index{naturalKey("notify_channels_name_key", "name")},
 		},
 		{
 			Name: "notify_deliveries", Kind: "NotifyDelivery", KindClass: KindSystem,

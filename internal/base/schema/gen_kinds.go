@@ -48,6 +48,17 @@ func statusColumns(t *Table) []Column {
 	return out
 }
 
+// maskedColumns 返回标了打码的列（不含 meta）。
+func maskedColumns(t *Table) []Column {
+	var out []Column
+	for _, c := range t.Columns {
+		if c.Masked && c.Class != ClassMeta {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func writeStruct(b *bytes.Buffer, name string, cols []Column) {
 	if len(cols) == 0 {
 		fmt.Fprintf(b, "type %s struct{}\n\n", name)
@@ -74,13 +85,15 @@ func writeStringSlice(b *bytes.Buffer, cols []Column) {
 // GenerateKinds 生成 pkg/api/v1/zz_generated_kinds.go：每个 kind 的 Spec / Status 结构体与 kind 清单。
 func GenerateKinds(r *Registry) ([]byte, error) {
 	kinds := kindTables(r)
-	var all []Column
+	// import 只按会出现在 Spec / Status 结构体里的列算，meta 列不在其中。
+	var emitted []Column
 	for _, t := range kinds {
-		all = append(all, t.Columns...)
+		emitted = append(emitted, specColumns(t)...)
+		emitted = append(emitted, statusColumns(t)...)
 	}
 	var b bytes.Buffer
 	b.WriteString(generatedHeader + "\npackage v1\n\n")
-	writeImports(&b, all)
+	writeImports(&b, emitted)
 	for _, t := range kinds {
 		fmt.Fprintf(&b, "// %sSpec 是 kind %s（%s）的 spec 字段。\n", t.Kind, t.Kind, t.KindClass)
 		writeStruct(&b, t.Kind+"Spec", specColumns(t))
@@ -95,6 +108,8 @@ func GenerateKinds(r *Registry) ([]byte, error) {
 		writeStringSlice(&b, specColumns(t))
 		b.WriteString(",\n\t\tStatusFields: ")
 		writeStringSlice(&b, statusColumns(t))
+		b.WriteString(",\n\t\tMaskedFields: ")
+		writeStringSlice(&b, maskedColumns(t))
 		b.WriteString(",\n\t\tnotApplyable: map[string]string{")
 		first := true
 		for _, c := range t.Columns {

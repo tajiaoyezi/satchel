@@ -9,17 +9,15 @@ import (
 	"github.com/satchel/satchel/internal/base/schema"
 )
 
-// Diff 把库里的实际结构与注册表逐项比对（表、列、类型、可空、默认值、主键、唯一、索引与部分索引条件、外键），
-// 返回差异说明；空表示一致。
+// Diff 把注册表里的每张表与库里的实际结构逐项比对（列、类型、可空、默认值、CHECK、主键、唯一、
+// 索引与部分索引条件、外键），返回差异说明；空表示一致。库里多出来的表不在这里，见 ExtraTables。
 func Diff(reg *schema.Registry, d schema.Dialect, actual []TableInfo) []string {
 	var out []string
 	byName := map[string]TableInfo{}
 	for _, t := range actual {
 		byName[t.Name] = t
 	}
-	expected := map[string]bool{}
 	for _, t := range reg.Tables() {
-		expected[t.Name] = true
 		a, ok := byName[t.Name]
 		if !ok {
 			out = append(out, fmt.Sprintf("表 %s：注册表里有，库里没有", t.Name))
@@ -27,16 +25,18 @@ func Diff(reg *schema.Registry, d schema.Dialect, actual []TableInfo) []string {
 		}
 		out = append(out, diffTable(t, d, a)...)
 	}
-	names := make([]string, 0, len(byName))
-	for name := range byName {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if !expected[name] {
-			out = append(out, fmt.Sprintf("表 %s：库里有，注册表里没有", name))
+	return out
+}
+
+// ExtraTables 返回库里有、注册表里没有的表名，按名字排序。
+func ExtraTables(reg *schema.Registry, actual []TableInfo) []string {
+	var out []string
+	for _, t := range actual {
+		if _, ok := reg.Table(t.Name); !ok {
+			out = append(out, t.Name)
 		}
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -120,6 +120,30 @@ func diffTable(t *schema.Table, d schema.Dialect, a TableInfo) []string {
 	for k := range got {
 		if !want[k] {
 			report("外键 %s：库里有，注册表里没有", k)
+		}
+	}
+	// CHECK 约束：注册表侧按列展开（Enum 与 Check），库侧是表级清单；归一后按集合比对。
+	type expectedCheck struct{ column, expr string }
+	wantChecks := map[string][]expectedCheck{}
+	for _, c := range t.Columns {
+		for _, expr := range c.Checks() {
+			key := normalizePredicate(expr)
+			wantChecks[key] = append(wantChecks[key], expectedCheck{c.Name, expr})
+		}
+	}
+	gotChecks := map[string][]string{}
+	for _, expr := range a.Checks {
+		key := normalizePredicate(expr)
+		gotChecks[key] = append(gotChecks[key], expr)
+	}
+	for key, list := range wantChecks {
+		if len(gotChecks[key]) < len(list) {
+			report("列 %s 的 CHECK (%s)：注册表里有，库里没有", list[0].column, list[0].expr)
+		}
+	}
+	for key, list := range gotChecks {
+		if len(wantChecks[key]) < len(list) {
+			report("CHECK (%s)：库里有，注册表里没有", list[0])
 		}
 	}
 	sort.Strings(out)
