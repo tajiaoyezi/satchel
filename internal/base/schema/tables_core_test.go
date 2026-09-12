@@ -49,10 +49,10 @@ func TestCoreKindsAndClasses(t *testing.T) {
 			t.Errorf("kind %s 的类别应当是 %s，得到 %s", tbl.Kind, class, tbl.KindClass)
 		}
 	}
-	if kinds != 21 {
-		t.Fatalf("kind 应当恰好 21 个，得到 %d", kinds)
+	if kinds != 32 {
+		t.Fatalf("kind 应当恰好 32 个，得到 %d", kinds)
 	}
-	for _, name := range []string{"xray_servers", "server_xray_config_snapshots", "remote_servers", "user_package_assignments", "user_api_tokens"} {
+	for _, name := range []string{"xray_servers", "server_xray_config_snapshots", "remote_servers", "user_package_assignments", "user_api_tokens", "license", "licenses", "migrate_mmw"} {
 		if _, ok := Default().Table(name); ok {
 			t.Errorf("表 %s 不该存在", name)
 		}
@@ -286,13 +286,9 @@ func TestRestoredForeignKeys(t *testing.T) {
 		"tasks":             "claimed_by→api_tokens SET NULL",
 	}
 	for table, spec := range want {
-		found := false
-		for _, fk := range mustTable(t, table).ForeignKeys {
-			if strings.Join(fk.Columns, ",")+"→"+fk.RefTable+" "+fk.OnDelete == spec {
-				found = true
-			}
-		}
-		if !found {
+		parts := strings.SplitN(spec, "→", 2)
+		ref := strings.SplitN(parts[1], " ", 2)
+		if !hasForeignKey(mustTable(t, table), parts[0], ref[0], ref[1]) {
 			t.Errorf("表 %s 应当有外键 %s", table, spec)
 		}
 	}
@@ -319,7 +315,7 @@ func TestUsernameIsImmutableAndSideTableUniques(t *testing.T) {
 	for _, tbl := range Default().Tables() {
 		for _, c := range tbl.Columns {
 			if c.Immutable && tbl.Kind != "User" {
-				t.Errorf("本 change 只有 username 不可改，%s.%s 不该标 Immutable", tbl.Name, c.Name)
+				t.Errorf("只有 username 不可改，%s.%s 不该标 Immutable", tbl.Name, c.Name)
 			}
 		}
 	}

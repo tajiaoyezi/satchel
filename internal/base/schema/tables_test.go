@@ -7,7 +7,7 @@ import (
 )
 
 // 表名清单，按外键拓扑顺序；加表要同时改这里。
-const goldenTables = "audit_logs,automation_rules,batch_op_counters,config_snapshots,notify_channels,notify_deliveries,package_node_traffic_suspensions,package_user_node_traffic_baselines,packages,plans,servers,batch_inbounds,batch_outbounds,evidence_packages,alerts,alert_deliveries,inbounds,jobs,outbounds,return_routes,routing_rules,user_routed_outbound_actions,users,api_tokens,nodes,node_reachability,package_assignments,package_assignment_inbound_configs,package_assignment_subaccounts,sessions,tasks,user_inbound_configs,user_outbounds,user_settings,user_subaccounts,user_tokens,websites"
+const goldenTables = "audit_logs,automation_rules,batch_op_counters,config_snapshots,custom_rules,dns_providers,invite_code_uses,invite_codes,ip_bans,node_traffic_snapshots,notify_channels,notify_deliveries,package_node_traffic_suspensions,package_user_node_traffic_baselines,packages,plans,rule_template_owners,rule_versions,security_events,server_system_traffic_snapshots,servers,batch_inbounds,batch_outbounds,certificates,evidence_packages,alerts,alert_deliveries,federated_servers,inbounds,jobs,node_traffic,outbounds,return_routes,routing_rules,shared_servers,shared_server_inbounds,speed_test_results,speed_testers,subscribe_files,custom_rule_applications,subscription_links,system_config,system_settings,task_runs,templates,tg_audit,traffic_daily_incomplete_dates,traffic_daily_meta,traffic_daily_nodes,traffic_daily_system_servers,traffic_daily_user_emails,traffic_daily_user_nodes,traffic_daily_users,traffic_daily_users_archived,traffic_records,traffic_snapshots,traffic_threshold_notified,user_email_traffic,user_email_traffic_snapshots,user_routed_outbound_actions,user_traffic,user_traffic_cycle_carry,user_traffic_records,user_traffic_snapshots,users,api_tokens,external_subscriptions,nodes,announcements,node_reachability,override_scripts,package_assignments,package_assignment_inbound_configs,package_assignment_subaccounts,proxy_provider_configs,renewal_requests,routing_rule_presets,sessions,tasks,traffic_daily_external_subscriptions,user_inbound_configs,user_outbounds,user_settings,user_subaccounts,user_subscriptions,user_tokens,websites"
 
 func TestDefaultTables(t *testing.T) {
 	r := Default()
@@ -41,7 +41,10 @@ func TestKindTablesCarryVersionColumnsByClass(t *testing.T) {
 }
 
 func TestAppendOnlyTables(t *testing.T) {
-	want := map[string]bool{"audit_logs": true, "config_snapshots": true, "batch_op_counters": true, "user_routed_outbound_actions": true}
+	want := map[string]bool{
+		"audit_logs": true, "config_snapshots": true, "batch_op_counters": true, "user_routed_outbound_actions": true,
+		"rule_versions": true, "security_events": true, "speed_test_results": true, "tg_audit": true, "invite_code_uses": true,
+	}
 	for _, tbl := range Default().Tables() {
 		if tbl.AppendOnly != want[tbl.Name] {
 			t.Errorf("表 %s 的 append-only = %v，想要 %v", tbl.Name, tbl.AppendOnly, want[tbl.Name])
@@ -60,19 +63,22 @@ func TestEveryKindHasClass(t *testing.T) {
 func TestNaturalKeysAndChecks(t *testing.T) {
 	r := Default()
 	// 只有用户起的名字是自然键；job_id、delivery_id 是系统生成的幂等 id，撞上要报 conflict 而不是 name_taken。
-	wantNatural := map[string]string{
-		"automation_rules": "automation_rules_name_key",
-		"notify_channels":  "notify_channels_name_key",
-		"users":            "users_username_key",
-		"packages":         "packages_name_key",
-		"servers":          "servers_name_key",
+	wantNatural := map[string]bool{
+		"automation_rules_name_key": true, "notify_channels_name_key": true, "users_username_key": true,
+		"packages_name_key": true, "servers_name_key": true, "subscribe_files_name_key": true,
+		"subscription_links_name_key": true, "templates_name_key": true, "custom_rules_name_type_key": true,
+		"dns_providers_name_key": true, "certificates_domain_server_key": true, "certificates_domain_local_key": true,
 	}
 	for _, tbl := range r.Tables() {
 		for _, ix := range tbl.Indexes {
-			if ix.NaturalKey != (wantNatural[tbl.Name] == ix.Name) {
+			if ix.NaturalKey != wantNatural[ix.Name] {
 				t.Errorf("索引 %s 的 NaturalKey = %v，与清单不符", ix.Name, ix.NaturalKey)
 			}
+			delete(wantNatural, ix.Name)
 		}
+	}
+	if len(wantNatural) != 0 {
+		t.Errorf("清单里的自然键索引不存在：%v", wantNatural)
 	}
 	alerts, _ := r.Table("alerts")
 	if c, _ := alerts.Column("dedup_key"); c.Check != "dedup_key <> ''" {

@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -181,8 +182,9 @@ func TestImmutableFields(t *testing.T) {
 // 凭据类的列不在任何 kind 的 spec 里。
 func TestCredentialsNeverInSpec(t *testing.T) {
 	credentials := map[Kind][]string{
-		"Server": {"token", "agent_token", "pull_token"},
-		"User":   {"password_hash", "totp_secret", "recovery_codes"},
+		"Server":         {"token", "agent_token", "pull_token"},
+		"User":           {"password_hash", "totp_secret", "recovery_codes"},
+		"SystemSettings": {"telegram_bot_token"},
 	}
 	for kind, cols := range credentials {
 		info, ok := Lookup(kind)
@@ -198,8 +200,51 @@ func TestCredentialsNeverInSpec(t *testing.T) {
 			}
 		}
 	}
-	if kinds := Kinds(); len(kinds) != 21 {
-		t.Fatalf("kind 应当恰好 21 个，得到 %d", len(kinds))
+	if kinds := Kinds(); len(kinds) != 32 {
+		t.Fatalf("kind 应当恰好 32 个，得到 %d", len(kinds))
+	}
+}
+
+// 主控设置类 kind：日常运维档是 spec，七组与主控自身类的设置项在 status 字段集合里并按分档拒收。
+func TestSystemSettingsTiers(t *testing.T) {
+	info, ok := Lookup("SystemSettings")
+	if !ok || info.Class != ClassMasterSettings {
+		t.Fatalf("SystemSettings 应当是主控设置类，得到 %+v", info)
+	}
+	for _, f := range []string{"heartbeat_interval", "notify_login", "enable_short_link"} {
+		if !contains(info.SpecFields, f) {
+			t.Errorf("SystemSettings 的 spec 应当含 %s", f)
+		}
+	}
+	for _, f := range []string{"telegram_bot_token", "telegram_chat_id", "silent_mode", "silent_mode_timeout"} {
+		if contains(info.SpecFields, f) || !contains(info.StatusFields, f) {
+			t.Errorf("SystemSettings 的 %s 应当在 status 字段集合里而不在 spec 里", f)
+		}
+	}
+	if got, _ := info.RejectReason("silent_mode"); got != "human" {
+		t.Errorf("静默模式是第 05 章七组「门」里的设置，应当按人类专属拒收，得到 %q", got)
+	}
+	if strings.Join(info.MaskedFields, ",") != "telegram_bot_token" {
+		t.Errorf("SystemSettings 的打码清单应当只有 telegram_bot_token，得到 %v", info.MaskedFields)
+	}
+	if got, _ := info.RejectReason("telegram_bot_token"); got != "human" {
+		t.Errorf("telegram_bot_token 应当按人类专属拒收，得到 %q", got)
+	}
+	if got, _ := info.RejectReason("telegram_chat_id"); got != "master_self" {
+		t.Errorf("telegram_chat_id 应当按主控自身类拒收，得到 %q", got)
+	}
+	var spec SystemSettingsSpec
+	if e := codeOf(t, DecodeSpec("SystemSettings", []byte(`{"telegram_bot_token":"x"}`), &spec)); e.Code != CodeFieldNotApplyable {
+		t.Fatalf("设置写接口带七组字段应当报 field_not_applyable，得到 %v", e)
+	}
+	var status SystemSettingsStatus
+	status.TelegramBotToken = "123456:secret-bot-token"
+	out, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "secret-bot-token") || !strings.Contains(string(out), Redacted) {
+		t.Errorf("序列化的 SystemSettings status 应当把 bot token 打码，得到 %s", out)
 	}
 }
 

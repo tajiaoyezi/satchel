@@ -164,10 +164,14 @@ var (
 	// PostgreSQL 把 x IN (...) 改写成 x = ANY (ARRAY[...])，比对前改回来。
 	anyArrayRE = regexp.MustCompile(`=\s*ANY\s*\(\s*ARRAY\[([^\]]*)\]\s*\)`)
 	spaceParen = strings.NewReplacer(" ", "", "\t", "", "\n", "", "(", "", ")", "")
+	// PostgreSQL 把负数默认值存成带引号的字面量（'-1'::integer），去掉类型转换后再去引号。
+	quotedNumberRE = regexp.MustCompile(`^'(-?\d+(?:\.\d+)?)'$`)
 )
 
 func normalizeDefault(s string) string {
-	return strings.ToLower(strings.TrimSpace(castRE.ReplaceAllString(s, "")))
+	s = strings.TrimSpace(castRE.ReplaceAllString(s, ""))
+	s = quotedNumberRE.ReplaceAllString(s, "$1")
+	return strings.ToLower(s)
 }
 
 // normalizePredicate 把部分索引条件归一成可比对的形式：去类型转换、ANY(ARRAY) 改回 IN、小写、去空白与括号。

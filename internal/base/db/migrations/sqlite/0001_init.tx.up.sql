@@ -68,6 +68,130 @@ CREATE TABLE config_snapshots (
 
 --bun:split
 
+CREATE TABLE custom_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('dns', 'rules', 'rule-providers')),
+  mode TEXT NOT NULL CHECK (mode IN ('replace', 'prepend', 'append')),
+  content TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX custom_rules_name_type_key ON custom_rules (name, type);
+
+--bun:split
+
+CREATE INDEX custom_rules_type_idx ON custom_rules (type);
+
+--bun:split
+
+CREATE INDEX custom_rules_enabled_idx ON custom_rules (enabled);
+
+--bun:split
+
+CREATE TABLE dns_providers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  provider_type TEXT NOT NULL,
+  credentials TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX dns_providers_name_key ON dns_providers (name);
+
+--bun:split
+
+CREATE TABLE invite_code_uses (
+  code TEXT NOT NULL,
+  username TEXT NOT NULL,
+  tg_id INTEGER,
+  used_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (code, username)
+);
+
+--bun:split
+
+CREATE INDEX invite_code_uses_username_idx ON invite_code_uses (username);
+
+--bun:split
+
+CREATE TABLE invite_codes (
+  code TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('new', 'bind')),
+  bind_username TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL,
+  package_id INTEGER,
+  max_uses INTEGER NOT NULL DEFAULT 1,
+  used_count INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT,
+  revoked BOOLEAN NOT NULL DEFAULT FALSE,
+  remark TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  duration_months INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (code)
+);
+
+--bun:split
+
+CREATE INDEX invite_codes_created_by_idx ON invite_codes (created_by);
+
+--bun:split
+
+CREATE INDEX invite_codes_kind_idx ON invite_codes (kind);
+
+--bun:split
+
+CREATE TABLE ip_bans (
+  ip TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  banned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TEXT,
+  permanent BOOLEAN NOT NULL DEFAULT FALSE,
+  fail_count INTEGER NOT NULL DEFAULT 0,
+  released_at TEXT,
+  actor TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (ip)
+);
+
+--bun:split
+
+CREATE INDEX ip_bans_active_idx ON ip_bans (released_at, expires_at);
+
+--bun:split
+
+CREATE TABLE node_traffic_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  tag TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'inbound',
+  date TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX node_traffic_snapshots_server_tag_type_date_key ON node_traffic_snapshots (server_id, tag, type, date);
+
+--bun:split
+
+CREATE INDEX node_traffic_snapshots_date_idx ON node_traffic_snapshots (date);
+
+--bun:split
+
 CREATE TABLE notify_channels (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -186,6 +310,73 @@ CREATE TABLE plans (
 
 --bun:split
 
+CREATE TABLE rule_template_owners (
+  filename TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (filename)
+);
+
+--bun:split
+
+CREATE TABLE rule_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  filename TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX rule_versions_filename_version_key ON rule_versions (filename, version);
+
+--bun:split
+
+CREATE TABLE security_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ip TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  path TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '',
+  actor TEXT NOT NULL DEFAULT ''
+);
+
+--bun:split
+
+CREATE INDEX security_events_at_idx ON security_events (at);
+
+--bun:split
+
+CREATE INDEX security_events_ip_idx ON security_events (ip);
+
+--bun:split
+
+CREATE INDEX security_events_kind_at_idx ON security_events (kind, at);
+
+--bun:split
+
+CREATE TABLE server_system_traffic_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  rx_cycle INTEGER NOT NULL DEFAULT 0,
+  tx_cycle INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX server_system_traffic_snapshots_server_date_key ON server_system_traffic_snapshots (server_id, date);
+
+--bun:split
+
+CREATE INDEX server_system_traffic_snapshots_date_idx ON server_system_traffic_snapshots (date);
+
+--bun:split
+
 CREATE TABLE servers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -222,7 +413,7 @@ CREATE TABLE servers (
   telecom_paid_peer BOOLEAN NOT NULL DEFAULT FALSE,
   expires_at TEXT,
   ddns_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-  ddns_provider_id INTEGER NOT NULL DEFAULT 0,
+  ddns_provider_id INTEGER,
   ddns_record_name TEXT NOT NULL DEFAULT '',
   core_log_level TEXT NOT NULL DEFAULT 'warn',
   core_dns TEXT NOT NULL DEFAULT '{}',
@@ -278,7 +469,8 @@ CREATE TABLE servers (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resource_version INTEGER NOT NULL DEFAULT 1,
-  deleted_at TEXT
+  deleted_at TEXT,
+  FOREIGN KEY (ddns_provider_id) REFERENCES dns_providers (id) ON DELETE SET NULL
 );
 
 --bun:split
@@ -344,6 +536,62 @@ CREATE INDEX batch_outbounds_tag_idx ON batch_outbounds (tag);
 
 --bun:split
 
+CREATE TABLE certificates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  domain TEXT NOT NULL,
+  email TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'letsencrypt',
+  challenge_mode TEXT NOT NULL DEFAULT 'standalone' CHECK (challenge_mode IN ('standalone', 'webroot', 'dns', 'manual')),
+  webroot_path TEXT,
+  server_id INTEGER,
+  dns_provider_id INTEGER,
+  cert_pem TEXT,
+  key_pem TEXT,
+  auto_renew BOOLEAN NOT NULL DEFAULT FALSE,
+  deploy_target TEXT NOT NULL DEFAULT 'none',
+  deploy_cert_path TEXT,
+  deploy_key_path TEXT,
+  auto_deploy BOOLEAN NOT NULL DEFAULT FALSE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'valid', 'expired', 'failed')),
+  expiry_date TEXT,
+  issue_date TEXT,
+  message TEXT,
+  cert_path TEXT,
+  key_path TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE RESTRICT,
+  FOREIGN KEY (dns_provider_id) REFERENCES dns_providers (id) ON DELETE SET NULL
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX certificates_domain_server_key ON certificates (domain, server_id) WHERE server_id IS NOT NULL;
+
+--bun:split
+
+CREATE UNIQUE INDEX certificates_domain_local_key ON certificates (domain) WHERE server_id IS NULL;
+
+--bun:split
+
+CREATE INDEX certificates_domain_idx ON certificates (domain);
+
+--bun:split
+
+CREATE INDEX certificates_status_idx ON certificates (status);
+
+--bun:split
+
+CREATE INDEX certificates_server_id_idx ON certificates (server_id);
+
+--bun:split
+
+CREATE INDEX certificates_expiry_date_idx ON certificates (expiry_date);
+
+--bun:split
+
 CREATE TABLE evidence_packages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   category TEXT NOT NULL,
@@ -397,6 +645,18 @@ CREATE TABLE alert_deliveries (
 
 --bun:split
 
+CREATE TABLE federated_servers (
+  server_id INTEGER NOT NULL,
+  owner_url TEXT NOT NULL,
+  share_token TEXT NOT NULL,
+  prefix TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (server_id),
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
 CREATE TABLE inbounds (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   server_id INTEGER NOT NULL,
@@ -444,6 +704,39 @@ CREATE TABLE jobs (
 --bun:split
 
 CREATE UNIQUE INDEX jobs_job_id_key ON jobs (job_id);
+
+--bun:split
+
+CREATE TABLE node_traffic (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  tag TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('inbound', 'outbound')),
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  total_uplink INTEGER NOT NULL DEFAULT 0,
+  total_downlink INTEGER NOT NULL DEFAULT 0,
+  last_uplink INTEGER NOT NULL DEFAULT 0,
+  last_downlink INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX node_traffic_server_tag_type_key ON node_traffic (server_id, tag, type);
+
+--bun:split
+
+CREATE INDEX node_traffic_server_id_idx ON node_traffic (server_id);
+
+--bun:split
+
+CREATE INDEX node_traffic_tag_idx ON node_traffic (tag);
+
+--bun:split
+
+CREATE INDEX node_traffic_type_idx ON node_traffic (type);
 
 --bun:split
 
@@ -522,6 +815,544 @@ CREATE INDEX routing_rules_server_order_idx ON routing_rules (server_id, sort_or
 
 --bun:split
 
+CREATE TABLE shared_servers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  token_hash TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  allow_manage_inbounds BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revoked_at TEXT,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX shared_servers_token_hash_key ON shared_servers (token_hash);
+
+--bun:split
+
+CREATE TABLE shared_server_inbounds (
+  share_id INTEGER NOT NULL,
+  server_id INTEGER NOT NULL,
+  inbound_tag TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (share_id, inbound_tag),
+  FOREIGN KEY (share_id) REFERENCES shared_servers (id) ON DELETE CASCADE,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE TABLE speed_test_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  node_id INTEGER NOT NULL,
+  node_name TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'master_local',
+  down_mbps REAL NOT NULL DEFAULT 0,
+  latency_ms INTEGER NOT NULL DEFAULT -1,
+  test_bytes INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'ok',
+  error TEXT NOT NULL DEFAULT '',
+  tested_by TEXT NOT NULL DEFAULT '',
+  egress_ip TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--bun:split
+
+CREATE INDEX speed_test_results_node_idx ON speed_test_results (node_id);
+
+--bun:split
+
+CREATE TABLE speed_testers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL DEFAULT '',
+  token_hash TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT '',
+  last_seen TEXT,
+  caps TEXT NOT NULL DEFAULT '',
+  version TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX speed_testers_token_hash_key ON speed_testers (token_hash);
+
+--bun:split
+
+CREATE TABLE subscribe_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  url TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('create', 'import', 'upload', 'package')),
+  filename TEXT NOT NULL,
+  expire_at TEXT,
+  file_short_code TEXT NOT NULL DEFAULT '',
+  custom_short_code TEXT NOT NULL DEFAULT '',
+  auto_sync_custom_rules BOOLEAN NOT NULL DEFAULT FALSE,
+  template_filename TEXT NOT NULL DEFAULT '',
+  selected_custom_rule_ids TEXT NOT NULL DEFAULT '[]',
+  selected_override_script_ids TEXT NOT NULL DEFAULT '[]',
+  selected_tags TEXT NOT NULL DEFAULT '[]',
+  selected_node_ids TEXT NOT NULL DEFAULT '[]',
+  stats_server_ids TEXT NOT NULL DEFAULT '',
+  traffic_limit REAL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  raw_output BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX subscribe_files_name_key ON subscribe_files (name);
+
+--bun:split
+
+CREATE INDEX subscribe_files_type_idx ON subscribe_files (type);
+
+--bun:split
+
+CREATE UNIQUE INDEX subscribe_files_file_short_code_key ON subscribe_files (file_short_code) WHERE file_short_code <> '';
+
+--bun:split
+
+CREATE UNIQUE INDEX subscribe_files_custom_short_code_key ON subscribe_files (custom_short_code) WHERE custom_short_code <> '';
+
+--bun:split
+
+CREATE TABLE custom_rule_applications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  subscribe_file_id INTEGER NOT NULL,
+  custom_rule_id INTEGER NOT NULL,
+  rule_type TEXT NOT NULL,
+  rule_mode TEXT NOT NULL,
+  applied_content TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (subscribe_file_id) REFERENCES subscribe_files (id) ON DELETE CASCADE,
+  FOREIGN KEY (custom_rule_id) REFERENCES custom_rules (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX custom_rule_applications_file_rule_type_key ON custom_rule_applications (subscribe_file_id, custom_rule_id, rule_type);
+
+--bun:split
+
+CREATE INDEX custom_rule_applications_file_idx ON custom_rule_applications (subscribe_file_id);
+
+--bun:split
+
+CREATE INDEX custom_rule_applications_rule_idx ON custom_rule_applications (custom_rule_id);
+
+--bun:split
+
+CREATE TABLE subscription_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT '',
+  description TEXT,
+  rule_filename TEXT NOT NULL,
+  buttons TEXT NOT NULL DEFAULT '[]',
+  short_url TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX subscription_links_name_key ON subscription_links (name);
+
+--bun:split
+
+CREATE UNIQUE INDEX subscription_links_short_url_key ON subscription_links (short_url) WHERE short_url <> '';
+
+--bun:split
+
+CREATE TABLE system_config (
+  id INTEGER NOT NULL DEFAULT 1 CHECK (id = 1),
+  proxy_groups_source_url TEXT NOT NULL DEFAULT '',
+  client_compatibility_mode BOOLEAN NOT NULL DEFAULT FALSE,
+  enable_short_link BOOLEAN NOT NULL DEFAULT FALSE,
+  enable_sub_info_nodes BOOLEAN NOT NULL DEFAULT FALSE,
+  sub_info_v2ray_only BOOLEAN NOT NULL DEFAULT FALSE,
+  sub_info_expire_prefix TEXT NOT NULL DEFAULT '📅过期时间',
+  sub_info_traffic_prefix TEXT NOT NULL DEFAULT '⌛剩余流量',
+  speed_collect_interval INTEGER NOT NULL DEFAULT 3,
+  traffic_collect_interval INTEGER NOT NULL DEFAULT 60,
+  traffic_check_interval INTEGER NOT NULL DEFAULT 120,
+  heartbeat_interval INTEGER NOT NULL DEFAULT 30,
+  agent_log_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  telegram_bot_token TEXT NOT NULL DEFAULT '',
+  telegram_chat_id TEXT NOT NULL DEFAULT '',
+  notify_login BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_subscribe_fetch BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_daily_traffic BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_server_offline BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_server_online BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_traffic_threshold BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_daily_traffic_time TEXT NOT NULL DEFAULT '08:00',
+  notify_traffic_threshold_percent INTEGER NOT NULL DEFAULT 80,
+  notify_traffic_threshold_80 BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_over_limit BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_package_expiring BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_package_expiring_days INTEGER NOT NULL DEFAULT 3,
+  notify_package_expired BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_user_registered BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_telegram_bound BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_cert_result BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_agent_long_offline BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_agent_long_offline_minutes INTEGER NOT NULL DEFAULT 30,
+  notify_device_limit_exceeded BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_server_renewal BOOLEAN NOT NULL DEFAULT FALSE,
+  notify_ip_ban BOOLEAN NOT NULL DEFAULT FALSE,
+  enable_override_scripts BOOLEAN NOT NULL DEFAULT FALSE,
+  subscription_output_format TEXT NOT NULL DEFAULT 'yaml',
+  silent_mode BOOLEAN NOT NULL DEFAULT FALSE,
+  silent_mode_timeout INTEGER NOT NULL DEFAULT 15,
+  enable_miaomiaowu_features BOOLEAN NOT NULL DEFAULT FALSE,
+  default_template_filename TEXT NOT NULL DEFAULT '',
+  default_surge_template_filename TEXT NOT NULL DEFAULT '',
+  node_name_multiplier_prefix_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  node_name_multiplier_left TEXT NOT NULL DEFAULT '「',
+  node_name_multiplier_right TEXT NOT NULL DEFAULT '」',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (id)
+);
+
+--bun:split
+
+CREATE TABLE system_settings (
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (key)
+);
+
+--bun:split
+
+CREATE TABLE task_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_name TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT ''
+);
+
+--bun:split
+
+CREATE INDEX task_runs_name_started_idx ON task_runs (task_name, started_at);
+
+--bun:split
+
+CREATE INDEX task_runs_started_idx ON task_runs (started_at);
+
+--bun:split
+
+CREATE TABLE templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'clash' CHECK (category IN ('clash', 'surge')),
+  template_url TEXT NOT NULL DEFAULT '',
+  rule_source TEXT NOT NULL DEFAULT '',
+  use_proxy BOOLEAN NOT NULL DEFAULT FALSE,
+  enable_include_all BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX templates_name_key ON templates (name);
+
+--bun:split
+
+CREATE INDEX templates_category_idx ON templates (category);
+
+--bun:split
+
+CREATE TABLE tg_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tg_id INTEGER,
+  username TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--bun:split
+
+CREATE INDEX tg_audit_tg_id_idx ON tg_audit (tg_id);
+
+--bun:split
+
+CREATE INDEX tg_audit_username_idx ON tg_audit (username);
+
+--bun:split
+
+CREATE INDEX tg_audit_at_idx ON tg_audit (at);
+
+--bun:split
+
+CREATE TABLE traffic_daily_incomplete_dates (
+  date TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (date)
+);
+
+--bun:split
+
+CREATE TABLE traffic_daily_meta (
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (key)
+);
+
+--bun:split
+
+CREATE TABLE traffic_daily_nodes (
+  server_id INTEGER NOT NULL,
+  tag TEXT NOT NULL,
+  type TEXT NOT NULL,
+  date TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (server_id, tag, type, date),
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX traffic_daily_nodes_date_idx ON traffic_daily_nodes (date);
+
+--bun:split
+
+CREATE TABLE traffic_daily_system_servers (
+  server_id INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (server_id, date),
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX traffic_daily_system_servers_date_idx ON traffic_daily_system_servers (date);
+
+--bun:split
+
+CREATE TABLE traffic_daily_user_emails (
+  server_id INTEGER NOT NULL,
+  email TEXT NOT NULL,
+  attributed_username TEXT NOT NULL DEFAULT '',
+  date TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  weighted_uplink REAL NOT NULL DEFAULT 0,
+  weighted_downlink REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (server_id, email, attributed_username, date),
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX traffic_daily_user_emails_date_idx ON traffic_daily_user_emails (date);
+
+--bun:split
+
+CREATE INDEX traffic_daily_user_emails_user_idx ON traffic_daily_user_emails (attributed_username);
+
+--bun:split
+
+CREATE TABLE traffic_daily_user_nodes (
+  server_id INTEGER NOT NULL,
+  node_id INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  date TEXT NOT NULL,
+  uplink REAL NOT NULL DEFAULT 0,
+  downlink REAL NOT NULL DEFAULT 0,
+  weighted_uplink REAL NOT NULL DEFAULT 0,
+  weighted_downlink REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (server_id, node_id, username, date),
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX traffic_daily_user_nodes_date_idx ON traffic_daily_user_nodes (date);
+
+--bun:split
+
+CREATE INDEX traffic_daily_user_nodes_user_idx ON traffic_daily_user_nodes (username);
+
+--bun:split
+
+CREATE INDEX traffic_daily_user_nodes_node_idx ON traffic_daily_user_nodes (node_id);
+
+--bun:split
+
+CREATE TABLE traffic_daily_users (
+  server_id INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  date TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (server_id, username, date),
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX traffic_daily_users_date_idx ON traffic_daily_users (date);
+
+--bun:split
+
+CREATE TABLE traffic_daily_users_archived (
+  username TEXT NOT NULL,
+  date TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (username, date)
+);
+
+--bun:split
+
+CREATE INDEX traffic_daily_users_archived_date_idx ON traffic_daily_users_archived (date);
+
+--bun:split
+
+CREATE TABLE traffic_records (
+  date TEXT NOT NULL,
+  total_limit INTEGER NOT NULL,
+  total_used INTEGER NOT NULL,
+  total_remaining INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (date)
+);
+
+--bun:split
+
+CREATE TABLE traffic_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  inbound_uplink INTEGER NOT NULL DEFAULT 0,
+  inbound_downlink INTEGER NOT NULL DEFAULT 0,
+  outbound_uplink INTEGER NOT NULL DEFAULT 0,
+  outbound_downlink INTEGER NOT NULL DEFAULT 0,
+  user_uplink INTEGER NOT NULL DEFAULT 0,
+  user_downlink INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX traffic_snapshots_server_date_key ON traffic_snapshots (server_id, date);
+
+--bun:split
+
+CREATE INDEX traffic_snapshots_server_id_idx ON traffic_snapshots (server_id);
+
+--bun:split
+
+CREATE INDEX traffic_snapshots_date_idx ON traffic_snapshots (date);
+
+--bun:split
+
+CREATE TABLE traffic_threshold_notified (
+  server_id INTEGER NOT NULL,
+  notified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (server_id)
+);
+
+--bun:split
+
+CREATE TABLE user_email_traffic (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  email TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  total_uplink INTEGER NOT NULL DEFAULT 0,
+  total_downlink INTEGER NOT NULL DEFAULT 0,
+  last_uplink INTEGER NOT NULL DEFAULT 0,
+  last_downlink INTEGER NOT NULL DEFAULT 0,
+  cycle_base_uplink INTEGER NOT NULL DEFAULT 0,
+  cycle_base_downlink INTEGER NOT NULL DEFAULT 0,
+  weighted_uplink REAL NOT NULL DEFAULT 0,
+  weighted_downlink REAL NOT NULL DEFAULT 0,
+  cycle_base_weighted_uplink REAL NOT NULL DEFAULT 0,
+  cycle_base_weighted_downlink REAL NOT NULL DEFAULT 0,
+  attributed_username TEXT NOT NULL DEFAULT '',
+  cycle_start TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX user_email_traffic_server_email_key ON user_email_traffic (server_id, email);
+
+--bun:split
+
+CREATE INDEX user_email_traffic_server_id_idx ON user_email_traffic (server_id);
+
+--bun:split
+
+CREATE INDEX user_email_traffic_email_idx ON user_email_traffic (email);
+
+--bun:split
+
+CREATE INDEX user_email_traffic_attributed_username_idx ON user_email_traffic (attributed_username);
+
+--bun:split
+
+CREATE TABLE user_email_traffic_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  email TEXT NOT NULL,
+  date TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX user_email_traffic_snapshots_server_email_date_key ON user_email_traffic_snapshots (server_id, email, date);
+
+--bun:split
+
+CREATE INDEX user_email_traffic_snapshots_date_idx ON user_email_traffic_snapshots (date);
+
+--bun:split
+
 CREATE TABLE user_routed_outbound_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL,
@@ -532,6 +1363,77 @@ CREATE TABLE user_routed_outbound_actions (
 --bun:split
 
 CREATE INDEX user_routed_outbound_actions_user_idx ON user_routed_outbound_actions (username, created_at);
+
+--bun:split
+
+CREATE TABLE user_traffic (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  total_uplink INTEGER NOT NULL DEFAULT 0,
+  total_downlink INTEGER NOT NULL DEFAULT 0,
+  last_uplink INTEGER NOT NULL DEFAULT 0,
+  last_downlink INTEGER NOT NULL DEFAULT 0,
+  cycle_start TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX user_traffic_server_username_key ON user_traffic (server_id, username);
+
+--bun:split
+
+CREATE INDEX user_traffic_server_id_idx ON user_traffic (server_id);
+
+--bun:split
+
+CREATE INDEX user_traffic_username_idx ON user_traffic (username);
+
+--bun:split
+
+CREATE TABLE user_traffic_cycle_carry (
+  username TEXT NOT NULL,
+  weighted_uplink REAL NOT NULL DEFAULT 0,
+  weighted_downlink REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (username)
+);
+
+--bun:split
+
+CREATE TABLE user_traffic_records (
+  username TEXT NOT NULL,
+  date TEXT NOT NULL,
+  total_limit INTEGER NOT NULL,
+  total_used INTEGER NOT NULL,
+  total_remaining INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (username, date)
+);
+
+--bun:split
+
+CREATE TABLE user_traffic_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  date TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX user_traffic_snapshots_server_username_date_key ON user_traffic_snapshots (server_id, username, date);
+
+--bun:split
+
+CREATE INDEX user_traffic_snapshots_date_idx ON user_traffic_snapshots (date);
 
 --bun:split
 
@@ -613,6 +1515,40 @@ CREATE INDEX api_tokens_owner_idx ON api_tokens (owner);
 
 --bun:split
 
+CREATE TABLE external_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT 'clash-meta/2.4.0',
+  traffic_mode TEXT NOT NULL DEFAULT 'both',
+  node_count INTEGER NOT NULL DEFAULT 0,
+  last_sync_at TEXT,
+  upload INTEGER NOT NULL DEFAULT 0,
+  download INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  expire TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX external_subscriptions_username_url_key ON external_subscriptions (username, url);
+
+--bun:split
+
+CREATE INDEX external_subscriptions_username_idx ON external_subscriptions (username);
+
+--bun:split
+
+CREATE INDEX external_subscriptions_url_idx ON external_subscriptions (url);
+
+--bun:split
+
 CREATE TABLE nodes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL,
@@ -678,6 +1614,25 @@ CREATE INDEX nodes_type_idx ON nodes (node_type);
 
 --bun:split
 
+CREATE TABLE announcements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL DEFAULT 'general',
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  node_id INTEGER,
+  via_bot BOOLEAN NOT NULL DEFAULT FALSE,
+  via_miniapp BOOLEAN NOT NULL DEFAULT FALSE,
+  expires_at TEXT,
+  bot_delivered_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT,
+  FOREIGN KEY (node_id) REFERENCES nodes (id) ON DELETE SET NULL
+);
+
+--bun:split
+
 CREATE TABLE node_reachability (
   node_id INTEGER NOT NULL,
   reachable BOOLEAN NOT NULL DEFAULT FALSE,
@@ -687,6 +1642,31 @@ CREATE TABLE node_reachability (
   PRIMARY KEY (node_id),
   FOREIGN KEY (node_id) REFERENCES nodes (id) ON DELETE CASCADE
 );
+
+--bun:split
+
+CREATE TABLE override_scripts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL,
+  name TEXT NOT NULL,
+  hook TEXT NOT NULL,
+  content TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX override_scripts_username_idx ON override_scripts (username);
+
+--bun:split
+
+CREATE INDEX override_scripts_hook_idx ON override_scripts (hook);
 
 --bun:split
 
@@ -788,6 +1768,103 @@ CREATE INDEX package_assignment_subaccounts_username_idx ON package_assignment_s
 
 --bun:split
 
+CREATE TABLE proxy_provider_configs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL,
+  external_subscription_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'http',
+  interval INTEGER NOT NULL DEFAULT 3600,
+  proxy TEXT NOT NULL DEFAULT 'DIRECT',
+  size_limit INTEGER NOT NULL DEFAULT 0,
+  header TEXT,
+  health_check_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  health_check_url TEXT NOT NULL DEFAULT 'https://www.gstatic.com/generate_204',
+  health_check_interval INTEGER NOT NULL DEFAULT 300,
+  health_check_timeout INTEGER NOT NULL DEFAULT 5000,
+  health_check_lazy BOOLEAN NOT NULL DEFAULT FALSE,
+  health_check_expected_status INTEGER NOT NULL DEFAULT 204,
+  filter TEXT,
+  exclude_filter TEXT,
+  exclude_type TEXT,
+  geo_ip_filter TEXT,
+  override TEXT,
+  process_mode TEXT NOT NULL DEFAULT 'client',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resource_version INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (external_subscription_id) REFERENCES external_subscriptions (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX proxy_provider_configs_username_idx ON proxy_provider_configs (username);
+
+--bun:split
+
+CREATE INDEX proxy_provider_configs_external_subscription_id_idx ON proxy_provider_configs (external_subscription_id);
+
+--bun:split
+
+CREATE TABLE renewal_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_token TEXT NOT NULL,
+  username TEXT NOT NULL,
+  telegram_id INTEGER NOT NULL DEFAULT 0,
+  package_id INTEGER NOT NULL,
+  assignment_id INTEGER,
+  package_name TEXT NOT NULL DEFAULT '',
+  previous_end_date TEXT,
+  renew_days INTEGER NOT NULL,
+  passphrase TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'web',
+  status TEXT NOT NULL DEFAULT 'pending',
+  reviewed_by INTEGER NOT NULL DEFAULT 0,
+  reviewed_at TEXT,
+  new_end_date TEXT,
+  error_message TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (assignment_id) REFERENCES package_assignments (id) ON DELETE SET NULL
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX renewal_requests_request_token_key ON renewal_requests (request_token);
+
+--bun:split
+
+CREATE INDEX renewal_requests_user_created_idx ON renewal_requests (username, created_at);
+
+--bun:split
+
+CREATE UNIQUE INDEX renewal_requests_pending_user_key ON renewal_requests (username) WHERE status IN ('pending', 'processing');
+
+--bun:split
+
+CREATE TABLE routing_rule_presets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL,
+  name TEXT NOT NULL,
+  rule_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE UNIQUE INDEX routing_rule_presets_username_rule_key ON routing_rule_presets (username, rule_json);
+
+--bun:split
+
+CREATE INDEX routing_rule_presets_username_updated_idx ON routing_rule_presets (username, updated_at);
+
+--bun:split
+
 CREATE TABLE sessions (
   token_hash TEXT NOT NULL,
   username TEXT NOT NULL,
@@ -832,6 +1909,22 @@ CREATE TABLE tasks (
 --bun:split
 
 CREATE UNIQUE INDEX tasks_dedup_key_active ON tasks (dedup_key) WHERE status IN ('open', 'claimed') AND dedup_key <> '';
+
+--bun:split
+
+CREATE TABLE traffic_daily_external_subscriptions (
+  external_subscription_id INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  uplink INTEGER NOT NULL DEFAULT 0,
+  downlink INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (external_subscription_id, date),
+  FOREIGN KEY (external_subscription_id) REFERENCES external_subscriptions (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX traffic_daily_external_subscriptions_date_idx ON traffic_daily_external_subscriptions (date);
 
 --bun:split
 
@@ -924,6 +2017,25 @@ CREATE INDEX user_subaccounts_username_idx ON user_subaccounts (username);
 
 --bun:split
 
+CREATE TABLE user_subscriptions (
+  username TEXT NOT NULL,
+  subscription_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (username, subscription_id),
+  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (subscription_id) REFERENCES subscribe_files (id) ON DELETE CASCADE
+);
+
+--bun:split
+
+CREATE INDEX user_subscriptions_username_idx ON user_subscriptions (username);
+
+--bun:split
+
+CREATE INDEX user_subscriptions_subscription_id_idx ON user_subscriptions (subscription_id);
+
+--bun:split
+
 CREATE TABLE user_tokens (
   username TEXT NOT NULL,
   token TEXT NOT NULL,
@@ -959,7 +2071,8 @@ CREATE TABLE websites (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resource_version INTEGER NOT NULL DEFAULT 1,
   deleted_at TEXT,
-  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
+  FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE,
+  FOREIGN KEY (certificate_id) REFERENCES certificates (id) ON DELETE SET NULL
 );
 
 --bun:split

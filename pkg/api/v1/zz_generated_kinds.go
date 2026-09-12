@@ -27,6 +27,22 @@ type AlertStatus struct {
 	LastSeenAt      time.Time       `json:"last_seen_at"`
 }
 
+// AnnouncementSpec 是 kind Announcement（config）的 spec 字段。
+type AnnouncementSpec struct {
+	Type       string     `json:"type"`
+	Title      string     `json:"title"`
+	Body       string     `json:"body"`
+	NodeID     *int64     `json:"node_id"`
+	ViaBot     bool       `json:"via_bot"`
+	ViaMiniapp bool       `json:"via_miniapp"`
+	ExpiresAt  *time.Time `json:"expires_at"`
+}
+
+// AnnouncementStatus 是 kind Announcement 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type AnnouncementStatus struct {
+	BotDeliveredAt *time.Time `json:"bot_delivered_at"`
+}
+
 // ApiTokenSpec 是 kind ApiToken（action）的 spec 字段。
 type ApiTokenSpec struct{}
 
@@ -80,6 +96,34 @@ type AutomationRuleStatus struct {
 	ApprovedAt *time.Time `json:"approved_at"`
 }
 
+// CertificateSpec 是 kind Certificate（config）的 spec 字段。
+type CertificateSpec struct {
+	Domain         string  `json:"domain"`
+	Email          string  `json:"email"`
+	Provider       string  `json:"provider"`
+	ChallengeMode  string  `json:"challenge_mode"`
+	WebrootPath    *string `json:"webroot_path"`
+	ServerID       *int64  `json:"server_id"`
+	DNSProviderID  *int64  `json:"dns_provider_id"`
+	CertPem        *string `json:"cert_pem"`
+	KeyPem         *Secret `json:"key_pem"`
+	AutoRenew      bool    `json:"auto_renew"`
+	DeployTarget   string  `json:"deploy_target"`
+	DeployCertPath *string `json:"deploy_cert_path"`
+	DeployKeyPath  *string `json:"deploy_key_path"`
+	AutoDeploy     bool    `json:"auto_deploy"`
+}
+
+// CertificateStatus 是 kind Certificate 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type CertificateStatus struct {
+	Status     string     `json:"status"`
+	ExpiryDate *time.Time `json:"expiry_date"`
+	IssueDate  *time.Time `json:"issue_date"`
+	Message    *string    `json:"message"`
+	CertPath   *string    `json:"cert_path"`
+	KeyPath    *string    `json:"key_path"`
+}
+
 // ConfigSnapshotSpec 是 kind ConfigSnapshot（system）的 spec 字段。
 type ConfigSnapshotSpec struct {
 	ObjectKind    string          `json:"object_kind"`
@@ -95,6 +139,29 @@ type ConfigSnapshotSpec struct {
 // ConfigSnapshotStatus 是 kind ConfigSnapshot 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
 type ConfigSnapshotStatus struct{}
 
+// CustomRuleSpec 是 kind CustomRule（config）的 spec 字段。
+type CustomRuleSpec struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Mode      string `json:"mode"`
+	Content   string `json:"content"`
+	Enabled   bool   `json:"enabled"`
+	CreatedBy string `json:"created_by"`
+}
+
+// CustomRuleStatus 是 kind CustomRule 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type CustomRuleStatus struct{}
+
+// DnsProviderSpec 是 kind DnsProvider（config）的 spec 字段。
+type DnsProviderSpec struct {
+	Name         string     `json:"name"`
+	ProviderType string     `json:"provider_type"`
+	Credentials  SecretJSON `json:"credentials"`
+}
+
+// DnsProviderStatus 是 kind DnsProvider 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type DnsProviderStatus struct{}
+
 // EvidencePackageSpec 是 kind EvidencePackage（system）的 spec 字段。
 type EvidencePackageSpec struct {
 	Category string `json:"category"`
@@ -108,6 +175,25 @@ type EvidencePackageStatus struct {
 	CollectError *string         `json:"collect_error"`
 	SizeBytes    int64           `json:"size_bytes"`
 	ExpiresAt    *time.Time      `json:"expires_at"`
+}
+
+// ExternalSubscriptionSpec 是 kind ExternalSubscription（config）的 spec 字段。
+type ExternalSubscriptionSpec struct {
+	Username    string `json:"username"`
+	Name        string `json:"name"`
+	URL         Secret `json:"url"`
+	UserAgent   string `json:"user_agent"`
+	TrafficMode string `json:"traffic_mode"`
+}
+
+// ExternalSubscriptionStatus 是 kind ExternalSubscription 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type ExternalSubscriptionStatus struct {
+	NodeCount  int64      `json:"node_count"`
+	LastSyncAt *time.Time `json:"last_sync_at"`
+	Upload     int64      `json:"upload"`
+	Download   int64      `json:"download"`
+	Total      int64      `json:"total"`
+	Expire     *time.Time `json:"expire"`
 }
 
 // InboundSpec 是 kind Inbound（config）的 spec 字段。
@@ -232,6 +318,19 @@ type OutboundStatus struct {
 	LastProbedAt       *time.Time `json:"last_probed_at"`
 }
 
+// OverrideScriptSpec 是 kind OverrideScript（config）的 spec 字段。
+type OverrideScriptSpec struct {
+	Username  string `json:"username"`
+	Name      string `json:"name"`
+	Hook      string `json:"hook"`
+	Content   string `json:"content"`
+	Enabled   bool   `json:"enabled"`
+	SortOrder int64  `json:"sort_order"`
+}
+
+// OverrideScriptStatus 是 kind OverrideScript 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type OverrideScriptStatus struct{}
+
 // PackageSpec 是 kind Package（config）的 spec 字段。
 type PackageSpec struct {
 	Name                    string          `json:"name"`
@@ -295,6 +394,33 @@ type PlanStatus struct {
 	Status  string  `json:"status"`
 	ApplyID *string `json:"apply_id"`
 }
+
+// ProxyProviderConfigSpec 是 kind ProxyProviderConfig（config）的 spec 字段。
+type ProxyProviderConfigSpec struct {
+	Username                  string  `json:"username"`
+	ExternalSubscriptionID    int64   `json:"external_subscription_id"`
+	Name                      string  `json:"name"`
+	Type                      string  `json:"type"`
+	Interval                  int64   `json:"interval"`
+	Proxy                     string  `json:"proxy"`
+	SizeLimit                 int64   `json:"size_limit"`
+	Header                    *string `json:"header"`
+	HealthCheckEnabled        bool    `json:"health_check_enabled"`
+	HealthCheckURL            string  `json:"health_check_url"`
+	HealthCheckInterval       int64   `json:"health_check_interval"`
+	HealthCheckTimeout        int64   `json:"health_check_timeout"`
+	HealthCheckLazy           bool    `json:"health_check_lazy"`
+	HealthCheckExpectedStatus int64   `json:"health_check_expected_status"`
+	Filter                    *string `json:"filter"`
+	ExcludeFilter             *string `json:"exclude_filter"`
+	ExcludeType               *string `json:"exclude_type"`
+	GeoIPFilter               *string `json:"geo_ip_filter"`
+	Override                  *string `json:"override"`
+	ProcessMode               string  `json:"process_mode"`
+}
+
+// ProxyProviderConfigStatus 是 kind ProxyProviderConfig 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type ProxyProviderConfigStatus struct{}
 
 // ReturnRouteSpec 是 kind ReturnRoute（config）的 spec 字段。
 type ReturnRouteSpec struct {
@@ -363,7 +489,7 @@ type ServerSpec struct {
 	TelecomPaidPeer       bool            `json:"telecom_paid_peer"`
 	ExpiresAt             *time.Time      `json:"expires_at"`
 	DdnsEnabled           bool            `json:"ddns_enabled"`
-	DdnsProviderID        int64           `json:"ddns_provider_id"`
+	DdnsProviderID        *int64          `json:"ddns_provider_id"`
 	DdnsRecordName        string          `json:"ddns_record_name"`
 	CoreLogLevel          string          `json:"core_log_level"`
 	CoreDNS               json.RawMessage `json:"core_dns"`
@@ -422,6 +548,99 @@ type ServerStatus struct {
 	AppliedGeneration      int64      `json:"applied_generation"`
 }
 
+// SubscribeFileSpec 是 kind SubscribeFile（config）的 spec 字段。
+type SubscribeFileSpec struct {
+	Name                      string          `json:"name"`
+	Description               *string         `json:"description"`
+	URL                       Secret          `json:"url"`
+	Type                      string          `json:"type"`
+	Filename                  string          `json:"filename"`
+	ExpireAt                  *time.Time      `json:"expire_at"`
+	FileShortCode             string          `json:"file_short_code"`
+	CustomShortCode           string          `json:"custom_short_code"`
+	AutoSyncCustomRules       bool            `json:"auto_sync_custom_rules"`
+	TemplateFilename          string          `json:"template_filename"`
+	SelectedCustomRuleIds     json.RawMessage `json:"selected_custom_rule_ids"`
+	SelectedOverrideScriptIds json.RawMessage `json:"selected_override_script_ids"`
+	SelectedTags              json.RawMessage `json:"selected_tags"`
+	SelectedNodeIds           json.RawMessage `json:"selected_node_ids"`
+	StatsServerIds            string          `json:"stats_server_ids"`
+	TrafficLimit              *float64        `json:"traffic_limit"`
+	SortOrder                 int64           `json:"sort_order"`
+	RawOutput                 bool            `json:"raw_output"`
+	CreatedBy                 string          `json:"created_by"`
+}
+
+// SubscribeFileStatus 是 kind SubscribeFile 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type SubscribeFileStatus struct{}
+
+// SubscriptionLinkSpec 是 kind SubscriptionLink（config）的 spec 字段。
+type SubscriptionLinkSpec struct {
+	Name         string          `json:"name"`
+	Type         string          `json:"type"`
+	Description  *string         `json:"description"`
+	RuleFilename string          `json:"rule_filename"`
+	Buttons      json.RawMessage `json:"buttons"`
+	ShortURL     string          `json:"short_url"`
+}
+
+// SubscriptionLinkStatus 是 kind SubscriptionLink 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type SubscriptionLinkStatus struct{}
+
+// SystemSettingsSpec 是 kind SystemSettings（master_settings）的 spec 字段。
+type SystemSettingsSpec struct {
+	ProxyGroupsSourceURL            string `json:"proxy_groups_source_url"`
+	ClientCompatibilityMode         bool   `json:"client_compatibility_mode"`
+	EnableShortLink                 bool   `json:"enable_short_link"`
+	EnableSubInfoNodes              bool   `json:"enable_sub_info_nodes"`
+	SubInfoV2rayOnly                bool   `json:"sub_info_v2ray_only"`
+	SubInfoExpirePrefix             string `json:"sub_info_expire_prefix"`
+	SubInfoTrafficPrefix            string `json:"sub_info_traffic_prefix"`
+	SpeedCollectInterval            int64  `json:"speed_collect_interval"`
+	TrafficCollectInterval          int64  `json:"traffic_collect_interval"`
+	TrafficCheckInterval            int64  `json:"traffic_check_interval"`
+	HeartbeatInterval               int64  `json:"heartbeat_interval"`
+	AgentLogEnabled                 bool   `json:"agent_log_enabled"`
+	NotifyEnabled                   bool   `json:"notify_enabled"`
+	NotifyLogin                     bool   `json:"notify_login"`
+	NotifySubscribeFetch            bool   `json:"notify_subscribe_fetch"`
+	NotifyDailyTraffic              bool   `json:"notify_daily_traffic"`
+	NotifyServerOffline             bool   `json:"notify_server_offline"`
+	NotifyServerOnline              bool   `json:"notify_server_online"`
+	NotifyTrafficThreshold          bool   `json:"notify_traffic_threshold"`
+	NotifyDailyTrafficTime          string `json:"notify_daily_traffic_time"`
+	NotifyTrafficThresholdPercent   int64  `json:"notify_traffic_threshold_percent"`
+	NotifyTrafficThreshold80        bool   `json:"notify_traffic_threshold_80"`
+	NotifyOverLimit                 bool   `json:"notify_over_limit"`
+	NotifyPackageExpiring           bool   `json:"notify_package_expiring"`
+	NotifyPackageExpiringDays       int64  `json:"notify_package_expiring_days"`
+	NotifyPackageExpired            bool   `json:"notify_package_expired"`
+	NotifyUserRegistered            bool   `json:"notify_user_registered"`
+	NotifyTelegramBound             bool   `json:"notify_telegram_bound"`
+	NotifyCertResult                bool   `json:"notify_cert_result"`
+	NotifyAgentLongOffline          bool   `json:"notify_agent_long_offline"`
+	NotifyAgentLongOfflineMinutes   int64  `json:"notify_agent_long_offline_minutes"`
+	NotifyDeviceLimitExceeded       bool   `json:"notify_device_limit_exceeded"`
+	NotifyServerRenewal             bool   `json:"notify_server_renewal"`
+	NotifyIPBan                     bool   `json:"notify_ip_ban"`
+	EnableOverrideScripts           bool   `json:"enable_override_scripts"`
+	SubscriptionOutputFormat        string `json:"subscription_output_format"`
+	EnableMiaomiaowuFeatures        bool   `json:"enable_miaomiaowu_features"`
+	DefaultTemplateFilename         string `json:"default_template_filename"`
+	DefaultSurgeTemplateFilename    string `json:"default_surge_template_filename"`
+	NodeNameMultiplierPrefixEnabled bool   `json:"node_name_multiplier_prefix_enabled"`
+	NodeNameMultiplierLeft          string `json:"node_name_multiplier_left"`
+	NodeNameMultiplierRight         string `json:"node_name_multiplier_right"`
+}
+
+// SystemSettingsStatus 是 kind SystemSettings 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type SystemSettingsStatus struct {
+	TelegramBotToken  Secret `json:"telegram_bot_token"`
+	TelegramChatID    string `json:"telegram_chat_id"`
+	SilentMode        bool   `json:"silent_mode"`
+	SilentModeTimeout int64  `json:"silent_mode_timeout"`
+}
+
 // TaskSpec 是 kind Task（action）的 spec 字段。
 type TaskSpec struct {
 	Title      string  `json:"title"`
@@ -440,6 +659,20 @@ type TaskStatus struct {
 	CancelReason *string    `json:"cancel_reason"`
 	ExpiresAt    *time.Time `json:"expires_at"`
 }
+
+// TemplateSpec 是 kind Template（config）的 spec 字段。
+type TemplateSpec struct {
+	Name             string `json:"name"`
+	Category         string `json:"category"`
+	TemplateURL      string `json:"template_url"`
+	RuleSource       string `json:"rule_source"`
+	UseProxy         bool   `json:"use_proxy"`
+	EnableIncludeAll bool   `json:"enable_include_all"`
+	CreatedBy        string `json:"created_by"`
+}
+
+// TemplateStatus 是 kind Template 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
+type TemplateStatus struct{}
 
 // UserSpec 是 kind User（config）的 spec 字段。
 type UserSpec struct {
@@ -505,6 +738,15 @@ var generatedKinds = []KindInfo{
 		notApplyable:    map[string]string{"id": "meta", "conditions": "status", "evidence_id": "status", "status": "status", "resolve_reason": "status", "occurrence_count": "status", "first_seen_at": "status", "last_seen_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
+		Name:            "Announcement",
+		Class:           ClassConfig,
+		SpecFields:      []string{"type", "title", "body", "node_id", "via_bot", "via_miniapp", "expires_at"},
+		StatusFields:    []string{"bot_delivered_at"},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "bot_delivered_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
 		Name:            "ApiToken",
 		Class:           ClassAction,
 		SpecFields:      []string{},
@@ -532,6 +774,15 @@ var generatedKinds = []KindInfo{
 		notApplyable:    map[string]string{"id": "meta", "proposed_by": "action", "status": "human", "approved_by": "human", "approved_at": "human", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
+		Name:            "Certificate",
+		Class:           ClassConfig,
+		SpecFields:      []string{"domain", "email", "provider", "challenge_mode", "webroot_path", "server_id", "dns_provider_id", "cert_pem", "key_pem", "auto_renew", "deploy_target", "deploy_cert_path", "deploy_key_path", "auto_deploy"},
+		StatusFields:    []string{"status", "expiry_date", "issue_date", "message", "cert_path", "key_path"},
+		MaskedFields:    []string{"key_pem"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "status": "status", "expiry_date": "status", "issue_date": "status", "message": "status", "cert_path": "status", "key_path": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
 		Name:            "ConfigSnapshot",
 		Class:           ClassSystem,
 		SpecFields:      []string{"object_kind", "object_id", "object_version", "content", "content_hash", "source", "status", "apply_id"},
@@ -541,6 +792,24 @@ var generatedKinds = []KindInfo{
 		notApplyable:    map[string]string{"id": "meta", "created_at": "meta"},
 	},
 	{
+		Name:            "CustomRule",
+		Class:           ClassConfig,
+		SpecFields:      []string{"name", "type", "mode", "content", "enabled", "created_by"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "DnsProvider",
+		Class:           ClassConfig,
+		SpecFields:      []string{"name", "provider_type", "credentials"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{"credentials"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
 		Name:            "EvidencePackage",
 		Class:           ClassSystem,
 		SpecFields:      []string{"category", "server_id"},
@@ -548,6 +817,15 @@ var generatedKinds = []KindInfo{
 		MaskedFields:    []string{},
 		ImmutableFields: []string{},
 		notApplyable:    map[string]string{"id": "meta", "collected_at": "status", "items": "status", "collect_error": "status", "size_bytes": "status", "expires_at": "status", "created_at": "meta", "updated_at": "meta"},
+	},
+	{
+		Name:            "ExternalSubscription",
+		Class:           ClassConfig,
+		SpecFields:      []string{"username", "name", "url", "user_agent", "traffic_mode"},
+		StatusFields:    []string{"node_count", "last_sync_at", "upload", "download", "total", "expire"},
+		MaskedFields:    []string{"url"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "node_count": "status", "last_sync_at": "status", "upload": "status", "download": "status", "total": "status", "expire": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
 		Name:            "Inbound",
@@ -604,6 +882,15 @@ var generatedKinds = []KindInfo{
 		notApplyable:    map[string]string{"id": "meta", "last_probe_ok": "status", "last_probe_latency_ms": "status", "last_probed_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
+		Name:            "OverrideScript",
+		Class:           ClassConfig,
+		SpecFields:      []string{"username", "name", "hook", "content", "enabled", "sort_order"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
 		Name:            "Package",
 		Class:           ClassConfig,
 		SpecFields:      []string{"name", "description", "traffic_limit_bytes", "cycle_days", "is_reset", "reset_day", "nodes", "device_limit", "speed_limit_mbps", "auto_speed_limit_json", "traffic_mode", "template_filename", "surge_template_filename", "short_code", "node_multipliers", "node_traffic_limits", "node_speed_limits", "node_device_limits", "node_name_overrides", "node_name_override_enabled"},
@@ -629,6 +916,15 @@ var generatedKinds = []KindInfo{
 		MaskedFields:    []string{},
 		ImmutableFields: []string{},
 		notApplyable:    map[string]string{"id": "meta", "status": "status", "apply_id": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "ProxyProviderConfig",
+		Class:           ClassConfig,
+		SpecFields:      []string{"username", "external_subscription_id", "name", "type", "interval", "proxy", "size_limit", "header", "health_check_enabled", "health_check_url", "health_check_interval", "health_check_timeout", "health_check_lazy", "health_check_expected_status", "filter", "exclude_filter", "exclude_type", "geo_ip_filter", "override", "process_mode"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
 		Name:            "ReturnRoute",
@@ -658,6 +954,33 @@ var generatedKinds = []KindInfo{
 		notApplyable:    map[string]string{"id": "meta", "token": "action", "agent_token": "action", "pull_token": "action", "token_expires_at": "action", "agent_token_expires_at": "action", "last_token_refresh": "action", "last_agent_token_refresh": "action", "status": "status", "last_heartbeat": "status", "ip_address": "status", "ip_address_v6": "status", "boot_time": "status", "boot_count": "status", "core_boot_time": "status", "core_boot_count": "status", "core_running": "status", "core_version": "status", "current_upload_speed": "status", "current_download_speed": "status", "speed_updated_at": "status", "offline_since": "status", "offline_notified": "status", "warp_installed": "status", "same_host_as_master": "status", "time_offset_seconds": "status", "push_fail_count": "status", "last_push_fail": "status", "fallback_to_pull": "status", "fallback_at": "status", "last_pull_at": "status", "system_rx_cycle": "status", "system_tx_cycle": "status", "system_last_seen_rx": "status", "system_last_seen_tx": "status", "system_boot_time_unix": "status", "system_traffic_updated_at": "status", "traffic_reset_baseline": "status", "last_traffic_reset_at": "status", "ddns_last_synced_at": "status", "ddns_last_error": "status", "ddns_pending": "status", "provider_updated_at": "status", "rotation_pending": "status", "last_rotated_at": "status", "revoke_pending": "status", "applied_hash": "status", "applied_generation": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
+		Name:            "SubscribeFile",
+		Class:           ClassConfig,
+		SpecFields:      []string{"name", "description", "url", "type", "filename", "expire_at", "file_short_code", "custom_short_code", "auto_sync_custom_rules", "template_filename", "selected_custom_rule_ids", "selected_override_script_ids", "selected_tags", "selected_node_ids", "stats_server_ids", "traffic_limit", "sort_order", "raw_output", "created_by"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{"url"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "SubscriptionLink",
+		Class:           ClassConfig,
+		SpecFields:      []string{"name", "type", "description", "rule_filename", "buttons", "short_url"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "SystemSettings",
+		Class:           ClassMasterSettings,
+		SpecFields:      []string{"proxy_groups_source_url", "client_compatibility_mode", "enable_short_link", "enable_sub_info_nodes", "sub_info_v2ray_only", "sub_info_expire_prefix", "sub_info_traffic_prefix", "speed_collect_interval", "traffic_collect_interval", "traffic_check_interval", "heartbeat_interval", "agent_log_enabled", "notify_enabled", "notify_login", "notify_subscribe_fetch", "notify_daily_traffic", "notify_server_offline", "notify_server_online", "notify_traffic_threshold", "notify_daily_traffic_time", "notify_traffic_threshold_percent", "notify_traffic_threshold_80", "notify_over_limit", "notify_package_expiring", "notify_package_expiring_days", "notify_package_expired", "notify_user_registered", "notify_telegram_bound", "notify_cert_result", "notify_agent_long_offline", "notify_agent_long_offline_minutes", "notify_device_limit_exceeded", "notify_server_renewal", "notify_ip_ban", "enable_override_scripts", "subscription_output_format", "enable_miaomiaowu_features", "default_template_filename", "default_surge_template_filename", "node_name_multiplier_prefix_enabled", "node_name_multiplier_left", "node_name_multiplier_right"},
+		StatusFields:    []string{"telegram_bot_token", "telegram_chat_id", "silent_mode", "silent_mode_timeout"},
+		MaskedFields:    []string{"telegram_bot_token"},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "telegram_bot_token": "human", "telegram_chat_id": "master_self", "silent_mode": "human", "silent_mode_timeout": "human", "created_at": "meta", "updated_at": "meta", "resource_version": "meta"},
+	},
+	{
 		Name:            "Task",
 		Class:           ClassAction,
 		SpecFields:      []string{"title", "body", "source", "dedup_key", "alert_id", "evidence_id"},
@@ -665,6 +988,15 @@ var generatedKinds = []KindInfo{
 		MaskedFields:    []string{},
 		ImmutableFields: []string{},
 		notApplyable:    map[string]string{"id": "meta", "status": "action", "claimed_by": "action", "lease_until": "action", "cancel_reason": "status", "expires_at": "status", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
+	},
+	{
+		Name:            "Template",
+		Class:           ClassConfig,
+		SpecFields:      []string{"name", "category", "template_url", "rule_source", "use_proxy", "enable_include_all", "created_by"},
+		StatusFields:    []string{},
+		MaskedFields:    []string{},
+		ImmutableFields: []string{},
+		notApplyable:    map[string]string{"id": "meta", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "deleted_at": "meta"},
 	},
 	{
 		Name:            "User",

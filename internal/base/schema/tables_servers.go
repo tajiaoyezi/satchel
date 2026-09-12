@@ -48,9 +48,9 @@ func serverTables() []Table {
 				col("provider_url", TypeText).def("''"),
 				col("telecom_paid_peer", TypeBool).def("FALSE"),
 				col("expires_at", TypeTime).null(),
-				// spec：DDNS。记录名单独存，DDNS 不许写主控域名与订阅域名。
+				// spec：DDNS。记录名单独存，DDNS 不许写主控域名与订阅域名；服务商为 NULL 表示没选（取代 mmwx 的 0）。
 				col("ddns_enabled", TypeBool).def("FALSE"),
-				col("ddns_provider_id", TypeInt).def("0"),
+				col("ddns_provider_id", TypeInt).null(),
 				col("ddns_record_name", TypeText).def("''"),
 				// spec：内核全局字段组（第 07 章），每台一份。
 				col("core_log_level", TypeText).def("'warn'"),
@@ -117,6 +117,7 @@ func serverTables() []Table {
 				{Name: "servers_token_key", Columns: []string{"token"}, Unique: true},
 				{Name: "servers_status_idx", Columns: []string{"status"}},
 			},
+			ForeignKeys: []ForeignKey{fk("ddns_provider_id", "dns_providers", "SET NULL")},
 		},
 		{
 			// 入站升为一等公民：spec 存主控，由主控渲染成 sing-box 配置下发；用户凭证由 Assignment 渲染注入。
@@ -168,7 +169,6 @@ func serverTables() []Table {
 		},
 		{
 			// nginx 站点：权威在 spec，扫盘结果只进 status（附录 A.3 的换实现）。
-			// certificate_id 指向 certificates，那张表在下个 change 才录，外键到时补。
 			Name: "websites", Kind: "Website", KindClass: KindConfig, Origin: OriginSatchel,
 			Columns: withMeta(
 				col("server_id", TypeInt),
@@ -182,7 +182,7 @@ func serverTables() []Table {
 				col("conf_path", TypeText).def("''").cls(ClassStatus),
 			),
 			Indexes:     []Index{{Name: "websites_server_domain_key", Columns: []string{"server_id", "domain"}, Unique: true}},
-			ForeignKeys: []ForeignKey{fkServer("CASCADE")},
+			ForeignKeys: []ForeignKey{fkServer("CASCADE"), fk("certificate_id", "certificates", "SET NULL")},
 		},
 		{
 			// 返程路由：由 mmwx 的 server_return_routes 升成 kind，按运营商探测入口线路；探测结果归 status。

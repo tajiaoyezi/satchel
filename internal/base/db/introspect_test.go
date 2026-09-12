@@ -19,3 +19,18 @@ func TestExtractChecks(t *testing.T) {
 		t.Fatalf("extractChecks 不对：\n得到 %q\n想要 %q", got, want)
 	}
 }
+
+func TestNormalizeDefault(t *testing.T) {
+	for in, want := range map[string]string{
+		"'-1'::integer":           "-1",
+		"'open'::text":            "'open'",
+		"CURRENT_TIMESTAMP":       "current_timestamp",
+		"'{}'::jsonb":             "'{}'",
+		"0":                       "0",
+		"'0.5'::double precision": "0.5",
+	} {
+		if got := normalizeDefault(in); got != want {
+			t.Errorf("normalizeDefault(%q) = %q，想要 %q", in, got, want)
+		}
+	}
+}
