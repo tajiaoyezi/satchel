@@ -6,8 +6,24 @@ on:
 
 jobs:
   check:
-    name: gofmt / vet / build / test
+    name: gofmt / vet / build / generate / test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # 双库都要跑：缺 PostgreSQL 直接失败，不许静默跳过。
+      SATCHEL_TEST_PG_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      SATCHEL_TEST_REQUIRE_PG: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +44,14 @@ jobs:
 
       - name: go build
         run: go build ./...
+
+      - name: go generate
+        run: |
+          go generate ./...
+          if ! git diff --exit-code; then
+            echo "生成物与注册表不一致，请运行 go generate ./internal/base/schema/ 并提交"
+            exit 1
+          fi
 
       - name: go test
         run: go test ./...

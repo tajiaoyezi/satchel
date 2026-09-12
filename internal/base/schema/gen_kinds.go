@@ -1,0 +1,114 @@
+package schema
+
+import (
+	"bytes"
+	"fmt"
+	"go/format"
+	"sort"
+)
+
+var kindClassConst = map[KindClass]string{
+	KindConfig:         "ClassConfig",
+	KindAction:         "ClassAction",
+	KindMasterSettings: "ClassMasterSettings",
+	KindSystem:         "ClassSystem",
+	KindReadOnly:       "ClassReadOnly",
+}
+
+// kindTables 返回背后是 kind 的表，按 kind 名排序。
+func kindTables(r *Registry) []*Table {
+	var out []*Table
+	for _, t := range r.Tables() {
+		if t.IsKind() {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	return out
+}
+
+// specColumns 返回 spec 档的列；statusColumns 返回 meta 与 spec 之外的全部列。
+func specColumns(t *Table) []Column {
+	var out []Column
+	for _, c := range t.Columns {
+		if c.Class == ClassSpec {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func statusColumns(t *Table) []Column {
+	var out []Column
+	for _, c := range t.Columns {
+		if c.Class != ClassSpec && c.Class != ClassMeta {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func writeStruct(b *bytes.Buffer, name string, cols []Column) {
+	if len(cols) == 0 {
+		fmt.Fprintf(b, "type %s struct{}\n\n", name)
+		return
+	}
+	fmt.Fprintf(b, "type %s struct {\n", name)
+	for _, c := range cols {
+		fmt.Fprintf(b, "\t%s %s `json:\"%s\"`\n", GoName(c.Name), goType(c), c.Name)
+	}
+	b.WriteString("}\n\n")
+}
+
+func writeStringSlice(b *bytes.Buffer, cols []Column) {
+	b.WriteString("[]string{")
+	for i, c := range cols {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(b, "%q", c.Name)
+	}
+	b.WriteString("}")
+}
+
+// GenerateKinds 生成 pkg/api/v1/zz_generated_kinds.go：每个 kind 的 Spec / Status 结构体与 kind 清单。
+func GenerateKinds(r *Registry) ([]byte, error) {
+	kinds := kindTables(r)
+	var all []Column
+	for _, t := range kinds {
+		all = append(all, t.Columns...)
+	}
+	var b bytes.Buffer
+	b.WriteString(generatedHeader + "\npackage v1\n\n")
+	writeImports(&b, all)
+	for _, t := range kinds {
+		fmt.Fprintf(&b, "// %sSpec 是 kind %s（%s）的 spec 字段。\n", t.Kind, t.Kind, t.KindClass)
+		writeStruct(&b, t.Kind+"Spec", specColumns(t))
+		fmt.Fprintf(&b, "// %sStatus 是 kind %s 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。\n", t.Kind, t.Kind)
+		writeStruct(&b, t.Kind+"Status", statusColumns(t))
+	}
+	b.WriteString("// generatedKinds 是 kind 清单，Kinds、Lookup、KindsOf 与 DecodeSpec 都查它。\n")
+	b.WriteString("var generatedKinds = []KindInfo{\n")
+	for _, t := range kinds {
+		fmt.Fprintf(&b, "\t{\n\t\tName: %q,\n\t\tClass: %s,\n", t.Kind, kindClassConst[t.KindClass])
+		b.WriteString("\t\tSpecFields: ")
+		writeStringSlice(&b, specColumns(t))
+		b.WriteString(",\n\t\tStatusFields: ")
+		writeStringSlice(&b, statusColumns(t))
+		b.WriteString(",\n\t\tnotApplyable: map[string]string{")
+		first := true
+		for _, c := range t.Columns {
+			if c.Class == ClassSpec {
+				continue
+			}
+			if !first {
+				b.WriteString(", ")
+			}
+			first = false
+			fmt.Fprintf(&b, "%q: %q", c.Name, c.Class.String())
+		}
+		b.WriteString("},\n\t},\n")
+	}
+	b.WriteString("}\n")
+	return format.Source(b.Bytes())
+}
