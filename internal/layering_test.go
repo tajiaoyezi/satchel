@@ -33,10 +33,11 @@ var layerNames = [...]string{"cmd", "projection", "middleware", "service", "core
 func (l layer) String() string { return layerNames[l] }
 
 // layerOf 返回包所属的层；不在六层目录里返回 ok=false。
+// 契约层是 pkg/ 下的全部包（api/v1 之外还有与 satchel-agent 共用的 securechan、xrpc 等，第 02 章）加 internal/command。
 func layerOf(pkg string) (l layer, ok bool) {
 	rel := strings.TrimPrefix(pkg, module+"/")
 	switch {
-	case rel == "pkg/api/v1", rel == "internal/command":
+	case strings.HasPrefix(rel, "pkg/"), rel == "internal/command":
 		return layerContract, true
 	case strings.HasPrefix(rel, "cmd/"):
 		return layerCmd, true
@@ -76,10 +77,12 @@ func checkLayering(imports map[string][]string) []string {
 			}
 			switch {
 			case from == layerContract:
-				if pkg == module+"/internal/command" && dep == module+"/pkg/api/v1" {
+				// 契约包之间可以互引（xrpc 用 securechan、都用 api/v1，internal/command 用 pkg/*），但不能碰 internal/ 下别的包：
+				// pkg/ 被 satchel-agent 以 module 引用，带上 internal 就把主控的实现拖过去了。
+				if strings.HasPrefix(dep, module+"/pkg/") {
 					continue
 				}
-				violations = append(violations, fmt.Sprintf("%s → %s: 契约包不能引用本仓库的其它包", pkg, dep))
+				violations = append(violations, fmt.Sprintf("%s → %s: 契约包只能引用 pkg/ 下的包", pkg, dep))
 			case to < from:
 				violations = append(violations, fmt.Sprintf("%s → %s: %s 层不能引用 %s 层", pkg, dep, from, to))
 			case from == layerCore && to == layerCore && pkg != dep:
@@ -143,8 +146,10 @@ func TestCheckLayeringCatchesViolations(t *testing.T) {
 		{"base 引用 service", map[string][]string{p("internal/base/db"): {p("internal/service/users")}}, "base 层不能引用 service 层"},
 		{"service 引用 projection", map[string][]string{p("internal/service/users"): {p("internal/projection/rest")}}, "service 层不能引用 projection 层"},
 		{"core 互引", map[string][]string{p("internal/core/users"): {p("internal/core/packages")}}, "core 模块之间不能互相引用"},
-		{"pkg 引用 internal", map[string][]string{p("pkg/api/v1"): {p("internal/base/model")}}, "契约包不能引用本仓库的其它包"},
-		{"command 引用 base", map[string][]string{p("internal/command"): {p("internal/base/schema")}}, "契约包不能引用本仓库的其它包"},
+		{"pkg 引用 internal", map[string][]string{p("pkg/api/v1"): {p("internal/base/model")}}, "契约包只能引用 pkg/ 下的包"},
+		{"共用包引用 internal", map[string][]string{p("pkg/securechan"): {p("internal/base/agentconn")}}, "契约包只能引用 pkg/ 下的包"},
+		{"共用包引用 command", map[string][]string{p("pkg/xrpc"): {p("internal/command")}}, "契约包只能引用 pkg/ 下的包"},
+		{"command 引用 base", map[string][]string{p("internal/command"): {p("internal/base/schema")}}, "契约包只能引用 pkg/ 下的包"},
 		{"不在六层里的包", map[string][]string{p("internal/util"): nil}, "不在六层目录里"},
 	}
 	for _, tc := range cases {
@@ -169,6 +174,9 @@ func TestCheckLayeringAcceptsCompliantGraph(t *testing.T) {
 		p("internal/base/store"):       {p("internal/base/model"), "database/sql"},
 		p("internal/command"):          {p("pkg/api/v1")},
 		p("pkg/api/v1"):                {"encoding/json"},
+		p("pkg/securechan"):            {p("pkg/api/v1"), "crypto/ed25519"},
+		p("pkg/xrpc"):                  {p("pkg/securechan"), p("pkg/api/v1")},
+		p("internal/base/agentconn"):   {p("pkg/xrpc")},
 		p("internal"):                  {"testing", "os/exec"},
 	}
 	if got := checkLayering(imports); len(got) != 0 {
