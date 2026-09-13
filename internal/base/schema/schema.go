@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -155,6 +156,20 @@ type Table struct {
 	PrimaryKey  []string
 	Indexes     []Index
 	ForeignKeys []ForeignKey
+	// Settings 是主控设置类单例在键值附属表（system_settings）里的 key 目录：每个 key 是一个没有数据库表示的
+	// 「逻辑列」，只用 Name / Type / Class / Masked 四个字段，进 kind 清单与 Spec / Status 结构体，不进 DDL 与 bun 模型。
+	// 只有 KindMasterSettings 的表可以带它。
+	Settings []Column
+}
+
+// KindColumns 返回构成 kind 逻辑对象的全部字段：列加键值表的 key（第 07 章：单例读的时候合并成一个对象）。
+func (t *Table) KindColumns() []Column {
+	if len(t.Settings) == 0 {
+		return t.Columns
+	}
+	out := make([]Column, 0, len(t.Columns)+len(t.Settings))
+	out = append(out, t.Columns...)
+	return append(out, t.Settings...)
 }
 
 // Column 按名字找列。
@@ -295,6 +310,49 @@ func (r *Registry) Tables() []*Table {
 
 var validFKAction = map[string]bool{"": true, "CASCADE": true, "SET NULL": true, "RESTRICT": true}
 
+var settingKeyRE = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// 设置 key 允许的类型与分档：设置没有动作类，元数据是列的事。
+var (
+	settingTypes   = map[Type]bool{TypeBool: true, TypeInt: true, TypeText: true, TypeJSON: true}
+	settingClasses = map[Class]bool{ClassSpec: true, ClassHuman: true, ClassMasterSelf: true, ClassReadOnly: true, ClassStatus: true}
+)
+
+// validateSettings 校验键值表 key 目录：只有主控设置类可带；key 唯一、合法、不与列撞名；只用 Name / Type / Class / Masked。
+func (r *Registry) validateSettings(t *Table, add func(string, ...any)) {
+	if len(t.Settings) == 0 {
+		return
+	}
+	if t.KindClass != KindMasterSettings {
+		add("表 %s：只有主控设置类的表可以带键值表 key 目录", t.Name)
+	}
+	seen := map[string]bool{}
+	for _, k := range t.Settings {
+		if !settingKeyRE.MatchString(k.Name) {
+			add("表 %s 的设置 key %q 不是小写下划线名字", t.Name, k.Name)
+		}
+		if seen[k.Name] {
+			add("表 %s 的设置 key %s 重复", t.Name, k.Name)
+		}
+		seen[k.Name] = true
+		if _, clash := t.Column(k.Name); clash {
+			add("表 %s 的设置 key %s 与列同名", t.Name, k.Name)
+		}
+		if !settingTypes[k.Type] {
+			add("表 %s 的设置 key %s：类型只能是 bool、int、text、json", t.Name, k.Name)
+		}
+		if !settingClasses[k.Class] {
+			add("表 %s 的设置 key %s：分档只能是 spec、human、master_self、readonly、status", t.Name, k.Name)
+		}
+		if k.Masked && k.Type != TypeText && k.Type != TypeJSON {
+			add("表 %s 的设置 key %s：打码只能标在 text 或 json 上", t.Name, k.Name)
+		}
+		if k.Nullable || k.Default != "" || len(k.Enum) > 0 || k.Check != "" || k.Immutable || k.DefaultTrue {
+			add("表 %s 的设置 key %s：key 不是列，不能带可空、默认值、CHECK、Immutable 或省略即为真", t.Name, k.Name)
+		}
+	}
+}
+
 // Validate 检查注册表；有问题时把全部问题合成一个错误返回。
 func (r *Registry) Validate() error {
 	var problems []string
@@ -351,6 +409,7 @@ func (r *Registry) Validate() error {
 				add("表 %s 的列 %s：打码只能标在文本或 JSON 列上", t.Name, c.Name)
 			}
 		}
+		r.validateSettings(t, add)
 		pk := t.PKColumns()
 		for _, col := range pk {
 			c, ok := t.Column(col)

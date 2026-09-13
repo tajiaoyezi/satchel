@@ -148,10 +148,12 @@ func opsTables() []Table {
 				col("updated_at", TypeTime).def("CURRENT_TIMESTAMP"),
 			},
 			PrimaryKey: []string{"id"},
+			// 键值表里的 key 目录（tables_settings.go）：与列一起构成 SystemSettings 这个逻辑对象。
+			Settings: settingsKeys(),
 		},
 		{
 			// SystemSettings 单例的 key-value 底表：mmwx 以 key 存的设置项与运行态标记。
-			// 每个 key 的分档、打码、是不是运行态由 M1 的设置服务按 key 维护，注册表按列分档表达不了。
+			// 每个 key 的分档、类型、打码与是不是运行态由 system_config 表上的 Settings 目录给出（tables_settings.go）。
 			Name: "system_settings", GoName: "SystemSettingEntry", Origin: OriginMMWX,
 			Columns: []Column{
 				col("key", TypeText),

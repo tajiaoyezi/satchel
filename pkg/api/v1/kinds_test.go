@@ -224,8 +224,9 @@ func TestSystemSettingsTiers(t *testing.T) {
 	if got, _ := info.RejectReason("silent_mode"); got != "human" {
 		t.Errorf("静默模式是第 05 章七组「门」里的设置，应当按人类专属拒收，得到 %q", got)
 	}
-	if strings.Join(info.MaskedFields, ",") != "telegram_bot_token" {
-		t.Errorf("SystemSettings 的打码清单应当只有 telegram_bot_token，得到 %v", info.MaskedFields)
+	// 列上一把（通知推送的 bot token）加键值表三把（Turnstile 密钥、TG 管理机器人 token、外置探针令牌哈希）。
+	if strings.Join(info.MaskedFields, ",") != "telegram_bot_token,turnstile_secret_key,tgbot_token,probe_external_token_sha256" {
+		t.Errorf("SystemSettings 的打码清单不对，得到 %v", info.MaskedFields)
 	}
 	if got, _ := info.RejectReason("telegram_bot_token"); got != "human" {
 		t.Errorf("telegram_bot_token 应当按人类专属拒收，得到 %q", got)

@@ -30,7 +30,7 @@ func kindTables(r *Registry) []*Table {
 // specColumns 返回 spec 档的列；statusColumns 返回 meta 与 spec 之外的全部列。
 func specColumns(t *Table) []Column {
 	var out []Column
-	for _, c := range t.Columns {
+	for _, c := range t.KindColumns() {
 		if c.Class == ClassSpec {
 			out = append(out, c)
 		}
@@ -40,7 +40,7 @@ func specColumns(t *Table) []Column {
 
 func statusColumns(t *Table) []Column {
 	var out []Column
-	for _, c := range t.Columns {
+	for _, c := range t.KindColumns() {
 		if c.Class != ClassSpec && c.Class != ClassMeta {
 			out = append(out, c)
 		}
@@ -51,7 +51,7 @@ func statusColumns(t *Table) []Column {
 // immutableColumns 返回创建后不能改的 spec 列。
 func immutableColumns(t *Table) []Column {
 	var out []Column
-	for _, c := range t.Columns {
+	for _, c := range t.KindColumns() {
 		if c.Immutable {
 			out = append(out, c)
 		}
@@ -70,7 +70,7 @@ func nameColumns(t *Table) []Column {
 		}
 	}
 	var out []Column
-	for _, c := range t.Columns {
+	for _, c := range t.KindColumns() {
 		if in[c.Name] {
 			out = append(out, c)
 		}
@@ -81,7 +81,7 @@ func nameColumns(t *Table) []Column {
 // defaultTrueColumns 返回标了「省略即为真」的列（含非 spec 列，创建路径也要查它）。
 func defaultTrueColumns(t *Table) []Column {
 	var out []Column
-	for _, c := range t.Columns {
+	for _, c := range t.KindColumns() {
 		if c.DefaultTrue {
 			out = append(out, c)
 		}
@@ -92,7 +92,7 @@ func defaultTrueColumns(t *Table) []Column {
 // maskedColumns 返回标了打码的列（不含 meta）。
 func maskedColumns(t *Table) []Column {
 	var out []Column
-	for _, c := range t.Columns {
+	for _, c := range t.KindColumns() {
 		if c.Masked && c.Class != ClassMeta {
 			out = append(out, c)
 		}
@@ -144,7 +144,7 @@ func writeStringSlice(b *bytes.Buffer, cols []Column) {
 // GenerateKinds 生成 pkg/api/v1/zz_generated_kinds.go：每个 kind 的 Spec / Status 结构体与 kind 清单。
 func GenerateKinds(r *Registry) ([]byte, error) {
 	kinds := kindTables(r)
-	// import 只按会出现在 Spec / Status 结构体里的列算，meta 列不在其中。
+	// import 只按会出现在 Spec / Status 结构体里的字段算（列加键值表的 key），meta 列不在其中。
 	var emitted []Column
 	for _, t := range kinds {
 		emitted = append(emitted, specColumns(t)...)
@@ -177,7 +177,7 @@ func GenerateKinds(r *Registry) ([]byte, error) {
 		writeStringSlice(&b, defaultTrueColumns(t))
 		b.WriteString(",\n\t\tnotApplyable: map[string]string{")
 		first := true
-		for _, c := range t.Columns {
+		for _, c := range t.KindColumns() {
 			if c.Class == ClassSpec {
 				continue
 			}

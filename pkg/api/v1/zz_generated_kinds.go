@@ -590,56 +590,148 @@ type SubscriptionLinkStatus struct{}
 
 // SystemSettingsSpec 是 kind SystemSettings（master_settings）的 spec 字段。
 type SystemSettingsSpec struct {
-	ProxyGroupsSourceURL            string `json:"proxy_groups_source_url"`
-	ClientCompatibilityMode         bool   `json:"client_compatibility_mode"`
-	EnableShortLink                 bool   `json:"enable_short_link"`
-	EnableSubInfoNodes              bool   `json:"enable_sub_info_nodes"`
-	SubInfoV2rayOnly                bool   `json:"sub_info_v2ray_only"`
-	SubInfoExpirePrefix             string `json:"sub_info_expire_prefix"`
-	SubInfoTrafficPrefix            string `json:"sub_info_traffic_prefix"`
-	SpeedCollectInterval            int64  `json:"speed_collect_interval"`
-	TrafficCollectInterval          int64  `json:"traffic_collect_interval"`
-	TrafficCheckInterval            int64  `json:"traffic_check_interval"`
-	HeartbeatInterval               int64  `json:"heartbeat_interval"`
-	AgentLogEnabled                 bool   `json:"agent_log_enabled"`
-	NotifyEnabled                   bool   `json:"notify_enabled"`
-	NotifyLogin                     bool   `json:"notify_login"`
-	NotifySubscribeFetch            bool   `json:"notify_subscribe_fetch"`
-	NotifyDailyTraffic              bool   `json:"notify_daily_traffic"`
-	NotifyServerOffline             bool   `json:"notify_server_offline"`
-	NotifyServerOnline              bool   `json:"notify_server_online"`
-	NotifyTrafficThreshold          bool   `json:"notify_traffic_threshold"`
-	NotifyDailyTrafficTime          string `json:"notify_daily_traffic_time"`
-	NotifyTrafficThresholdPercent   int64  `json:"notify_traffic_threshold_percent"`
-	NotifyTrafficThreshold80        bool   `json:"notify_traffic_threshold_80"`
-	NotifyOverLimit                 bool   `json:"notify_over_limit"`
-	NotifyPackageExpiring           bool   `json:"notify_package_expiring"`
-	NotifyPackageExpiringDays       int64  `json:"notify_package_expiring_days"`
-	NotifyPackageExpired            bool   `json:"notify_package_expired"`
-	NotifyUserRegistered            bool   `json:"notify_user_registered"`
-	NotifyTelegramBound             bool   `json:"notify_telegram_bound"`
-	NotifyCertResult                bool   `json:"notify_cert_result"`
-	NotifyAgentLongOffline          bool   `json:"notify_agent_long_offline"`
-	NotifyAgentLongOfflineMinutes   int64  `json:"notify_agent_long_offline_minutes"`
-	NotifyDeviceLimitExceeded       bool   `json:"notify_device_limit_exceeded"`
-	NotifyServerRenewal             bool   `json:"notify_server_renewal"`
-	NotifyIPBan                     bool   `json:"notify_ip_ban"`
-	EnableOverrideScripts           bool   `json:"enable_override_scripts"`
-	SubscriptionOutputFormat        string `json:"subscription_output_format"`
-	EnableMiaomiaowuFeatures        bool   `json:"enable_miaomiaowu_features"`
-	DefaultTemplateFilename         string `json:"default_template_filename"`
-	DefaultSurgeTemplateFilename    string `json:"default_surge_template_filename"`
-	NodeNameMultiplierPrefixEnabled bool   `json:"node_name_multiplier_prefix_enabled"`
-	NodeNameMultiplierLeft          string `json:"node_name_multiplier_left"`
-	NodeNameMultiplierRight         string `json:"node_name_multiplier_right"`
+	ProxyGroupsSourceURL             string          `json:"proxy_groups_source_url"`
+	ClientCompatibilityMode          bool            `json:"client_compatibility_mode"`
+	EnableShortLink                  bool            `json:"enable_short_link"`
+	EnableSubInfoNodes               bool            `json:"enable_sub_info_nodes"`
+	SubInfoV2rayOnly                 bool            `json:"sub_info_v2ray_only"`
+	SubInfoExpirePrefix              string          `json:"sub_info_expire_prefix"`
+	SubInfoTrafficPrefix             string          `json:"sub_info_traffic_prefix"`
+	SpeedCollectInterval             int64           `json:"speed_collect_interval"`
+	TrafficCollectInterval           int64           `json:"traffic_collect_interval"`
+	TrafficCheckInterval             int64           `json:"traffic_check_interval"`
+	HeartbeatInterval                int64           `json:"heartbeat_interval"`
+	AgentLogEnabled                  bool            `json:"agent_log_enabled"`
+	NotifyEnabled                    bool            `json:"notify_enabled"`
+	NotifyLogin                      bool            `json:"notify_login"`
+	NotifySubscribeFetch             bool            `json:"notify_subscribe_fetch"`
+	NotifyDailyTraffic               bool            `json:"notify_daily_traffic"`
+	NotifyServerOffline              bool            `json:"notify_server_offline"`
+	NotifyServerOnline               bool            `json:"notify_server_online"`
+	NotifyTrafficThreshold           bool            `json:"notify_traffic_threshold"`
+	NotifyDailyTrafficTime           string          `json:"notify_daily_traffic_time"`
+	NotifyTrafficThresholdPercent    int64           `json:"notify_traffic_threshold_percent"`
+	NotifyTrafficThreshold80         bool            `json:"notify_traffic_threshold_80"`
+	NotifyOverLimit                  bool            `json:"notify_over_limit"`
+	NotifyPackageExpiring            bool            `json:"notify_package_expiring"`
+	NotifyPackageExpiringDays        int64           `json:"notify_package_expiring_days"`
+	NotifyPackageExpired             bool            `json:"notify_package_expired"`
+	NotifyUserRegistered             bool            `json:"notify_user_registered"`
+	NotifyTelegramBound              bool            `json:"notify_telegram_bound"`
+	NotifyCertResult                 bool            `json:"notify_cert_result"`
+	NotifyAgentLongOffline           bool            `json:"notify_agent_long_offline"`
+	NotifyAgentLongOfflineMinutes    int64           `json:"notify_agent_long_offline_minutes"`
+	NotifyDeviceLimitExceeded        bool            `json:"notify_device_limit_exceeded"`
+	NotifyServerRenewal              bool            `json:"notify_server_renewal"`
+	NotifyIPBan                      bool            `json:"notify_ip_ban"`
+	EnableOverrideScripts            bool            `json:"enable_override_scripts"`
+	SubscriptionOutputFormat         string          `json:"subscription_output_format"`
+	EnableMiaomiaowuFeatures         bool            `json:"enable_miaomiaowu_features"`
+	DefaultTemplateFilename          string          `json:"default_template_filename"`
+	DefaultSurgeTemplateFilename     string          `json:"default_surge_template_filename"`
+	NodeNameMultiplierPrefixEnabled  bool            `json:"node_name_multiplier_prefix_enabled"`
+	NodeNameMultiplierLeft           string          `json:"node_name_multiplier_left"`
+	NodeNameMultiplierRight          string          `json:"node_name_multiplier_right"`
+	BrandingSiteTitle                string          `json:"branding_site_title"`
+	BrandingBrandTitle               string          `json:"branding_brand_title"`
+	BrandingLogoURL                  string          `json:"branding_logo_url"`
+	BrandingLogoExt                  string          `json:"branding_logo_ext"`
+	LoginWallpaper                   string          `json:"login_wallpaper"`
+	DefaultTheme                     string          `json:"default_theme"`
+	DashboardRefreshIntervalMs       int64           `json:"dashboard_refresh_interval_ms"`
+	RedeemCopyTemplate               string          `json:"redeem_copy_template"`
+	NotifyDailyTrafficTemplate       string          `json:"notify_daily_traffic_template"`
+	NotifyServerToleranceSeconds     int64           `json:"notify_server_tolerance_seconds"`
+	SubRateEnabled                   bool            `json:"sub_rate_enabled"`
+	SubRateLimit                     int64           `json:"sub_rate_limit"`
+	SubRateWindowMinutes             int64           `json:"sub_rate_window_minutes"`
+	BlockUnknownSubscriptionUa       bool            `json:"block_unknown_subscription_ua"`
+	ProbeDisguiseEnabled             bool            `json:"probe_disguise_enabled"`
+	ProbeInternalEnabled             bool            `json:"probe_internal_enabled"`
+	ProbeExternalEnabled             bool            `json:"probe_external_enabled"`
+	ProbeExternalAccessOnly          bool            `json:"probe_external_access_only"`
+	ProbeExternalTokenSha256         Secret          `json:"probe_external_token_sha256"`
+	ProbeDisguiseTitle               string          `json:"probe_disguise_title"`
+	ProbeDisguiseTheme               string          `json:"probe_disguise_theme"`
+	ProbeDisguiseLogo                string          `json:"probe_disguise_logo"`
+	ProbeDisguiseServerIds           json.RawMessage `json:"probe_disguise_server_ids"`
+	ProbeDisguiseShowName            bool            `json:"probe_disguise_show_name"`
+	ProbeDisguiseMetricCpu           bool            `json:"probe_disguise_metric_cpu"`
+	ProbeDisguiseMetricMem           bool            `json:"probe_disguise_metric_mem"`
+	ProbeDisguiseMetricDisk          bool            `json:"probe_disguise_metric_disk"`
+	ProbeDisguiseMetricPing          bool            `json:"probe_disguise_metric_ping"`
+	ProbeDisguiseMetricTraffic       bool            `json:"probe_disguise_metric_traffic"`
+	ProbeDisguiseMetricSpeed         bool            `json:"probe_disguise_metric_speed"`
+	ProbeDisguiseShowExpiry          bool            `json:"probe_disguise_show_expiry"`
+	ProbeDisguiseShowPrice           bool            `json:"probe_disguise_show_price"`
+	ProbeDisguiseShowGlobe           bool            `json:"probe_disguise_show_globe"`
+	ProbeDisguiseShowDailyTrend      bool            `json:"probe_disguise_show_daily_trend"`
+	ProbeDisguiseShowTrafficHotspots bool            `json:"probe_disguise_show_traffic_hotspots"`
+	ProbeDisguiseShowTraffic7d       bool            `json:"probe_disguise_show_traffic_7d"`
+	ProbeDisguiseShowResourceHeatmap bool            `json:"probe_disguise_show_resource_heatmap"`
+	ProbeDisguiseShowTrafficQuota    bool            `json:"probe_disguise_show_traffic_quota"`
+	ProbeDisguiseShowRenewalTimeline bool            `json:"probe_disguise_show_renewal_timeline"`
+	ProbeDisguiseShowHealthScore     bool            `json:"probe_disguise_show_health_score"`
+	ProbeDisguiseShowReturnRoute     bool            `json:"probe_disguise_show_return_route"`
+	ProbeDisguisePingTargets         json.RawMessage `json:"probe_disguise_ping_targets"`
+	ProbeDisguisePingTargetsOverride json.RawMessage `json:"probe_disguise_ping_targets_override"`
+	ProbeDisguisePingIntervalMs      int64           `json:"probe_disguise_ping_interval_ms"`
+	ProbeQualityAlertConfig          json.RawMessage `json:"probe_quality_alert_config"`
+	AnnouncementConfig               json.RawMessage `json:"announcement_config"`
+	AnnounceProbeTesterIds           json.RawMessage `json:"announce_probe_tester_ids"`
+	RealityDomains                   json.RawMessage `json:"reality_domains"`
+	RealityDomainsBlocked            json.RawMessage `json:"reality_domains_blocked"`
+	UserPermPages                    json.RawMessage `json:"user_perm_pages"`
+	UserQuotaSubscribe               int64           `json:"user_quota_subscribe"`
+	UserQuotaTemplate                int64           `json:"user_quota_template"`
+	UserQuotaRoutedOutbound          int64           `json:"user_quota_routed_outbound"`
+	UserQuotaOverride                int64           `json:"user_quota_override"`
+	UserRoutedOutboundEnabled        bool            `json:"user_routed_outbound_enabled"`
+	UserRoutedOutboundDailyLimit     int64           `json:"user_routed_outbound_daily_limit"`
+	UserHiddenRuleTemplates          json.RawMessage `json:"user_hidden_rule_templates"`
+	UserVisibleOwnedRuleTemplates    json.RawMessage `json:"user_visible_owned_rule_templates"`
 }
 
 // SystemSettingsStatus 是 kind SystemSettings 的 status 字段：status、动作专属、人类专属、主控自身类与只读，apply 一律拒收。
 type SystemSettingsStatus struct {
-	TelegramBotToken  Secret `json:"telegram_bot_token"`
-	TelegramChatID    string `json:"telegram_chat_id"`
-	SilentMode        bool   `json:"silent_mode"`
-	SilentModeTimeout int64  `json:"silent_mode_timeout"`
+	TelegramBotToken                   Secret          `json:"telegram_bot_token"`
+	TelegramChatID                     string          `json:"telegram_chat_id"`
+	SilentMode                         bool            `json:"silent_mode"`
+	SilentModeTimeout                  int64           `json:"silent_mode_timeout"`
+	MasterURL                          string          `json:"master_url"`
+	MasterRecoveryURL                  string          `json:"master_recovery_url"`
+	SubscriptionURL                    string          `json:"subscription_url"`
+	MasterLocalOnly                    bool            `json:"master_local_only"`
+	ProbeDisguiseBlockLogin            bool            `json:"probe_disguise_block_login"`
+	BruteForceEnabled                  bool            `json:"brute_force_enabled"`
+	BruteForceMaxFailures              int64           `json:"brute_force_max_failures"`
+	BruteForceWindowMinutes            int64           `json:"brute_force_window_minutes"`
+	BruteForceBlockMinutes             int64           `json:"brute_force_block_minutes"`
+	LoginRateMaxAttempts               int64           `json:"login_rate_max_attempts"`
+	LoginRateWindowMinutes             int64           `json:"login_rate_window_minutes"`
+	LoginRateLockMinutes               int64           `json:"login_rate_lock_minutes"`
+	SkipLocalIP                        bool            `json:"skip_local_ip"`
+	TurnstileSiteKey                   string          `json:"turnstile_site_key"`
+	TurnstileSecretKey                 Secret          `json:"turnstile_secret_key"`
+	TgbotToken                         Secret          `json:"tgbot_token"`
+	TgbotAdminIds                      json.RawMessage `json:"tgbot_admin_ids"`
+	UpdateCdnEnabled                   bool            `json:"update_cdn_enabled"`
+	TgbotEnabled                       bool            `json:"tgbot_enabled"`
+	TgbotURL                           string          `json:"tgbot_url"`
+	TgbotWebappDevPreview              bool            `json:"tgbot_webapp_dev_preview"`
+	MasterHttpsRecoveryEnabled         bool            `json:"master_https_recovery_enabled"`
+	MasterRecoveryFailureMinutes       int64           `json:"master_recovery_failure_minutes"`
+	MasterRecoveryStartupGraceMinutes  int64           `json:"master_recovery_startup_grace_minutes"`
+	ExternalHttps                      bool            `json:"external_https"`
+	ProbeCdnRegionsEndpoint            string          `json:"probe_cdn_regions_endpoint"`
+	RequireEncryption                  bool            `json:"require_encryption"`
+	MasterHttpsRecoveryPending         bool            `json:"master_https_recovery_pending"`
+	MasterHttpsRecoveryReason          string          `json:"master_https_recovery_reason"`
+	MasterCertPending                  string          `json:"master_cert_pending"`
+	MasterForcePublicHttp              bool            `json:"master_force_public_http"`
+	PrimaryAdminUsername               string          `json:"primary_admin_username"`
+	PendingOutboundAddressReplacements json.RawMessage `json:"pending_outbound_address_replacements"`
+	ProbeQualityAlertStates            json.RawMessage `json:"probe_quality_alert_states"`
 }
 
 // TaskSpec 是 kind Task（action）的 spec 字段。
@@ -1029,13 +1121,13 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "SystemSettings",
 		Class:             ClassMasterSettings,
-		SpecFields:        []string{"proxy_groups_source_url", "client_compatibility_mode", "enable_short_link", "enable_sub_info_nodes", "sub_info_v2ray_only", "sub_info_expire_prefix", "sub_info_traffic_prefix", "speed_collect_interval", "traffic_collect_interval", "traffic_check_interval", "heartbeat_interval", "agent_log_enabled", "notify_enabled", "notify_login", "notify_subscribe_fetch", "notify_daily_traffic", "notify_server_offline", "notify_server_online", "notify_traffic_threshold", "notify_daily_traffic_time", "notify_traffic_threshold_percent", "notify_traffic_threshold_80", "notify_over_limit", "notify_package_expiring", "notify_package_expiring_days", "notify_package_expired", "notify_user_registered", "notify_telegram_bound", "notify_cert_result", "notify_agent_long_offline", "notify_agent_long_offline_minutes", "notify_device_limit_exceeded", "notify_server_renewal", "notify_ip_ban", "enable_override_scripts", "subscription_output_format", "enable_miaomiaowu_features", "default_template_filename", "default_surge_template_filename", "node_name_multiplier_prefix_enabled", "node_name_multiplier_left", "node_name_multiplier_right"},
-		StatusFields:      []string{"telegram_bot_token", "telegram_chat_id", "silent_mode", "silent_mode_timeout"},
-		MaskedFields:      []string{"telegram_bot_token"},
+		SpecFields:        []string{"proxy_groups_source_url", "client_compatibility_mode", "enable_short_link", "enable_sub_info_nodes", "sub_info_v2ray_only", "sub_info_expire_prefix", "sub_info_traffic_prefix", "speed_collect_interval", "traffic_collect_interval", "traffic_check_interval", "heartbeat_interval", "agent_log_enabled", "notify_enabled", "notify_login", "notify_subscribe_fetch", "notify_daily_traffic", "notify_server_offline", "notify_server_online", "notify_traffic_threshold", "notify_daily_traffic_time", "notify_traffic_threshold_percent", "notify_traffic_threshold_80", "notify_over_limit", "notify_package_expiring", "notify_package_expiring_days", "notify_package_expired", "notify_user_registered", "notify_telegram_bound", "notify_cert_result", "notify_agent_long_offline", "notify_agent_long_offline_minutes", "notify_device_limit_exceeded", "notify_server_renewal", "notify_ip_ban", "enable_override_scripts", "subscription_output_format", "enable_miaomiaowu_features", "default_template_filename", "default_surge_template_filename", "node_name_multiplier_prefix_enabled", "node_name_multiplier_left", "node_name_multiplier_right", "branding_site_title", "branding_brand_title", "branding_logo_url", "branding_logo_ext", "login_wallpaper", "default_theme", "dashboard_refresh_interval_ms", "redeem_copy_template", "notify_daily_traffic_template", "notify_server_tolerance_seconds", "sub_rate_enabled", "sub_rate_limit", "sub_rate_window_minutes", "block_unknown_subscription_ua", "probe_disguise_enabled", "probe_internal_enabled", "probe_external_enabled", "probe_external_access_only", "probe_external_token_sha256", "probe_disguise_title", "probe_disguise_theme", "probe_disguise_logo", "probe_disguise_server_ids", "probe_disguise_show_name", "probe_disguise_metric_cpu", "probe_disguise_metric_mem", "probe_disguise_metric_disk", "probe_disguise_metric_ping", "probe_disguise_metric_traffic", "probe_disguise_metric_speed", "probe_disguise_show_expiry", "probe_disguise_show_price", "probe_disguise_show_globe", "probe_disguise_show_daily_trend", "probe_disguise_show_traffic_hotspots", "probe_disguise_show_traffic_7d", "probe_disguise_show_resource_heatmap", "probe_disguise_show_traffic_quota", "probe_disguise_show_renewal_timeline", "probe_disguise_show_health_score", "probe_disguise_show_return_route", "probe_disguise_ping_targets", "probe_disguise_ping_targets_override", "probe_disguise_ping_interval_ms", "probe_quality_alert_config", "announcement_config", "announce_probe_tester_ids", "reality_domains", "reality_domains_blocked", "user_perm_pages", "user_quota_subscribe", "user_quota_template", "user_quota_routed_outbound", "user_quota_override", "user_routed_outbound_enabled", "user_routed_outbound_daily_limit", "user_hidden_rule_templates", "user_visible_owned_rule_templates"},
+		StatusFields:      []string{"telegram_bot_token", "telegram_chat_id", "silent_mode", "silent_mode_timeout", "master_url", "master_recovery_url", "subscription_url", "master_local_only", "probe_disguise_block_login", "brute_force_enabled", "brute_force_max_failures", "brute_force_window_minutes", "brute_force_block_minutes", "login_rate_max_attempts", "login_rate_window_minutes", "login_rate_lock_minutes", "skip_local_ip", "turnstile_site_key", "turnstile_secret_key", "tgbot_token", "tgbot_admin_ids", "update_cdn_enabled", "tgbot_enabled", "tgbot_url", "tgbot_webapp_dev_preview", "master_https_recovery_enabled", "master_recovery_failure_minutes", "master_recovery_startup_grace_minutes", "external_https", "probe_cdn_regions_endpoint", "require_encryption", "master_https_recovery_pending", "master_https_recovery_reason", "master_cert_pending", "master_force_public_http", "primary_admin_username", "pending_outbound_address_replacements", "probe_quality_alert_states"},
+		MaskedFields:      []string{"telegram_bot_token", "turnstile_secret_key", "tgbot_token", "probe_external_token_sha256"},
 		ImmutableFields:   []string{},
 		NameFields:        []string{},
 		DefaultTrueFields: []string{"enable_short_link", "enable_miaomiaowu_features"},
-		notApplyable:      map[string]string{"id": "meta", "telegram_bot_token": "human", "telegram_chat_id": "master_self", "silent_mode": "human", "silent_mode_timeout": "human", "created_at": "meta", "updated_at": "meta", "resource_version": "meta"},
+		notApplyable:      map[string]string{"id": "meta", "telegram_bot_token": "human", "telegram_chat_id": "master_self", "silent_mode": "human", "silent_mode_timeout": "human", "created_at": "meta", "updated_at": "meta", "resource_version": "meta", "master_url": "human", "master_recovery_url": "human", "subscription_url": "human", "master_local_only": "human", "probe_disguise_block_login": "human", "brute_force_enabled": "human", "brute_force_max_failures": "human", "brute_force_window_minutes": "human", "brute_force_block_minutes": "human", "login_rate_max_attempts": "human", "login_rate_window_minutes": "human", "login_rate_lock_minutes": "human", "skip_local_ip": "human", "turnstile_site_key": "human", "turnstile_secret_key": "human", "tgbot_token": "human", "tgbot_admin_ids": "human", "update_cdn_enabled": "master_self", "tgbot_enabled": "master_self", "tgbot_url": "master_self", "tgbot_webapp_dev_preview": "master_self", "master_https_recovery_enabled": "master_self", "master_recovery_failure_minutes": "master_self", "master_recovery_startup_grace_minutes": "master_self", "external_https": "master_self", "probe_cdn_regions_endpoint": "master_self", "require_encryption": "readonly", "master_https_recovery_pending": "status", "master_https_recovery_reason": "status", "master_cert_pending": "status", "master_force_public_http": "status", "primary_admin_username": "status", "pending_outbound_address_replacements": "status", "probe_quality_alert_states": "status"},
 	},
 	{
 		Name:              "Task",
