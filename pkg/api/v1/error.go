@@ -11,8 +11,10 @@ type Code string
 
 // 错误码。退出码的对应关系见 exitCodes；没列在那里的一律退出码 1。
 // name_taken 只用于自然键冲突；其它唯一约束冲突与前置条件不满足用 conflict；
-// config 是配置文件或环境变量不合法，与命令行用法错误（bad_request、退出码 2）分开。
+// usage 只给命令行用法错误（未知子命令、未知 flag、多余参数），退出码 2 只由它产生；
+// bad_request 是请求内容不对（含 CHECK / 外键 / NOT NULL 违反），config 是配置文件或环境变量不合法，两者都退出码 1。
 const (
+	CodeUsage                 Code = "usage"
 	CodeBadRequest            Code = "bad_request"
 	CodeUnsupportedAPIVersion Code = "unsupported_api_version"
 	CodeUnknownField          Code = "unknown_field"
@@ -112,17 +114,14 @@ const (
 )
 
 var exitCodes = map[Code]int{
-	CodeBadRequest:            ExitUsage,
-	CodeUnsupportedAPIVersion: ExitUsage,
-	CodeUnknownField:          ExitUsage,
-	CodeFieldNotApplyable:     ExitUsage,
-	CodeUnauthenticated:       ExitUnauthenticated,
-	CodeForbidden:             ExitForbidden,
-	CodeNotFound:              ExitNotFound,
-	CodeVersionConflict:       ExitVersionConflict,
-	CodeConfirmRequired:       ExitConfirmRequired,
-	CodePartialFailure:        ExitPartialFailure,
-	CodeHumanRequired:         ExitHumanRequired,
+	CodeUsage:           ExitUsage,
+	CodeUnauthenticated: ExitUnauthenticated,
+	CodeForbidden:       ExitForbidden,
+	CodeNotFound:        ExitNotFound,
+	CodeVersionConflict: ExitVersionConflict,
+	CodeConfirmRequired: ExitConfirmRequired,
+	CodePartialFailure:  ExitPartialFailure,
+	CodeHumanRequired:   ExitHumanRequired,
 }
 
 // ExitCodeOf 把错误折算成进程退出码：nil 为 0，不是本包错误或没登记退出码的一律 1。

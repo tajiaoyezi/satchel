@@ -105,12 +105,20 @@ func TestEnsureDataDir(t *testing.T) {
 	if err := EnsureDataDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(dir)
-	if err != nil {
-		t.Fatal(err)
+	for _, d := range []string{dir, filepath.Join(dir, SubscribesDir), filepath.Join(dir, RuleTemplatesDir)} {
+		info, err := os.Stat(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("%s 应当是目录", d)
+		}
+		if perm := info.Mode().Perm(); perm != 0o700 {
+			t.Fatalf("%s 权限应当是 0700，得到 %o", d, perm)
+		}
 	}
-	if perm := info.Mode().Perm(); perm != 0o700 {
-		t.Fatalf("数据目录权限应当是 0700，得到 %o", perm)
+	if len(DataSubDirs) != 2 {
+		t.Fatalf("数据目录只有两个子目录，得到 %v", DataSubDirs)
 	}
 }
 

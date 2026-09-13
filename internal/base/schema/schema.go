@@ -90,7 +90,10 @@ type Column struct {
 	Nullable bool
 	// Default 是 DDL 里的默认值字面量，例如 1、''、FALSE、CURRENT_TIMESTAMP；空表示没有默认值。
 	Default string
-	Class   Class
+	// DefaultTrue 表示「省略即为真」：库默认值仍是 FALSE（Insert 把 Go 零值写成 false），
+	// 但 mmwx 里这一列默认 1，创建路径与 apply 解码器在没填时要置 true。只能标在默认 FALSE 的布尔列上。
+	DefaultTrue bool
+	Class       Class
 	// Enum 非空时生成 CHECK (col IN (...))，只用于文本列。
 	Enum []string
 	// Check 非空时生成 CHECK (<Check>)，任意谓词，如 dedup_key <> ''。
@@ -127,12 +130,14 @@ type Index struct {
 	NaturalKey bool
 }
 
-// ForeignKey 是一条外键。OnDelete 取 CASCADE、SET NULL、RESTRICT 或空（数据库默认 NO ACTION）。
+// ForeignKey 是一条外键。OnDelete 与 OnUpdate 取 CASCADE、SET NULL、RESTRICT 或空（数据库默认 NO ACTION）。
+// OnUpdate 只给引用会改的自然键（users.username）的外键写，引用整数 id 的外键留空。
 type ForeignKey struct {
 	Columns    []string
 	RefTable   string
 	RefColumns []string
 	OnDelete   string
+	OnUpdate   string
 }
 
 // Table 是一张表。Kind 非空表示它背后是一个 kind，KindClass 必须同时给出。
@@ -288,7 +293,7 @@ func (r *Registry) Tables() []*Table {
 	return tables
 }
 
-var validOnDelete = map[string]bool{"": true, "CASCADE": true, "SET NULL": true, "RESTRICT": true}
+var validFKAction = map[string]bool{"": true, "CASCADE": true, "SET NULL": true, "RESTRICT": true}
 
 // Validate 检查注册表；有问题时把全部问题合成一个错误返回。
 func (r *Registry) Validate() error {
@@ -335,6 +340,9 @@ func (r *Registry) Validate() error {
 			}
 			if c.Type == TypeBool && c.Default != "" && !strings.EqualFold(c.Default, "FALSE") {
 				add("表 %s 的列 %s：布尔列的默认值只能是 FALSE（Go 的零值分不清没填与 false）", t.Name, c.Name)
+			}
+			if c.DefaultTrue && (c.Type != TypeBool || !strings.EqualFold(c.Default, "FALSE")) {
+				add("表 %s 的列 %s：「省略即为真」只能标在默认值为 FALSE 的布尔列上", t.Name, c.Name)
 			}
 			if c.Immutable && c.Class != ClassSpec {
 				add("表 %s 的列 %s：Immutable 只能标在 spec 列上", t.Name, c.Name)
@@ -407,8 +415,11 @@ func (r *Registry) Validate() error {
 					}
 				}
 			}
-			if !validOnDelete[fk.OnDelete] {
+			if !validFKAction[fk.OnDelete] {
 				add("表 %s 的外键 ON DELETE %q 不合法", t.Name, fk.OnDelete)
+			}
+			if !validFKAction[fk.OnUpdate] {
+				add("表 %s 的外键 ON UPDATE %q 不合法", t.Name, fk.OnUpdate)
 			}
 		}
 	}

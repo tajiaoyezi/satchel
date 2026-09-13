@@ -35,16 +35,15 @@ func loadConfig(dataDir string) (string, db.Config, error) {
 	return dir, cfg, err
 }
 
-// openForWrite 为会写库的命令打开数据库：SQLite 模式先建数据目录，postgres 模式不碰它。
+// openForWrite 为会写库的命令打开数据库：先确保数据目录与子目录存在（两种驱动都一样——
+// 主控密钥、订阅文件、规则模板在 postgres 模式下也在这个目录里），再开库。只读命令不建目录。
 func openForWrite(ctx context.Context, dataDir string) (*bun.DB, error) {
 	dir, cfg, err := loadConfig(dataDir)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Driver == db.DriverSQLite {
-		if err := db.EnsureDataDir(dir); err != nil {
-			return nil, err
-		}
+	if err := db.EnsureDataDir(dir); err != nil {
+		return nil, err
 	}
 	return db.Open(ctx, cfg)
 }

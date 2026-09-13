@@ -8,7 +8,12 @@ func fkTo(column, refTable, refColumn, onDelete string) ForeignKey {
 	return ForeignKey{Columns: []string{column}, RefTable: refTable, RefColumns: []string{refColumn}, OnDelete: onDelete}
 }
 
-func fkUser(column string) ForeignKey { return fkTo(column, "users", "username", "CASCADE") }
+// fkUser 指向 users.username：用户物理删除时级联删，改名时级联改（第 05 章七组的管理员改名、附录 B 116 的用户改名）。
+func fkUser(column string) ForeignKey {
+	f := fkTo(column, "users", "username", "CASCADE")
+	f.OnUpdate = "CASCADE"
+	return f
+}
 
 func userTables() []Table {
 	return []Table{
@@ -29,7 +34,7 @@ func userTables() []Table {
 				col("node_device_limit_overrides", TypeJSON).def("'{}'"),
 				col("tg_notify_enabled", TypeBool).def("FALSE"),
 				// 动作专属：停用 / 启用用户，绑定 / 解绑 Telegram。
-				col("is_active", TypeBool).def("FALSE").cls(ClassAction),
+				col("is_active", TypeBool).def("FALSE").defaultTrue().cls(ClassAction),
 				col("telegram_id", TypeInt).null().cls(ClassAction),
 				col("telegram_username", TypeText).def("''").cls(ClassAction),
 				col("telegram_bound_at", TypeTime).null().cls(ClassAction),
@@ -97,10 +102,10 @@ func userTables() []Table {
 				col("cache_expire_minutes", TypeInt).def("0"),
 				col("sync_traffic", TypeBool).def("FALSE"),
 				col("sync_scope", TypeText).def("'saved_only'"),
-				col("keep_node_name", TypeBool).def("FALSE"),
+				col("keep_node_name", TypeBool).def("FALSE").defaultTrue(),
 				col("custom_rules_enabled", TypeBool).def("FALSE"),
 				col("enable_short_link", TypeBool).def("FALSE"),
-				col("use_new_template_system", TypeBool).def("FALSE"),
+				col("use_new_template_system", TypeBool).def("FALSE").defaultTrue(),
 				col("enable_proxy_provider", TypeBool).def("FALSE"),
 				col("node_name_filter", TypeText).def("'剩余|流量|到期|订阅|时间|重置'"),
 				col("node_order", TypeJSON).def("'[]'"),
@@ -123,7 +128,7 @@ func userTables() []Table {
 				col("routed_node_id", TypeInt),
 				col("email", TypeText),
 				col("credential_json", TypeJSON).masked(),
-				col("is_active", TypeBool).def("FALSE"),
+				col("is_active", TypeBool).def("FALSE").defaultTrue(),
 			),
 			Indexes: []Index{
 				{Name: "user_subaccounts_node_user_key", Columns: []string{"routed_node_id", "username"}, Unique: true},

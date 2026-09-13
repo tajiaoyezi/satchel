@@ -907,6 +907,7 @@ type Server struct {
 	RevokePending          bool            `bun:"revoke_pending"`
 	AppliedHash            string          `bun:"applied_hash"`
 	AppliedGeneration      int64           `bun:"applied_generation"`
+	FirstApplyEligible     bool            `bun:"first_apply_eligible"`
 	CreatedAt              time.Time       `bun:"created_at"`
 	UpdatedAt              time.Time       `bun:"updated_at"`
 	ResourceVersion        int64           `bun:"resource_version"`

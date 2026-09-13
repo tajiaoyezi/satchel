@@ -86,6 +86,9 @@ func tableDDL(t *Table, d Dialect) []string {
 	for _, fk := range t.ForeignKeys {
 		s := fmt.Sprintf("  FOREIGN KEY (%s) REFERENCES %s (%s)",
 			strings.Join(fk.Columns, ", "), fk.RefTable, strings.Join(fk.RefColumns, ", "))
+		if fk.OnUpdate != "" {
+			s += " ON UPDATE " + fk.OnUpdate
+		}
 		if fk.OnDelete != "" {
 			s += " ON DELETE " + fk.OnDelete
 		}

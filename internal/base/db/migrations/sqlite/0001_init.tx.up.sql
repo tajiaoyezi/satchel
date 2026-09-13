@@ -398,7 +398,7 @@ CREATE TABLE servers (
   traffic_limit INTEGER NOT NULL DEFAULT 0,
   traffic_reset_day INTEGER NOT NULL DEFAULT 0,
   traffic_stats_mode TEXT NOT NULL DEFAULT 'both' CHECK (traffic_stats_mode IN ('both', 'upload', 'download', 'max')),
-  traffic_source TEXT NOT NULL DEFAULT 'core' CHECK (traffic_source IN ('core', 'system')),
+  traffic_source TEXT NOT NULL DEFAULT 'system' CHECK (traffic_source IN ('core', 'system')),
   include_in_traffic_stats BOOLEAN NOT NULL DEFAULT FALSE,
   traffic_calibration INTEGER NOT NULL DEFAULT 0,
   region TEXT NOT NULL DEFAULT '',
@@ -466,6 +466,7 @@ CREATE TABLE servers (
   revoke_pending BOOLEAN NOT NULL DEFAULT FALSE,
   applied_hash TEXT NOT NULL DEFAULT '',
   applied_generation INTEGER NOT NULL DEFAULT 0,
+  first_apply_eligible BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resource_version INTEGER NOT NULL DEFAULT 1,
@@ -631,7 +632,7 @@ CREATE TABLE alerts (
 
 --bun:split
 
-CREATE UNIQUE INDEX alerts_dedup_key_active ON alerts (dedup_key) WHERE status <> 'resolved';
+CREATE UNIQUE INDEX alerts_dedup_key_active ON alerts (dedup_key) WHERE status <> 'resolved' AND deleted_at IS NULL;
 
 --bun:split
 
@@ -1502,7 +1503,7 @@ CREATE TABLE api_tokens (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resource_version INTEGER NOT NULL DEFAULT 1,
   deleted_at TEXT,
-  FOREIGN KEY (owner) REFERENCES users (username) ON DELETE CASCADE
+  FOREIGN KEY (owner) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 --bun:split
@@ -1532,7 +1533,7 @@ CREATE TABLE external_subscriptions (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resource_version INTEGER NOT NULL DEFAULT 1,
   deleted_at TEXT,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 --bun:split
@@ -1584,7 +1585,7 @@ CREATE TABLE nodes (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resource_version INTEGER NOT NULL DEFAULT 1,
   deleted_at TEXT,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE SET NULL
 );
 
@@ -1657,7 +1658,7 @@ CREATE TABLE override_scripts (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resource_version INTEGER NOT NULL DEFAULT 1,
   deleted_at TEXT,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 --bun:split
@@ -1689,7 +1690,7 @@ CREATE TABLE package_assignments (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resource_version INTEGER NOT NULL DEFAULT 1,
   deleted_at TEXT,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (package_id) REFERENCES packages (id) ON DELETE CASCADE
 );
 
@@ -1718,7 +1719,7 @@ CREATE TABLE package_assignment_inbound_configs (
   credential_json TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (assignment_id) REFERENCES package_assignments (id) ON DELETE CASCADE,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
 );
 
@@ -1747,7 +1748,7 @@ CREATE TABLE package_assignment_subaccounts (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (assignment_id) REFERENCES package_assignments (id) ON DELETE CASCADE,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 --bun:split
@@ -1794,7 +1795,7 @@ CREATE TABLE proxy_provider_configs (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resource_version INTEGER NOT NULL DEFAULT 1,
   deleted_at TEXT,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (external_subscription_id) REFERENCES external_subscriptions (id) ON DELETE CASCADE
 );
 
@@ -1827,7 +1828,7 @@ CREATE TABLE renewal_requests (
   error_message TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (assignment_id) REFERENCES package_assignments (id) ON DELETE SET NULL
 );
 
@@ -1852,7 +1853,7 @@ CREATE TABLE routing_rule_presets (
   rule_json TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 --bun:split
@@ -1871,7 +1872,7 @@ CREATE TABLE sessions (
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (token_hash),
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 --bun:split
@@ -1908,7 +1909,7 @@ CREATE TABLE tasks (
 
 --bun:split
 
-CREATE UNIQUE INDEX tasks_dedup_key_active ON tasks (dedup_key) WHERE status IN ('open', 'claimed') AND dedup_key <> '';
+CREATE UNIQUE INDEX tasks_dedup_key_active ON tasks (dedup_key) WHERE status IN ('open', 'claimed') AND dedup_key <> '' AND deleted_at IS NULL;
 
 --bun:split
 
@@ -1936,7 +1937,7 @@ CREATE TABLE user_inbound_configs (
   protocol TEXT NOT NULL,
   credential_json TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
 );
 
@@ -1954,7 +1955,7 @@ CREATE TABLE user_outbounds (
   outbound_tag TEXT NOT NULL,
   outbound_json TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (server_id) REFERENCES servers (id) ON DELETE CASCADE
 );
 
@@ -1982,7 +1983,7 @@ CREATE TABLE user_settings (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (username),
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 --bun:split
@@ -1996,7 +1997,7 @@ CREATE TABLE user_subaccounts (
   is_active BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 --bun:split
@@ -2022,7 +2023,7 @@ CREATE TABLE user_subscriptions (
   subscription_id INTEGER NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (username, subscription_id),
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (subscription_id) REFERENCES subscribe_files (id) ON DELETE CASCADE
 );
 
@@ -2043,7 +2044,7 @@ CREATE TABLE user_tokens (
   custom_user_short_code TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (username),
-  FOREIGN KEY (username) REFERENCES users (username) ON DELETE CASCADE
+  FOREIGN KEY (username) REFERENCES users (username) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 --bun:split

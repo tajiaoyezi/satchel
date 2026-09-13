@@ -70,7 +70,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 	return v1.ExitCodeOf(e)
 }
 
-// normalizeError 把任何错误规范成四字段错误：用法错误 → bad_request（退出码 2），
+// normalizeError 把任何错误规范成四字段错误：用法错误 → usage（退出码 2，只有它是 2），
 // 已是四字段的原样返回，其它包成 internal。
 func normalizeError(err error, preRunRan bool) *v1.Error {
 	var e *v1.Error
@@ -78,7 +78,7 @@ func normalizeError(err error, preRunRan bool) *v1.Error {
 		return e
 	}
 	if !preRunRan {
-		return v1.Wrap(v1.CodeBadRequest, usageReason(err.Error()), err).
+		return v1.Wrap(v1.CodeUsage, usageReason(err.Error()), err).
 			WithNext("运行 satchel --help 查看用法")
 	}
 	return v1.Wrap(v1.CodeInternal, "命令执行失败", err)

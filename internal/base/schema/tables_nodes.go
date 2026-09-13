@@ -12,12 +12,14 @@ func nodeTables() []Table {
 				// 从 Server 入站同步来的节点记它属于哪台 Server（权威链接，改名不受影响）；
 				// original_server 照抄 mmwx，是同步时记下的服务器名，只作展示与导入兼容，不再作 join 键。
 				col("server_id", TypeInt).null(),
-				col("raw_url", TypeText),
+				// raw_url 是节点 URI（UUID / 密码在里面），parsed_config 与 clash_config 是同一份凭据的另两种写法，
+				// 按第 05 章功能②「节点配置里的私钥、PSK 与 UUID」打码；node_name 是展示用的，不打。
+				col("raw_url", TypeText).masked(),
 				col("node_name", TypeText),
 				col("protocol", TypeText),
-				col("parsed_config", TypeJSON),
-				col("clash_config", TypeText),
-				col("enabled", TypeBool).def("FALSE"),
+				col("parsed_config", TypeJSON).masked(),
+				col("clash_config", TypeText).masked(),
+				col("enabled", TypeBool).def("FALSE").defaultTrue(),
 				col("tag", TypeText).def("'手动输入'"),
 				col("tags", TypeJSON).def("'[]'"),
 				// 以下是 mmwx 的中转、链式代理、路由出站那组列，照抄。
@@ -57,7 +59,7 @@ func nodeTables() []Table {
 			Name: "node_reachability", GoName: "NodeReachability", Origin: OriginMMWX,
 			Columns: []Column{
 				col("node_id", TypeInt),
-				col("reachable", TypeBool).def("FALSE"),
+				col("reachable", TypeBool).def("FALSE").defaultTrue(),
 				col("consecutive_fail", TypeInt).def("0"),
 				col("since", TypeTime).def("CURRENT_TIMESTAMP"),
 				col("announced_blocked", TypeBool).def("FALSE"),

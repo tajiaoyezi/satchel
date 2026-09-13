@@ -106,11 +106,11 @@ func diffTable(t *schema.Table, d schema.Dialect, a TableInfo) []string {
 	}
 	want := map[string]bool{}
 	for _, fk := range t.ForeignKeys {
-		want[fkKey(fk.Columns, fk.RefTable, fk.RefColumns, fk.OnDelete)] = true
+		want[fkKey(fk.Columns, fk.RefTable, fk.RefColumns, fk.OnUpdate, fk.OnDelete)] = true
 	}
 	got := map[string]bool{}
 	for _, fk := range a.ForeignKeys {
-		got[fkKey(fk.Columns, fk.RefTable, fk.RefColumns, fk.OnDelete)] = true
+		got[fkKey(fk.Columns, fk.RefTable, fk.RefColumns, fk.OnUpdate, fk.OnDelete)] = true
 	}
 	for k := range want {
 		if !got[k] {
@@ -150,8 +150,11 @@ func diffTable(t *schema.Table, d schema.Dialect, a TableInfo) []string {
 	return out
 }
 
-func fkKey(cols []string, refTable string, refCols []string, onDelete string) string {
+func fkKey(cols []string, refTable string, refCols []string, onUpdate, onDelete string) string {
 	k := fmt.Sprintf("(%s) → %s (%s)", strings.Join(cols, ","), refTable, strings.Join(refCols, ","))
+	if onUpdate != "" {
+		k += " ON UPDATE " + onUpdate
+	}
 	if onDelete != "" {
 		k += " ON DELETE " + onDelete
 	}

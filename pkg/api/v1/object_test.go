@@ -62,8 +62,9 @@ func TestDecodeRejectsOtherAPIVersion(t *testing.T) {
 	if !errors.As(err, &e) || e.Code != CodeUnsupportedAPIVersion {
 		t.Fatalf("想要 unsupported_api_version，得到 %v", err)
 	}
-	if ExitCodeOf(err) != ExitUsage {
-		t.Fatalf("退出码应当是 %d，得到 %d", ExitUsage, ExitCodeOf(err))
+	// 对象内容的错误不是「命令敲错了」，退出码 1。
+	if ExitCodeOf(err) != ExitFailure {
+		t.Fatalf("退出码应当是 %d，得到 %d", ExitFailure, ExitCodeOf(err))
 	}
 }
 

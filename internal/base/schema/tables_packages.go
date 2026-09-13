@@ -92,7 +92,7 @@ func packageTables() []Table {
 				col("routed_node_id", TypeInt),
 				col("email", TypeText),
 				col("credential_json", TypeJSON).masked(),
-				col("is_active", TypeBool).def("FALSE"),
+				col("is_active", TypeBool).def("FALSE").defaultTrue(),
 			),
 			Indexes: []Index{
 				{Name: "package_assignment_subaccounts_assignment_node_key", Columns: []string{"assignment_id", "routed_node_id"}, Unique: true},

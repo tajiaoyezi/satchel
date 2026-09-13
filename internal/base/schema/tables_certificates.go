@@ -30,7 +30,7 @@ func certificateTables() []Table {
 				col("dns_provider_id", TypeInt).null(),
 				col("cert_pem", TypeText).null(),
 				col("key_pem", TypeText).null().masked(),
-				col("auto_renew", TypeBool).def("FALSE"),
+				col("auto_renew", TypeBool).def("FALSE").defaultTrue(),
 				col("deploy_target", TypeText).def("'none'"),
 				col("deploy_cert_path", TypeText).null(),
 				col("deploy_key_path", TypeText).null(),

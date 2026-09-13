@@ -48,6 +48,16 @@ func TestDBMigrateAndStatus(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, db.SQLiteFile)); err != nil {
 		t.Fatalf("数据目录里应当出现 %s：%v", db.SQLiteFile, err)
 	}
+	// 数据目录布局：迁移把订阅文件与规则模板两个子目录一起建出来，0700。
+	for _, sub := range db.DataSubDirs {
+		info, err := os.Stat(filepath.Join(dir, sub))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("migrate 后数据目录里应当有子目录 %s：%v", sub, err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o700 {
+			t.Fatalf("%s 权限应当是 0700，得到 %o", sub, perm)
+		}
+	}
 	stdout, _, code = run(t, "db", "status", "--data-dir", dir, "--json")
 	if code != 0 {
 		t.Fatal(code)

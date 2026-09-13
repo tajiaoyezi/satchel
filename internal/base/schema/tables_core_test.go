@@ -33,24 +33,46 @@ func hasColumn(tbl *Table, name string) bool {
 	return ok
 }
 
+// 全部 32 个 kind 的类别（storage-schema「Agent-native tables」「Core kind tables」「Carry-over tables」），一个不落。
+var wantKindClasses = map[string]KindClass{
+	// agent-native
+	"Task": KindAction, "Alert": KindAction, "Job": KindAction, "Plan": KindAction,
+	"EvidencePackage": KindSystem, "NotifyDelivery": KindSystem, "AuditLog": KindSystem, "ConfigSnapshot": KindSystem,
+	"AutomationRule": KindConfig, "NotifyChannel": KindConfig,
+	// 核心五簇
+	"User": KindConfig, "ApiToken": KindAction, "Package": KindConfig, "PackageAssignment": KindConfig,
+	"Server": KindConfig, "Inbound": KindConfig, "Outbound": KindConfig, "RoutingRule": KindConfig,
+	"Website": KindConfig, "ReturnRoute": KindConfig, "Node": KindConfig,
+	// 照抄七簇
+	"SubscribeFile": KindConfig, "SubscriptionLink": KindConfig, "Template": KindConfig, "CustomRule": KindConfig,
+	"ExternalSubscription": KindConfig, "ProxyProviderConfig": KindConfig, "OverrideScript": KindConfig,
+	"Certificate": KindConfig, "DnsProvider": KindConfig, "Announcement": KindConfig,
+	"SystemSettings": KindMasterSettings,
+}
+
 func TestCoreKindsAndClasses(t *testing.T) {
-	want := map[string]KindClass{
-		"User": KindConfig, "ApiToken": KindAction, "Package": KindConfig, "PackageAssignment": KindConfig,
-		"Server": KindConfig, "Inbound": KindConfig, "Outbound": KindConfig, "RoutingRule": KindConfig,
-		"Website": KindConfig, "ReturnRoute": KindConfig, "Node": KindConfig,
-	}
-	kinds := 0
+	seen := map[string]bool{}
 	for _, tbl := range Default().Tables() {
 		if !tbl.IsKind() {
 			continue
 		}
-		kinds++
-		if class, ok := want[tbl.Kind]; ok && tbl.KindClass != class {
+		seen[tbl.Kind] = true
+		class, ok := wantKindClasses[tbl.Kind]
+		if !ok {
+			t.Errorf("kind %s 不在类别清单里", tbl.Kind)
+			continue
+		}
+		if tbl.KindClass != class {
 			t.Errorf("kind %s 的类别应当是 %s，得到 %s", tbl.Kind, class, tbl.KindClass)
 		}
 	}
-	if kinds != 32 {
-		t.Fatalf("kind 应当恰好 32 个，得到 %d", kinds)
+	for kind := range wantKindClasses {
+		if !seen[kind] {
+			t.Errorf("清单里的 kind %s 不存在", kind)
+		}
+	}
+	if len(seen) != 32 {
+		t.Fatalf("kind 应当恰好 32 个，得到 %d", len(seen))
 	}
 	for _, name := range []string{"xray_servers", "server_xray_config_snapshots", "remote_servers", "user_package_assignments", "user_api_tokens", "license", "licenses", "migrate_mmw"} {
 		if _, ok := Default().Table(name); ok {
@@ -172,7 +194,7 @@ func TestServerClassification(t *testing.T) {
 		t.Errorf("Server 的动作专属列不对：%v", got)
 	}
 	status := columnsOfClass(srv, ClassStatus)
-	for _, want := range []string{"rotation_pending", "last_rotated_at", "revoke_pending", "applied_hash", "applied_generation", "traffic_reset_baseline", "core_running", "core_version", "same_host_as_master"} {
+	for _, want := range []string{"rotation_pending", "last_rotated_at", "revoke_pending", "applied_hash", "applied_generation", "first_apply_eligible", "traffic_reset_baseline", "core_running", "core_version", "same_host_as_master"} {
 		if !contains(status, want) {
 			t.Errorf("Server 的 status 应当含 %s", want)
 		}

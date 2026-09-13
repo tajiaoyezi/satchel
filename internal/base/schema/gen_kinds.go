@@ -59,6 +59,36 @@ func immutableColumns(t *Table) []Column {
 	return out
 }
 
+// nameColumns 返回构成 metadata.name 的列：全部自然键索引的列的并集，按表里的列序；没有自然键为空。
+func nameColumns(t *Table) []Column {
+	in := map[string]bool{}
+	for _, ix := range t.Indexes {
+		if ix.NaturalKey {
+			for _, c := range ix.Columns {
+				in[c] = true
+			}
+		}
+	}
+	var out []Column
+	for _, c := range t.Columns {
+		if in[c.Name] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// defaultTrueColumns 返回标了「省略即为真」的列（含非 spec 列，创建路径也要查它）。
+func defaultTrueColumns(t *Table) []Column {
+	var out []Column
+	for _, c := range t.Columns {
+		if c.DefaultTrue {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // maskedColumns 返回标了打码的列（不含 meta）。
 func maskedColumns(t *Table) []Column {
 	var out []Column
@@ -141,6 +171,10 @@ func GenerateKinds(r *Registry) ([]byte, error) {
 		writeStringSlice(&b, maskedColumns(t))
 		b.WriteString(",\n\t\tImmutableFields: ")
 		writeStringSlice(&b, immutableColumns(t))
+		b.WriteString(",\n\t\tNameFields: ")
+		writeStringSlice(&b, nameColumns(t))
+		b.WriteString(",\n\t\tDefaultTrueFields: ")
+		writeStringSlice(&b, defaultTrueColumns(t))
 		b.WriteString(",\n\t\tnotApplyable: map[string]string{")
 		first := true
 		for _, c := range t.Columns {

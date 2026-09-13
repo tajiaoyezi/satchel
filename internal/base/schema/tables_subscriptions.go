@@ -93,7 +93,7 @@ func subscriptionTables() []Table {
 				col("type", TypeText).enum("dns", "rules", "rule-providers"),
 				col("mode", TypeText).enum("replace", "prepend", "append"),
 				col("content", TypeText),
-				col("enabled", TypeBool).def("FALSE"),
+				col("enabled", TypeBool).def("FALSE").defaultTrue(),
 				col("created_by", TypeText).def("''"),
 			),
 			Indexes: []Index{
@@ -185,11 +185,11 @@ func subscriptionTables() []Table {
 				col("proxy", TypeText).def("'DIRECT'"),
 				col("size_limit", TypeInt).def("0"),
 				col("header", TypeText).null(), // YAML 片段
-				col("health_check_enabled", TypeBool).def("FALSE"),
+				col("health_check_enabled", TypeBool).def("FALSE").defaultTrue(),
 				col("health_check_url", TypeText).def("'https://www.gstatic.com/generate_204'"),
 				col("health_check_interval", TypeInt).def("300"),
 				col("health_check_timeout", TypeInt).def("5000"),
-				col("health_check_lazy", TypeBool).def("FALSE"),
+				col("health_check_lazy", TypeBool).def("FALSE").defaultTrue(),
 				col("health_check_expected_status", TypeInt).def("204"),
 				col("filter", TypeText).null(),
 				col("exclude_filter", TypeText).null(),
@@ -212,7 +212,7 @@ func subscriptionTables() []Table {
 				col("name", TypeText),
 				col("hook", TypeText),
 				col("content", TypeText),
-				col("enabled", TypeBool).def("FALSE"),
+				col("enabled", TypeBool).def("FALSE").defaultTrue(),
 				col("sort_order", TypeInt).def("0"),
 			),
 			Indexes: []Index{

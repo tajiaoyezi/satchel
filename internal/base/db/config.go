@@ -30,7 +30,15 @@ const (
 	ConfigFile = "database.json"
 	// SQLiteFile 是默认的 SQLite 库文件名。
 	SQLiteFile = "satchel.db"
+	// MasterKeyFile 是主控通信密钥（第 06 章的 Ed25519 身份）的文件名。
+	MasterKeyFile = "master.key"
+	// SubscribesDir 是订阅文件目录，RuleTemplatesDir 是规则模板目录；两者都在数据目录下（第 08 章的数据目录布局与备份内容表）。
+	SubscribesDir    = "subscribes"
+	RuleTemplatesDir = "rule_templates"
 )
+
+// DataSubDirs 是数据目录下要随目录一起创建的子目录。
+var DataSubDirs = []string{SubscribesDir, RuleTemplatesDir}
 
 // Config 是 database.json 的内容；环境变量 SATCHEL_DATABASE_* 逐项覆盖它。
 type Config struct {
@@ -55,12 +63,23 @@ func DataDir(flag string) string {
 	return DefaultDataDir
 }
 
-// EnsureDataDir 创建数据目录，权限 0700。只有 SQLite 模式需要它，postgres 模式不碰数据目录。
+// EnsureDataDir 创建数据目录与它的子目录（DataSubDirs），权限 0700。会写的命令（迁移、serve）两种驱动都调它：
+// postgres 模式下库在别处，但主控密钥、订阅文件、规则模板仍在数据目录里。读配置与只读命令不调它。
 func EnsureDataDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return v1.Wrap(v1.CodeDatabase, "创建数据目录 "+dir+" 失败", err)
+	for _, d := range append([]string{dir}, subDirs(dir)...) {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return v1.Wrap(v1.CodeDatabase, "创建数据目录 "+d+" 失败", err)
+		}
 	}
 	return nil
+}
+
+func subDirs(dir string) []string {
+	out := make([]string, len(DataSubDirs))
+	for i, d := range DataSubDirs {
+		out[i] = filepath.Join(dir, d)
+	}
+	return out
 }
 
 // LoadConfig 读数据目录里的 database.json，再用环境变量覆盖；没有文件时默认 SQLite。

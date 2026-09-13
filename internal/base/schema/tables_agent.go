@@ -13,6 +13,9 @@ func (c Column) check(expr string) Column { c.Check = expr; return c }
 func (c Column) masked() Column           { c.Masked = true; return c }
 func (c Column) immutable() Column        { c.Immutable = true; return c }
 
+// defaultTrue 标「省略即为真」：mmwx 默认 1 的布尔列，库默认仍是 FALSE，没填时由创建路径与 apply 解码器置 true。
+func (c Column) defaultTrue() Column { c.DefaultTrue = true; return c }
+
 // naturalKey 是 kind 自然键（用户起的名字）的唯一索引：撞上它报 name_taken。
 // job_id、delivery_id 这类系统生成的幂等 id 不是名字，撞上报 conflict。
 func naturalKey(name string, columns ...string) Index {
@@ -55,7 +58,8 @@ func agentNativeTables() []Table {
 			),
 			Indexes: []Index{
 				{Name: "tasks_dedup_key_active", Columns: []string{"dedup_key"}, Unique: true,
-					Where: "status IN ('open', 'claimed') AND dedup_key <> ''"},
+					// 去重键不是自然键：软删除的行不占键（谓词带 deleted_at IS NULL）。
+					Where: "status IN ('open', 'claimed') AND dedup_key <> '' AND deleted_at IS NULL"},
 			},
 			ForeignKeys: []ForeignKey{
 				fk("alert_id", "alerts", "SET NULL"),
@@ -80,7 +84,7 @@ func agentNativeTables() []Table {
 				col("last_seen_at", TypeTime).def("CURRENT_TIMESTAMP").cls(ClassStatus),
 			),
 			Indexes: []Index{
-				{Name: "alerts_dedup_key_active", Columns: []string{"dedup_key"}, Unique: true, Where: "status <> 'resolved'"},
+				{Name: "alerts_dedup_key_active", Columns: []string{"dedup_key"}, Unique: true, Where: "status <> 'resolved' AND deleted_at IS NULL"},
 			},
 			ForeignKeys: []ForeignKey{fk("evidence_id", "evidence_packages", "SET NULL")},
 		},
@@ -151,6 +155,7 @@ func agentNativeTables() []Table {
 				col("name", TypeText),
 				col("type", TypeText).enum("telegram", "webhook"),
 				col("events", TypeJSON).def("'[]'"),
+				// 渠道默认关（m0-03）：Satchel 新表，没有「mmwx 默认 1」这回事，要开必须显式 enabled: true。
 				col("enabled", TypeBool).def("FALSE"),
 				col("target", TypeText).def("''").cls(ClassMasterSelf),
 				col("secret", TypeText).def("''").cls(ClassMasterSelf).masked(),

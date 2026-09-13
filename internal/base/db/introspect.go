@@ -29,12 +29,13 @@ type IndexInfo struct {
 	Where   string
 }
 
-// ForeignKeyInfo 是库里一条外键；OnDelete 为空表示 NO ACTION。
+// ForeignKeyInfo 是库里一条外键；OnDelete 与 OnUpdate 为空表示 NO ACTION。
 type ForeignKeyInfo struct {
 	Columns    []string
 	RefTable   string
 	RefColumns []string
 	OnDelete   string
+	OnUpdate   string
 }
 
 // TableInfo 是库里一张表的实际结构。Checks 是表上全部 CHECK 约束的谓词原文（不含 CHECK 关键字）。
@@ -220,7 +221,10 @@ func introspectSQLite(ctx context.Context, db *bun.DB) ([]TableInfo, error) {
 				if onDelete == "NO ACTION" {
 					onDelete = ""
 				}
-				fi = &ForeignKeyInfo{RefTable: refTable, OnDelete: onDelete}
+				if onUpdate == "NO ACTION" {
+					onUpdate = ""
+				}
+				fi = &ForeignKeyInfo{RefTable: refTable, OnDelete: onDelete, OnUpdate: onUpdate}
 				byID[id] = fi
 				order = append(order, id)
 			}
@@ -263,7 +267,8 @@ func eachRow(ctx context.Context, db *bun.DB, query string, fn func(rows *sql.Ro
 // PostgreSQL 的 information_schema 类型名归一成 DDL 里的写法。
 var pgTypeNames = map[string]string{"timestamp with time zone": "TIMESTAMPTZ"}
 
-var pgOnDelete = map[string]string{"a": "", "r": "RESTRICT", "c": "CASCADE", "n": "SET NULL", "d": "SET DEFAULT"}
+// pg_constraint 的 confdeltype / confupdtype 编码。
+var pgFKAction = map[string]string{"a": "", "r": "RESTRICT", "c": "CASCADE", "n": "SET NULL", "d": "SET DEFAULT"}
 
 func introspectPostgres(ctx context.Context, db *bun.DB) ([]TableInfo, error) {
 	var names []string
@@ -335,9 +340,10 @@ func introspectPostgres(ctx context.Context, db *bun.DB) ([]TableInfo, error) {
 			RefTable string `bun:"ref_table"`
 			RefCol   string `bun:"ref_col"`
 			OnDelete string `bun:"confdeltype"`
+			OnUpdate string `bun:"confupdtype"`
 			Ord      int    `bun:"ord"`
 		}
-		if err := db.NewRaw(`SELECT con.conname, a.attname AS col, fc.relname AS ref_table, fa.attname AS ref_col, con.confdeltype, k.ord
+		if err := db.NewRaw(`SELECT con.conname, a.attname AS col, fc.relname AS ref_table, fa.attname AS ref_col, con.confdeltype, con.confupdtype, k.ord
 			FROM pg_constraint con
 			JOIN pg_class c ON c.oid = con.conrelid
 			JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -354,7 +360,7 @@ func introspectPostgres(ctx context.Context, db *bun.DB) ([]TableInfo, error) {
 		for _, fk := range fks {
 			fi, ok := byName[fk.Name]
 			if !ok {
-				fi = &ForeignKeyInfo{RefTable: fk.RefTable, OnDelete: pgOnDelete[fk.OnDelete]}
+				fi = &ForeignKeyInfo{RefTable: fk.RefTable, OnDelete: pgFKAction[fk.OnDelete], OnUpdate: pgFKAction[fk.OnUpdate]}
 				byName[fk.Name] = fi
 				order = append(order, fk.Name)
 			}

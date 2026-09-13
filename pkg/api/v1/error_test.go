@@ -15,7 +15,12 @@ func TestExitCodeOf(t *testing.T) {
 		{nil, ExitOK},
 		{errors.New("plain"), ExitFailure},
 		{New(CodeDatabase, "x"), ExitFailure},
-		{New(CodeBadRequest, "x"), ExitUsage},
+		// 退出码 2 只归 usage；请求内容的错误（含约束违反）是 1。
+		{New(CodeUsage, "x"), ExitUsage},
+		{New(CodeBadRequest, "x"), ExitFailure},
+		{New(CodeUnknownField, "x"), ExitFailure},
+		{New(CodeFieldNotApplyable, "x"), ExitFailure},
+		{New(CodeUnsupportedAPIVersion, "x"), ExitFailure},
 		{New(CodeUnauthenticated, "x"), ExitUnauthenticated},
 		{New(CodeForbidden, "x"), ExitForbidden},
 		{New(CodeNotFound, "x"), ExitNotFound},

@@ -34,8 +34,8 @@ const (
 type Metadata struct {
 	// ID 是整数主键，只有有整数主键的 kind 才有。
 	ID int64 `json:"id,omitempty"`
-	// Name 是对象的自然键。
-	Name string `json:"name"`
+	// Name 是对象的自然键：有自然键的 kind 才有（见 KindInfo.NameFields 与 ObjectName），没有的省略、只按 ID 寻址。
+	Name string `json:"name,omitempty"`
 	// ResourceVersion 从 1 起，只随 spec 写入递增；系统只写的 kind 没有版本，为 0。
 	ResourceVersion int64     `json:"resourceVersion"`
 	CreatedAt       time.Time `json:"createdAt"`
@@ -56,6 +56,23 @@ type Object[S, T any] struct {
 
 // RawObject 是 spec 与 status 尚未按 kind 解析的信封。
 type RawObject = Object[json.RawMessage, json.RawMessage]
+
+// MarshalJSON 序列化信封时按 kind 清单填 metadata.name：有自然键的 kind 从 spec 算出（见 KindInfo.ObjectName），
+// 调用方填的 Name 以算出的为准；没有自然键的 kind 省略 name。spec 还是原文（RawObject）或 kind 不在清单里时原样输出。
+// 有自然键却算不出（spec 不是该 kind 的结构体）是编程错误，报 internal。
+func (o Object[S, T]) MarshalJSON() ([]byte, error) {
+	if info, ok := Lookup(o.Kind); ok && len(info.NameFields) > 0 {
+		if _, raw := any(o.Spec).(json.RawMessage); !raw {
+			name, ok := info.ObjectName(o.Spec)
+			if !ok {
+				return nil, Newf(CodeInternal, "kind %s 的 spec 不是 %sSpec，算不出 metadata.name", o.Kind, o.Kind)
+			}
+			o.Metadata.Name = name
+		}
+	}
+	type plain Object[S, T]
+	return json.Marshal(plain(o))
+}
 
 var envelopeKeys = map[string]bool{"apiVersion": true, "kind": true, "metadata": true, "spec": true, "status": true}
 

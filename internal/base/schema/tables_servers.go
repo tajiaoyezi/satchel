@@ -13,7 +13,7 @@ func serverTables() []Table {
 			Columns: withMeta(
 				// spec：身份与连接。
 				col("name", TypeText),
-				col("ipv6_enabled", TypeBool).def("FALSE"),
+				col("ipv6_enabled", TypeBool).def("FALSE").defaultTrue(),
 				col("domain", TypeText).def("''"),
 				col("domain_v6", TypeText).def("''"),
 				col("connection_mode", TypeText).def("'auto'").enum("auto", "websocket", "http", "pull"),
@@ -33,8 +33,9 @@ func serverTables() []Table {
 				col("traffic_limit", TypeInt).def("0"),
 				col("traffic_reset_day", TypeInt).def("0"),
 				col("traffic_stats_mode", TypeText).def("'both'").enum("both", "upload", "download", "max"),
-				col("traffic_source", TypeText).def("'core'").enum("core", "system"),
-				col("include_in_traffic_stats", TypeBool).def("FALSE"),
+				// 口径：core（mmwx 叫 xray）是内核统计，system 是系统网卡。默认 system 照 mmwx 创建路径的行为（列默认虽是 xray，不填就落 system）。
+				col("traffic_source", TypeText).def("'system'").enum("core", "system"),
+				col("include_in_traffic_stats", TypeBool).def("FALSE").defaultTrue(),
 				col("traffic_calibration", TypeInt).def("0"),
 				// spec：商务信息。
 				col("region", TypeText).def("''"),
@@ -110,6 +111,9 @@ func serverTables() []Table {
 				col("revoke_pending", TypeBool).def("FALSE").cls(ClassStatus),
 				col("applied_hash", TypeText).def("''").cls(ClassStatus),
 				col("applied_generation", TypeInt).def("0").cls(ClassStatus),
+				// 导入的首次 apply 资格（第 10 章导入段、第 13 章 M0）：mmwx 导入工具置 true，apply 只在节点回执成功时消费；
+				// 失败保留，结果未知时按节点报回的 hash 走。不用「applied_hash 为空」编码它：导入的节点上本来就有旧配置。
+				col("first_apply_eligible", TypeBool).def("FALSE").cls(ClassStatus),
 			),
 			Indexes: []Index{
 				naturalKey("servers_name_key", "name"),
@@ -134,7 +138,8 @@ func serverTables() []Table {
 				col("enabled", TypeBool).def("FALSE"),
 				col("sort_order", TypeInt).def("0"),
 			),
-			Indexes:     []Index{{Name: "inbounds_server_tag_key", Columns: []string{"server_id", "tag"}, Unique: true}},
+			// 同一服务器下的 tag 是自然键（跨服务器同名合法），撞上报 name_taken 点名两列；metadata.name 是 server_id/tag。
+			Indexes:     []Index{naturalKey("inbounds_server_tag_key", "server_id", "tag")},
 			ForeignKeys: []ForeignKey{fkServer("CASCADE")},
 		},
 		{
@@ -151,7 +156,7 @@ func serverTables() []Table {
 				col("last_probe_latency_ms", TypeInt).null().cls(ClassStatus),
 				col("last_probed_at", TypeTime).null().cls(ClassStatus),
 			),
-			Indexes:     []Index{{Name: "outbounds_server_tag_key", Columns: []string{"server_id", "tag"}, Unique: true}},
+			Indexes:     []Index{naturalKey("outbounds_server_tag_key", "server_id", "tag")},
 			ForeignKeys: []ForeignKey{fkServer("CASCADE")},
 		},
 		{
@@ -181,7 +186,7 @@ func serverTables() []Table {
 				col("managed", TypeBool).def("FALSE").cls(ClassStatus),
 				col("conf_path", TypeText).def("''").cls(ClassStatus),
 			),
-			Indexes:     []Index{{Name: "websites_server_domain_key", Columns: []string{"server_id", "domain"}, Unique: true}},
+			Indexes:     []Index{naturalKey("websites_server_domain_key", "server_id", "domain")},
 			ForeignKeys: []ForeignKey{fkServer("CASCADE"), fk("certificate_id", "certificates", "SET NULL")},
 		},
 		{
@@ -200,7 +205,7 @@ func serverTables() []Table {
 				col("tested_at", TypeTime).null().cls(ClassStatus),
 			),
 			Indexes: []Index{
-				{Name: "return_routes_server_carrier_key", Columns: []string{"server_id", "carrier"}, Unique: true},
+				naturalKey("return_routes_server_carrier_key", "server_id", "carrier"),
 				{Name: "return_routes_tested_at_idx", Columns: []string{"tested_at"}},
 			},
 			ForeignKeys: []ForeignKey{fkServer("CASCADE")},

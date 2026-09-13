@@ -89,3 +89,36 @@ func TestDiffReportsCheckDrift(t *testing.T) {
 		}
 	})
 }
+
+// fkUpdateDriftRegistry 复制默认注册表，并把 sessions 指向 users 的外键去掉 ON UPDATE，模拟外键动作改了没重新生成迁移。
+func fkUpdateDriftRegistry() *schema.Registry {
+	r := schema.New()
+	for _, t := range schema.Default().Tables() {
+		copied := *t
+		if t.Name == "sessions" {
+			copied.ForeignKeys = append([]schema.ForeignKey(nil), t.ForeignKeys...)
+			for i := range copied.ForeignKeys {
+				copied.ForeignKeys[i].OnUpdate = ""
+			}
+		}
+		r.Add(copied)
+	}
+	return r
+}
+
+func TestDiffReportsForeignKeyUpdateRuleDrift(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		actual, err := db.Introspect(context.Background(), bdb)
+		if err != nil {
+			t.Fatal(err)
+		}
+		diff := db.Diff(fkUpdateDriftRegistry(), db.DialectOf(bdb), actual)
+		if len(diff) != 2 {
+			t.Fatalf("应当报出注册表侧与库侧各一条外键差异，得到 %v", diff)
+		}
+		joined := strings.Join(diff, "\n")
+		if !strings.Contains(joined, "sessions") || !strings.Contains(joined, "ON UPDATE CASCADE") {
+			t.Fatalf("差异应当点名 sessions 的外键与 ON UPDATE CASCADE：%v", diff)
+		}
+	})
+}

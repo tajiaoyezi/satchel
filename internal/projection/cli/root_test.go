@@ -65,7 +65,7 @@ func TestHelp(t *testing.T) {
 	}
 }
 
-// 用法错误：未知子命令、未知 flag、多余参数 → bad_request、退出码 2。
+// 用法错误：未知子命令、未知 flag、多余参数 → usage、退出码 2。
 func TestUsageErrorsExit2(t *testing.T) {
 	cases := [][]string{{"nosuch"}, {"db", "status", "--bogus"}, {"db", "migrate", "extra"}, {"version", "extra"}}
 	for _, args := range cases {
@@ -73,8 +73,8 @@ func TestUsageErrorsExit2(t *testing.T) {
 		if code != v1.ExitUsage {
 			t.Errorf("satchel %v 退出码应当是 2，得到 %d\nstdout=%s\nstderr=%s", args, code, stdout, stderr)
 		}
-		if !strings.Contains(stderr, "bad_request") || !strings.Contains(stderr, "用法错误") {
-			t.Errorf("satchel %v 的 stderr 应当含 bad_request 与中文的用法错误说明：\n%s", args, stderr)
+		if !strings.Contains(stderr, "usage") || !strings.Contains(stderr, "用法错误") {
+			t.Errorf("satchel %v 的 stderr 应当含 usage 与中文的用法错误说明：\n%s", args, stderr)
 		}
 		if stdout != "" {
 			t.Errorf("用法错误不该往 stdout 写东西：%q", stdout)
@@ -85,7 +85,7 @@ func TestUsageErrorsExit2(t *testing.T) {
 		t.Fatalf("退出码应当是 2，得到 %d", code)
 	}
 	e := decodeError(t, stderr)
-	if e.Code != v1.CodeBadRequest || e.Reason != "用法错误：没有子命令 nosuch" {
+	if e.Code != v1.CodeUsage || e.Reason != "用法错误：没有子命令 nosuch" {
 		t.Fatalf("JSON 错误不对：%+v", e)
 	}
 	_, stderr, _ = run(t, "db", "status", "--bogus", "--json")
@@ -162,7 +162,7 @@ func TestTextErrorShape(t *testing.T) {
 	if code != v1.ExitUsage {
 		t.Fatal(code)
 	}
-	if !strings.HasPrefix(stderr, "错误 bad_request：用法错误：没有子命令 nosuch") || !strings.Contains(stderr, "下一步：") || !strings.Contains(stderr, "原因：unknown command") {
+	if !strings.HasPrefix(stderr, "错误 usage：用法错误：没有子命令 nosuch") || !strings.Contains(stderr, "下一步：") || !strings.Contains(stderr, "原因：unknown command") {
 		t.Fatalf("用法错误的文本应当有中文 reason、下一步与英文原文的原因行：\n%s", stderr)
 	}
 	sqliteOnly(t)

@@ -62,12 +62,15 @@ func TestEveryKindHasClass(t *testing.T) {
 
 func TestNaturalKeysAndChecks(t *testing.T) {
 	r := Default()
-	// 只有用户起的名字是自然键；job_id、delivery_id 是系统生成的幂等 id，撞上要报 conflict 而不是 name_taken。
+	// 只有用户起的名字是自然键（含「某台服务器下的 tag / domain / carrier」这类复合名字）；
+	// job_id、delivery_id、token、short_code 是系统生成的键，撞上要报 conflict 而不是 name_taken。
 	wantNatural := map[string]bool{
 		"automation_rules_name_key": true, "notify_channels_name_key": true, "users_username_key": true,
 		"packages_name_key": true, "servers_name_key": true, "subscribe_files_name_key": true,
 		"subscription_links_name_key": true, "templates_name_key": true, "custom_rules_name_type_key": true,
 		"dns_providers_name_key": true, "certificates_domain_server_key": true, "certificates_domain_local_key": true,
+		"inbounds_server_tag_key": true, "outbounds_server_tag_key": true, "websites_server_domain_key": true,
+		"return_routes_server_carrier_key": true,
 	}
 	for _, tbl := range r.Tables() {
 		for _, ix := range tbl.Indexes {
