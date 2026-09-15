@@ -1,0 +1,41 @@
+# Satchel 主控的 Compose 布局（技术方案第 09 章，照 mmwx 改名）。
+# 用法：cp .env.example .env，按需改；docker compose up -d
+# 可选 PostgreSQL：docker compose --profile postgres up -d，然后 SATCHEL_DATABASE_HOST=127.0.0.1（主控走 host 网络，连不到服务名）。
+services:
+  satchel:
+    image: ${SATCHEL_IMAGE:-ghcr.io/tajiaoyezi/satchel:latest}
+    container_name: satchel
+    # M0 没有 serve：容器跑完迁移就退出，只在失败时重试有限次；M1 交付 serve 后改回 unless-stopped。
+    restart: on-failure:5
+    # host 网络：主控要管 80 / 443、多端口入站、agent 反向连接，bridge 模式每加一个端口都要改 compose。
+    network_mode: host
+    environment:
+      - SATCHEL_DATA_DIR=/var/lib/satchel
+      - SATCHEL_DATABASE_DRIVER=${SATCHEL_DATABASE_DRIVER:-}
+      - SATCHEL_DATABASE_HOST=${SATCHEL_DATABASE_HOST:-}
+      - SATCHEL_DATABASE_PORT=${SATCHEL_DATABASE_PORT:-}
+      - SATCHEL_DATABASE_NAME=${SATCHEL_DATABASE_NAME:-}
+      - SATCHEL_DATABASE_USER=${SATCHEL_DATABASE_USER:-}
+      - SATCHEL_DATABASE_PASSWORD=${SATCHEL_DATABASE_PASSWORD:-}
+      - SATCHEL_DATABASE_SSLMODE=${SATCHEL_DATABASE_SSLMODE:-}
+    volumes:
+      # 数据目录必须 bind mount：Dockerfile 声明了 VOLUME，不挂就落到匿名卷，重建容器时全部丢失。
+      - ./data:/var/lib/satchel
+      # 继承宿主时区，否则按本地时间的功能（每日流量通知等）会差时区。
+      - /etc/localtime:/etc/localtime:ro
+
+  # PostgreSQL 供首次初始化或「系统设置 → 数据库」在线迁移用，只监听本机。
+  postgres:
+    image: postgres:18-alpine
+    container_name: satchel-postgres
+    restart: unless-stopped
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-satchel}
+      POSTGRES_USER: ${POSTGRES_USER:-satchel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-before-start}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # PostgreSQL 18 起官方镜像的 PGDATA 在 /var/lib/postgresql/18/docker、声明的卷是父目录：必须挂父目录，挂 …/data 会让库落到匿名卷、重建容器就丢。
+      - ./postgres-data:/var/lib/postgresql

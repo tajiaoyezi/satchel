@@ -48,7 +48,7 @@ func newRoot() (*cobra.Command, *options) {
 		},
 	}
 	root.PersistentFlags().BoolVar(&opts.json, "json", false, "以 JSON 输出（等价于环境变量 SATCHEL_OUTPUT=json）")
-	root.AddCommand(newVersionCommand(opts), newDBCommand(opts))
+	root.AddCommand(newVersionCommand(opts), newDBCommand(opts), newVerifyCommand(opts))
 	return root, opts
 }
 

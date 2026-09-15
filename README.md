@@ -11,6 +11,30 @@ go build ./cmd/satchel
 ./satchel version
 ```
 
+## 安装
+
+三种方式（技术方案第 09 章）。**M0 阶段还没有 `serve` 子命令**，装完服务起不来是预期的；二进制、数据目录、服务文件的形状已定，M1 交付 `serve` 后不用改。
+
+```sh
+# 一键脚本：裸机（Debian / Ubuntu / RHEL 系 / Alpine，systemd 或 OpenRC；POSIX sh，Alpine 也能跑）
+curl -fsSL https://raw.githubusercontent.com/tajiaoyezi/satchel/main/install.sh | sudo sh
+# 一键脚本：Docker（写 /opt/satchel/docker-compose.yml 与 .env 后 compose up）
+curl -fsSL https://raw.githubusercontent.com/tajiaoyezi/satchel/main/install.sh | sudo sh -s -- --docker
+# 选项（两条路都认 --version / --prerelease）：--version v0.1.0、--prerelease、--binary <本地文件>、--skip-verify（只对 --binary）、--no-start、--install-dir
+```
+
+脚本从 GitHub Release 下载二进制与 `.sig`（直连失败回退 gh-proxy），**用脚本自己内嵌的发布公钥（与 `pkg/release` 同一份）经 openssl 验签、验不过不落盘**——信任锚是这份脚本，不是刚下载的二进制——再装到 `/usr/local/bin/satchel`，数据目录 `/var/lib/satchel`，服务名 `satchel`。M0 只有预发布版：一键脚本要加 `--prerelease`。
+
+Docker Compose：仓库根的 `docker-compose.yml` 与 `.env.example`（`cp .env.example .env` 后 `docker compose up -d`；`--profile postgres` 起本机的 PostgreSQL，主控走 host 网络所以 `SATCHEL_DATABASE_HOST=127.0.0.1`）。镜像 `ghcr.io/tajiaoyezi/satchel`，入口脚本先跑 `db migrate` 再执行传入的子命令；容器内不原地替换二进制，升级换镜像 tag。
+
+裸二进制：从 Release 下载对应平台的文件与 `.sig`，用已装的 `satchel __verify <file> <sig>`（或 openssl 加仓库里的公钥）核对后放到 PATH 里；`__verify` 是自升级用的验签入口，别拿刚下载的文件验它自己。六个平台里只有 Linux 两个承诺能跑主控，其它四个只保证客户端部分可用。
+
+## 发布
+
+打 tag 就是发版：`git tag v0.1.0 && git push origin v0.1.0`（tag 含 `-` 是 prerelease）。发布线（`.github/workflows/release.yml`）：`build` 六个平台自动跑 → `sign` 停在受保护环境 `release-signing` 等仓库拥有者批准，批准后用 `tools/sign` 给每个二进制签 Ed25519 分离签名（`<file>.sig`，64 字节）并用公钥验回、出 `checksums.txt` → `release` 建 GitHub Release（同 tag 已有 Release 即失败，不覆盖）→ `docker` 推多架构镜像（标签 `0.1.0`、`0.1`、`0`、`latest`；prerelease 是 `0.1.0-beta.1` 与 `beta`）。
+
+私钥只在环境 secret `RELEASE_SIGNING_PRIVATE_KEY` 里，环境上还要有变量 `RELEASE_SIGNING_ARMED=1`（签名 job 用它确认环境是人手建好、设了审批人的，不是 GitHub 自动建的）；公钥清单在 `pkg/release`（编进二进制）与 `install.sh` 各一份、测试钉住一致，三个二进制共用一把发布密钥；轮换先发一版带新旧两把、下一版再去掉旧的。`satchel-agent` 与 `satchel-plugins` 的发布线检出本仓库的固定 tag 跑同一份签名程序。受保护环境要「必需审批人」，GitHub 免费套餐只在公开仓库上提供，所以三个 Go 仓库是公开的。本地演练：`go run ./tools/sign keygen` 生成一对测试密钥，`RELEASE_SIGNING_PRIVATE_KEY=<私钥> go run ./tools/sign sign <file>`，验回要么把测试公钥经 ldflags 注入（`-X github.com/satchel/satchel/pkg/release.publicKeysCSV=<公钥>`）再 `verify`，要么直接用 openssl——源码里的正式公钥和你的测试私钥不成对，`verify` 会失败是正常的。
+
 ## 数据库
 
 主控默认用 SQLite（数据目录下的 `satchel.db`），可选 PostgreSQL（数据目录下的 `database.json` 写 `driver: postgres`，或用环境变量 `SATCHEL_DATABASE_*` 覆盖）。数据目录由 `--data-dir` 或环境变量 `SATCHEL_DATA_DIR` 指定，默认 `/var/lib/satchel`。

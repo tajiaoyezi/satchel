@@ -39,8 +39,8 @@ func layerOf(pkg string) (l layer, ok bool) {
 	switch {
 	case strings.HasPrefix(rel, "pkg/"), rel == "internal/command":
 		return layerContract, true
-	case strings.HasPrefix(rel, "cmd/"):
-		return layerCmd, true
+	case strings.HasPrefix(rel, "cmd/"), strings.HasPrefix(rel, "tools/"):
+		return layerCmd, true // 装配与开发工具（如发布签名程序 tools/sign），可引用任何层
 	case strings.HasPrefix(rel, "internal/projection/"):
 		return layerProjection, true
 	case strings.HasPrefix(rel, "internal/middleware/"):

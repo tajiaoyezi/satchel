@@ -1,0 +1,196 @@
+name: Release
+
+# 发布线（技术方案第 09 章、release-pipeline spec）：
+#   build   六个平台交叉编译，自动跑，不碰私钥
+#   sign    挂受保护环境 release-signing（需仓库拥有者批准），用 tools/sign 给每个二进制签 Ed25519 分离签名，签完验回，出 checksums.txt
+#   release 同 tag 已有 Release 即失败（不覆盖），把二进制、.sig、checksums 挂到 GitHub Release，tag 含 - 为 prerelease
+#   docker  签名批准后再推多架构镜像到 ghcr.io/<owner>/satchel，标签 semver / latest / beta
+# satchel-web 的拉取与 embed 随 M1 前端骨架加进 build。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+env:
+  BUILDINFO: github.com/satchel/satchel/internal/base/buildinfo
+
+jobs:
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64, output: satchel-linux-amd64 }
+          - { goos: linux,   goarch: arm64, output: satchel-linux-arm64 }
+          - { goos: darwin,  goarch: amd64, output: satchel-darwin-amd64 }
+          - { goos: darwin,  goarch: arm64, output: satchel-darwin-arm64 }
+          - { goos: windows, goarch: amd64, output: satchel-windows-amd64.exe }
+          - { goos: windows, goarch: arm64, output: satchel-windows-arm64.exe }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          commit="$(git rev-parse --short=12 HEAD)"
+          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags="-s -w -X ${BUILDINFO}.Version=${version} -X ${BUILDINFO}.Commit=${commit} -X ${BUILDINFO}.Date=${date}" \
+            -o "dist/${{ matrix.output }}" ./cmd/satchel
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.output }}
+          path: dist/${{ matrix.output }}
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    name: sign (needs approval)
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: sign every binary, then verify with the embedded public keys
+        env:
+          RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
+          RELEASE_SIGNING_ARMED: ${{ vars.RELEASE_SIGNING_ARMED }}
+        run: |
+          # 工作流引用了不存在的 environment 时 GitHub 会自动建一个没有任何保护规则的同名环境，签名就不会等人批准；
+          # 所以要求环境上配了变量 RELEASE_SIGNING_ARMED=1（只在人手建好、设了审批人的环境上才有）。
+          test "${RELEASE_SIGNING_ARMED:-}" = "1" || { echo "::error::环境 release-signing 没有武装（缺变量 RELEASE_SIGNING_ARMED=1）：先按 README 建好受保护环境再发布"; exit 1; }
+          test -n "$RELEASE_SIGNING_PRIVATE_KEY" || { echo "::error::环境 release-signing 缺 secret RELEASE_SIGNING_PRIVATE_KEY"; exit 1; }
+          cd dist
+          ls -1
+          go run ../tools/sign sign satchel-*
+          for f in satchel-*; do
+            case "$f" in *.sig) continue ;; esac
+            go run ../tools/sign verify "$f" "$f.sig"
+            test "$(wc -c < "$f.sig")" -eq 64
+          done
+          sha256sum satchel-* > checksums.txt
+          cat checksums.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed
+          path: |
+            dist/satchel-*
+            dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: github release
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: refuse to overwrite an existing release for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "::error::tag $GITHUB_REF_NAME 已有 Release，发布线不覆盖已发布的资产；要重发请先删掉那个 Release"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed
+          path: release
+
+      - name: verify checksums before publishing
+        run: cd release && sha256sum -c checksums.txt
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/satchel-*
+            release/checksums.txt
+
+  docker:
+    name: docker image
+    # 也等签名批准：批准之前什么都不对外发布（镜像本身不签名，但它和 Release 是同一次发布）。
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/satchel
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}},enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=beta,enable=${{ contains(github.ref_name, '-') }}
+
+      - name: build args (same version triple as the binaries)
+        id: args
+        run: |
+          {
+            echo "version=${GITHUB_REF_NAME#v}"
+            echo "commit=$(git rev-parse --short=12 HEAD)"
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.args.outputs.version }}
+            COMMIT=${{ steps.args.outputs.commit }}
+            DATE=${{ steps.args.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

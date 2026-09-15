@@ -11,3 +11,8 @@
 .claude/
 .cursor/
 .agents/
+
+# compose 的本地配置与数据
+/.env
+/data/
+/postgres-data/

@@ -55,3 +55,33 @@ jobs:
 
       - name: go test
         run: go test ./...
+
+  shell:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null
+          shellcheck --severity=error install.sh docker-entrypoint.sh
+          # 全量输出只作提示，不阻断（spec 的口径是没有 error 级问题）。
+          shellcheck install.sh docker-entrypoint.sh || true
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: satchel:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: image reports version
+        run: docker run --rm satchel:ci version | grep -q "satchel 0.0.0-dev"
