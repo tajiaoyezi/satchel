@@ -321,7 +321,14 @@ func TestServeCommand(t *testing.T) {
 		}
 		t.Skip("serve 命令真启动的用例只在 Linux 上跑（CI）")
 	}
-	t.Setenv(db.EnvListen, "127.0.0.1:0")
+	// 配置校验不认端口 0：先找一个空闲端口再交给 serve。
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listenAddr := probe.Addr().String()
+	probe.Close()
+	t.Setenv(db.EnvListen, listenAddr)
 	t.Setenv(db.EnvConfigPath, "")
 	t.Setenv(db.EnvLogLevel, "")
 	for _, name := range []string{"SATCHEL_DATABASE_DRIVER", "SATCHEL_DATABASE_HOST", "SATCHEL_DATABASE_PORT", "SATCHEL_DATABASE_NAME", "SATCHEL_DATABASE_USER", "SATCHEL_DATABASE_PASSWORD"} {
@@ -361,6 +368,9 @@ func TestServeCommand(t *testing.T) {
 	}
 	if status, fields := get(t, c, "http://satchel/api/v1/whoami"); status != 200 || string(fields["actor_kind"]) != `"local_admin"` {
 		t.Fatalf("whoami 经 socket：%d %v", status, fields)
+	}
+	if status, fields := get(t, http.DefaultClient, "http://"+listenAddr+"/api/v1/healthz"); status != 200 || string(fields["status"]) != `"ok"` {
+		t.Fatalf("healthz 经配置的 TCP 地址：%d %v", status, fields)
 	}
 	cancel()
 	select {
