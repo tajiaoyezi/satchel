@@ -152,7 +152,7 @@ func GenerateKinds(r *Registry) ([]byte, error) {
 	}
 	var b bytes.Buffer
 	b.WriteString(generatedHeader + "\npackage v1\n\n")
-	writeImports(&b, emitted)
+	writeImports(&b, emitted, `"reflect"`)
 	for _, t := range kinds {
 		fmt.Fprintf(&b, "// %sSpec 是 kind %s（%s）的 spec 字段。\n", t.Kind, t.Kind, t.KindClass)
 		writeStruct(&b, t.Kind+"Spec", specColumns(t))
@@ -163,6 +163,7 @@ func GenerateKinds(r *Registry) ([]byte, error) {
 	b.WriteString("var generatedKinds = []KindInfo{\n")
 	for _, t := range kinds {
 		fmt.Fprintf(&b, "\t{\n\t\tName: %q,\n\t\tClass: %s,\n", t.Kind, kindClassConst[t.KindClass])
+		fmt.Fprintf(&b, "\t\tSpecType: reflect.TypeOf(%sSpec{}),\n\t\tStatusType: reflect.TypeOf(%sStatus{}),\n", t.Kind, t.Kind)
 		b.WriteString("\t\tSpecFields: ")
 		writeStringSlice(&b, specColumns(t))
 		b.WriteString(",\n\t\tStatusFields: ")

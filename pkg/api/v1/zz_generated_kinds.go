@@ -4,6 +4,7 @@ package v1
 
 import (
 	"encoding/json"
+	"reflect"
 	"time"
 )
 
@@ -824,6 +825,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Alert",
 		Class:             ClassAction,
+		SpecType:          reflect.TypeOf(AlertSpec{}),
+		StatusType:        reflect.TypeOf(AlertStatus{}),
 		SpecFields:        []string{"category", "level", "object_kind", "object_id", "dedup_key"},
 		StatusFields:      []string{"conditions", "evidence_id", "status", "resolve_reason", "occurrence_count", "first_seen_at", "last_seen_at"},
 		MaskedFields:      []string{},
@@ -835,6 +838,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Announcement",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(AnnouncementSpec{}),
+		StatusType:        reflect.TypeOf(AnnouncementStatus{}),
 		SpecFields:        []string{"type", "title", "body", "node_id", "via_bot", "via_miniapp", "expires_at"},
 		StatusFields:      []string{"bot_delivered_at"},
 		MaskedFields:      []string{},
@@ -846,6 +851,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "ApiToken",
 		Class:             ClassAction,
+		SpecType:          reflect.TypeOf(ApiTokenSpec{}),
+		StatusType:        reflect.TypeOf(ApiTokenStatus{}),
 		SpecFields:        []string{},
 		StatusFields:      []string{"owner", "name", "token_hash", "scopes", "preset", "expires_at", "runtime", "revoked", "revoked_at", "last_used_at"},
 		MaskedFields:      []string{"token_hash"},
@@ -857,6 +864,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "AuditLog",
 		Class:             ClassSystem,
+		SpecType:          reflect.TypeOf(AuditLogSpec{}),
+		StatusType:        reflect.TypeOf(AuditLogStatus{}),
 		SpecFields:        []string{"at", "actor", "actor_kind", "token_id", "command", "args_digest", "full_command", "output", "plan_id", "result"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{},
@@ -868,6 +877,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "AutomationRule",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(AutomationRuleSpec{}),
+		StatusType:        reflect.TypeOf(AutomationRuleStatus{}),
 		SpecFields:        []string{"name", "trigger", "condition", "action", "max_targets", "deadline_minutes", "enabled"},
 		StatusFields:      []string{"proposed_by", "status", "approved_by", "approved_at"},
 		MaskedFields:      []string{},
@@ -879,6 +890,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Certificate",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(CertificateSpec{}),
+		StatusType:        reflect.TypeOf(CertificateStatus{}),
 		SpecFields:        []string{"domain", "email", "provider", "challenge_mode", "webroot_path", "server_id", "dns_provider_id", "cert_pem", "key_pem", "auto_renew", "deploy_target", "deploy_cert_path", "deploy_key_path", "auto_deploy"},
 		StatusFields:      []string{"status", "expiry_date", "issue_date", "message", "cert_path", "key_path"},
 		MaskedFields:      []string{"key_pem"},
@@ -890,6 +903,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "ConfigSnapshot",
 		Class:             ClassSystem,
+		SpecType:          reflect.TypeOf(ConfigSnapshotSpec{}),
+		StatusType:        reflect.TypeOf(ConfigSnapshotStatus{}),
 		SpecFields:        []string{"object_kind", "object_id", "object_version", "content", "content_hash", "source", "status", "apply_id"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{},
@@ -901,6 +916,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "CustomRule",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(CustomRuleSpec{}),
+		StatusType:        reflect.TypeOf(CustomRuleStatus{}),
 		SpecFields:        []string{"name", "type", "mode", "content", "enabled", "created_by"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{},
@@ -912,6 +929,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "DnsProvider",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(DnsProviderSpec{}),
+		StatusType:        reflect.TypeOf(DnsProviderStatus{}),
 		SpecFields:        []string{"name", "provider_type", "credentials"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{"credentials"},
@@ -923,6 +942,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "EvidencePackage",
 		Class:             ClassSystem,
+		SpecType:          reflect.TypeOf(EvidencePackageSpec{}),
+		StatusType:        reflect.TypeOf(EvidencePackageStatus{}),
 		SpecFields:        []string{"category", "server_id"},
 		StatusFields:      []string{"collected_at", "items", "collect_error", "size_bytes", "expires_at"},
 		MaskedFields:      []string{},
@@ -934,6 +955,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "ExternalSubscription",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(ExternalSubscriptionSpec{}),
+		StatusType:        reflect.TypeOf(ExternalSubscriptionStatus{}),
 		SpecFields:        []string{"username", "name", "url", "user_agent", "traffic_mode"},
 		StatusFields:      []string{"node_count", "last_sync_at", "upload", "download", "total", "expire"},
 		MaskedFields:      []string{"url"},
@@ -945,6 +968,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Inbound",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(InboundSpec{}),
+		StatusType:        reflect.TypeOf(InboundStatus{}),
 		SpecFields:        []string{"server_id", "tag", "protocol", "port", "listen", "tls", "transport", "settings", "enabled", "sort_order"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{"tls", "settings"},
@@ -956,6 +981,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Job",
 		Class:             ClassAction,
+		SpecType:          reflect.TypeOf(JobSpec{}),
+		StatusType:        reflect.TypeOf(JobStatus{}),
 		SpecFields:        []string{"job_id", "kind", "server_id", "args"},
 		StatusFields:      []string{"status", "started_at", "finished_at", "exit_code", "output", "output_truncated"},
 		MaskedFields:      []string{},
@@ -967,6 +994,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Node",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(NodeSpec{}),
+		StatusType:        reflect.TypeOf(NodeStatus{}),
 		SpecFields:        []string{"username", "server_id", "raw_url", "node_name", "protocol", "parsed_config", "clash_config", "enabled", "tag", "tags", "original_server", "original_domain", "inbound_tag", "chain_proxy_node_id", "relay_group_name", "relay_group_node_ids", "node_type", "parent_node_id", "routed_outbound_tag", "routed_outbound_json", "routed_rule_marktag", "routed_admin_email", "routed_admin_credential", "routed_owner", "relay_orig_server", "relay_orig_port", "ip_family"},
 		StatusFields:      []string{"detached", "detach_reason"},
 		MaskedFields:      []string{"raw_url", "parsed_config", "clash_config", "routed_outbound_json", "routed_admin_credential"},
@@ -978,6 +1007,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "NotifyChannel",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(NotifyChannelSpec{}),
+		StatusType:        reflect.TypeOf(NotifyChannelStatus{}),
 		SpecFields:        []string{"name", "type", "events", "enabled"},
 		StatusFields:      []string{"target", "secret", "last_delivered_at", "last_error"},
 		MaskedFields:      []string{"secret"},
@@ -989,6 +1020,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "NotifyDelivery",
 		Class:             ClassSystem,
+		SpecType:          reflect.TypeOf(NotifyDeliverySpec{}),
+		StatusType:        reflect.TypeOf(NotifyDeliveryStatus{}),
 		SpecFields:        []string{"delivery_id", "channel_id", "type", "payload"},
 		StatusFields:      []string{"attempts", "status", "last_error", "last_attempt_at"},
 		MaskedFields:      []string{},
@@ -1000,6 +1033,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Outbound",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(OutboundSpec{}),
+		StatusType:        reflect.TypeOf(OutboundStatus{}),
 		SpecFields:        []string{"server_id", "tag", "protocol", "settings", "is_warp", "balancer_group", "probe"},
 		StatusFields:      []string{"last_probe_ok", "last_probe_latency_ms", "last_probed_at"},
 		MaskedFields:      []string{"settings"},
@@ -1011,6 +1046,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "OverrideScript",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(OverrideScriptSpec{}),
+		StatusType:        reflect.TypeOf(OverrideScriptStatus{}),
 		SpecFields:        []string{"username", "name", "hook", "content", "enabled", "sort_order"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{},
@@ -1022,6 +1059,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Package",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(PackageSpec{}),
+		StatusType:        reflect.TypeOf(PackageStatus{}),
 		SpecFields:        []string{"name", "description", "traffic_limit_bytes", "cycle_days", "is_reset", "reset_day", "nodes", "device_limit", "speed_limit_mbps", "auto_speed_limit_json", "traffic_mode", "template_filename", "surge_template_filename", "short_code", "node_multipliers", "node_traffic_limits", "node_speed_limits", "node_device_limits", "node_name_overrides", "node_name_override_enabled"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{},
@@ -1033,6 +1072,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "PackageAssignment",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(PackageAssignmentSpec{}),
+		StatusType:        reflect.TypeOf(PackageAssignmentStatus{}),
 		SpecFields:        []string{"username", "package_id", "package_start_date", "package_end_date", "is_reset", "reset_day", "traffic_limit_override", "is_primary", "short_code"},
 		StatusFields:      []string{"status", "last_reset_at", "traffic_warned_80", "over_limit_enforced"},
 		MaskedFields:      []string{},
@@ -1044,6 +1085,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Plan",
 		Class:             ClassAction,
+		SpecType:          reflect.TypeOf(PlanSpec{}),
+		StatusType:        reflect.TypeOf(PlanStatus{}),
 		SpecFields:        []string{"objects", "diff", "affected_count", "share_identity", "share_scope", "expires_at"},
 		StatusFields:      []string{"status", "apply_id"},
 		MaskedFields:      []string{},
@@ -1055,6 +1098,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "ProxyProviderConfig",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(ProxyProviderConfigSpec{}),
+		StatusType:        reflect.TypeOf(ProxyProviderConfigStatus{}),
 		SpecFields:        []string{"username", "external_subscription_id", "name", "type", "interval", "proxy", "size_limit", "header", "health_check_enabled", "health_check_url", "health_check_interval", "health_check_timeout", "health_check_lazy", "health_check_expected_status", "filter", "exclude_filter", "exclude_type", "geo_ip_filter", "override", "process_mode"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{},
@@ -1066,6 +1111,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "ReturnRoute",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(ReturnRouteSpec{}),
+		StatusType:        reflect.TypeOf(ReturnRouteStatus{}),
 		SpecFields:        []string{"server_id", "carrier", "enabled", "probe"},
 		StatusFields:      []string{"route_type", "region", "entry_ip", "entry_asn", "reason", "tested_at"},
 		MaskedFields:      []string{},
@@ -1077,6 +1124,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "RoutingRule",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(RoutingRuleSpec{}),
+		StatusType:        reflect.TypeOf(RoutingRuleStatus{}),
 		SpecFields:        []string{"server_id", "sort_order", "match", "outbound_tag", "enabled", "catch_all"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{},
@@ -1088,6 +1137,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Server",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(ServerSpec{}),
+		StatusType:        reflect.TypeOf(ServerStatus{}),
 		SpecFields:        []string{"name", "ipv6_enabled", "domain", "domain_v6", "connection_mode", "pull_address", "pull_address_v6", "pull_port", "listen_port", "lock_entry_ip", "use_443", "steal_mode", "site_type", "site_value", "port_range_min", "port_range_max", "traffic_limit", "traffic_reset_day", "traffic_stats_mode", "traffic_source", "include_in_traffic_stats", "traffic_calibration", "region", "region_country", "region_name", "region_city", "renewal_price", "renewal_cycle", "renewal_currency", "provider_name", "provider_url", "telecom_paid_peer", "expires_at", "ddns_enabled", "ddns_provider_id", "ddns_record_name", "core_log_level", "core_dns", "core_stats_enabled", "sort_order"},
 		StatusFields:      []string{"token", "agent_token", "pull_token", "token_expires_at", "agent_token_expires_at", "last_token_refresh", "last_agent_token_refresh", "status", "last_heartbeat", "ip_address", "ip_address_v6", "boot_time", "boot_count", "core_boot_time", "core_boot_count", "core_running", "core_version", "current_upload_speed", "current_download_speed", "speed_updated_at", "offline_since", "offline_notified", "warp_installed", "same_host_as_master", "time_offset_seconds", "push_fail_count", "last_push_fail", "fallback_to_pull", "fallback_at", "last_pull_at", "system_rx_cycle", "system_tx_cycle", "system_last_seen_rx", "system_last_seen_tx", "system_boot_time_unix", "system_traffic_updated_at", "traffic_reset_baseline", "last_traffic_reset_at", "ddns_last_synced_at", "ddns_last_error", "ddns_pending", "provider_updated_at", "rotation_pending", "last_rotated_at", "revoke_pending", "applied_hash", "applied_generation", "first_apply_eligible"},
 		MaskedFields:      []string{"token", "agent_token", "pull_token"},
@@ -1099,6 +1150,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "SubscribeFile",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(SubscribeFileSpec{}),
+		StatusType:        reflect.TypeOf(SubscribeFileStatus{}),
 		SpecFields:        []string{"name", "description", "url", "type", "filename", "expire_at", "file_short_code", "custom_short_code", "auto_sync_custom_rules", "template_filename", "selected_custom_rule_ids", "selected_override_script_ids", "selected_tags", "selected_node_ids", "stats_server_ids", "traffic_limit", "sort_order", "raw_output", "created_by"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{"url"},
@@ -1110,6 +1163,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "SubscriptionLink",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(SubscriptionLinkSpec{}),
+		StatusType:        reflect.TypeOf(SubscriptionLinkStatus{}),
 		SpecFields:        []string{"name", "type", "description", "rule_filename", "buttons", "short_url"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{},
@@ -1121,6 +1176,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "SystemSettings",
 		Class:             ClassMasterSettings,
+		SpecType:          reflect.TypeOf(SystemSettingsSpec{}),
+		StatusType:        reflect.TypeOf(SystemSettingsStatus{}),
 		SpecFields:        []string{"proxy_groups_source_url", "client_compatibility_mode", "enable_short_link", "enable_sub_info_nodes", "sub_info_v2ray_only", "sub_info_expire_prefix", "sub_info_traffic_prefix", "speed_collect_interval", "traffic_collect_interval", "traffic_check_interval", "heartbeat_interval", "agent_log_enabled", "notify_enabled", "notify_login", "notify_subscribe_fetch", "notify_daily_traffic", "notify_server_offline", "notify_server_online", "notify_traffic_threshold", "notify_daily_traffic_time", "notify_traffic_threshold_percent", "notify_traffic_threshold_80", "notify_over_limit", "notify_package_expiring", "notify_package_expiring_days", "notify_package_expired", "notify_user_registered", "notify_telegram_bound", "notify_cert_result", "notify_agent_long_offline", "notify_agent_long_offline_minutes", "notify_device_limit_exceeded", "notify_server_renewal", "notify_ip_ban", "enable_override_scripts", "subscription_output_format", "enable_miaomiaowu_features", "default_template_filename", "default_surge_template_filename", "node_name_multiplier_prefix_enabled", "node_name_multiplier_left", "node_name_multiplier_right", "branding_site_title", "branding_brand_title", "branding_logo_url", "branding_logo_ext", "login_wallpaper", "default_theme", "dashboard_refresh_interval_ms", "redeem_copy_template", "notify_daily_traffic_template", "notify_server_tolerance_seconds", "sub_rate_enabled", "sub_rate_limit", "sub_rate_window_minutes", "block_unknown_subscription_ua", "probe_disguise_enabled", "probe_internal_enabled", "probe_external_enabled", "probe_external_access_only", "probe_external_token_sha256", "probe_disguise_title", "probe_disguise_theme", "probe_disguise_logo", "probe_disguise_server_ids", "probe_disguise_show_name", "probe_disguise_metric_cpu", "probe_disguise_metric_mem", "probe_disguise_metric_disk", "probe_disguise_metric_ping", "probe_disguise_metric_traffic", "probe_disguise_metric_speed", "probe_disguise_show_expiry", "probe_disguise_show_price", "probe_disguise_show_globe", "probe_disguise_show_daily_trend", "probe_disguise_show_traffic_hotspots", "probe_disguise_show_traffic_7d", "probe_disguise_show_resource_heatmap", "probe_disguise_show_traffic_quota", "probe_disguise_show_renewal_timeline", "probe_disguise_show_health_score", "probe_disguise_show_return_route", "probe_disguise_ping_targets", "probe_disguise_ping_targets_override", "probe_disguise_ping_interval_ms", "probe_quality_alert_config", "announcement_config", "announce_probe_tester_ids", "reality_domains", "reality_domains_blocked", "user_perm_pages", "user_quota_subscribe", "user_quota_template", "user_quota_routed_outbound", "user_quota_override", "user_routed_outbound_enabled", "user_routed_outbound_daily_limit", "user_hidden_rule_templates", "user_visible_owned_rule_templates"},
 		StatusFields:      []string{"telegram_bot_token", "telegram_chat_id", "silent_mode", "silent_mode_timeout", "master_url", "master_recovery_url", "subscription_url", "master_local_only", "probe_disguise_block_login", "brute_force_enabled", "brute_force_max_failures", "brute_force_window_minutes", "brute_force_block_minutes", "login_rate_max_attempts", "login_rate_window_minutes", "login_rate_lock_minutes", "skip_local_ip", "turnstile_site_key", "turnstile_secret_key", "tgbot_token", "tgbot_admin_ids", "update_cdn_enabled", "tgbot_enabled", "tgbot_url", "tgbot_webapp_dev_preview", "master_https_recovery_enabled", "master_recovery_failure_minutes", "master_recovery_startup_grace_minutes", "external_https", "probe_cdn_regions_endpoint", "require_encryption", "master_https_recovery_pending", "master_https_recovery_reason", "master_cert_pending", "master_force_public_http", "primary_admin_username", "pending_outbound_address_replacements", "probe_quality_alert_states"},
 		MaskedFields:      []string{"telegram_bot_token", "turnstile_secret_key", "tgbot_token", "probe_external_token_sha256"},
@@ -1132,6 +1189,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Task",
 		Class:             ClassAction,
+		SpecType:          reflect.TypeOf(TaskSpec{}),
+		StatusType:        reflect.TypeOf(TaskStatus{}),
 		SpecFields:        []string{"title", "body", "source", "dedup_key", "alert_id", "evidence_id"},
 		StatusFields:      []string{"status", "claimed_by", "lease_until", "cancel_reason", "expires_at"},
 		MaskedFields:      []string{},
@@ -1143,6 +1202,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Template",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(TemplateSpec{}),
+		StatusType:        reflect.TypeOf(TemplateStatus{}),
 		SpecFields:        []string{"name", "category", "template_url", "rule_source", "use_proxy", "enable_include_all", "created_by"},
 		StatusFields:      []string{},
 		MaskedFields:      []string{},
@@ -1154,6 +1215,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "User",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(UserSpec{}),
+		StatusType:        reflect.TypeOf(UserStatus{}),
 		SpecFields:        []string{"username", "email", "nickname", "avatar_url", "role", "remark", "traffic_limit_override", "speed_limit_override", "device_limit_override", "node_speed_limit_overrides", "node_device_limit_overrides", "tg_notify_enabled"},
 		StatusFields:      []string{"is_active", "telegram_id", "telegram_username", "telegram_bound_at", "password_hash", "totp_secret", "totp_enabled", "recovery_codes", "is_over_limit", "over_limit_enforced", "disabled_access_enforced", "traffic_warned_80", "last_reset_at", "last_package_id", "last_package_end_date"},
 		MaskedFields:      []string{"password_hash", "totp_secret", "recovery_codes"},
@@ -1165,6 +1228,8 @@ var generatedKinds = []KindInfo{
 	{
 		Name:              "Website",
 		Class:             ClassConfig,
+		SpecType:          reflect.TypeOf(WebsiteSpec{}),
+		StatusType:        reflect.TypeOf(WebsiteStatus{}),
 		SpecFields:        []string{"server_id", "domain", "type", "target", "certificate_id", "use_443"},
 		StatusFields:      []string{"scanned", "managed", "conf_path"},
 		MaskedFields:      []string{},

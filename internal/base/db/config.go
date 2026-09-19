@@ -32,13 +32,18 @@ const (
 	SQLiteFile = "satchel.db"
 	// MasterKeyFile 是主控通信密钥（第 06 章的 Ed25519 身份）的文件名。
 	MasterKeyFile = "master.key"
-	// SubscribesDir 是订阅文件目录，RuleTemplatesDir 是规则模板目录；两者都在数据目录下（第 08 章的数据目录布局与备份内容表）。
+	// ConfigYAMLFile 是主控自身的配置文件（listen、log_level），可不存在；SocketFile 是 serve 运行时的 unix socket，本机 CLI 经它连主控。
+	ConfigYAMLFile = "config.yaml"
+	SocketFile     = "satchel.sock"
+	// SubscribesDir 是订阅文件目录，RuleTemplatesDir 是规则模板目录，PublicDir 是 /public/ 对外提供的静态文件目录；
+	// 都在数据目录下（第 08 章的数据目录布局与备份内容表；socket 与 public/ 不进备份）。
 	SubscribesDir    = "subscribes"
 	RuleTemplatesDir = "rule_templates"
+	PublicDir        = "public"
 )
 
 // DataSubDirs 是数据目录下要随目录一起创建的子目录。
-var DataSubDirs = []string{SubscribesDir, RuleTemplatesDir}
+var DataSubDirs = []string{SubscribesDir, RuleTemplatesDir, PublicDir}
 
 // Config 是 database.json 的内容；环境变量 SATCHEL_DATABASE_* 逐项覆盖它。
 type Config struct {

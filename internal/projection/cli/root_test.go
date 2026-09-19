@@ -2,19 +2,30 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/satchel/satchel/internal/base/buildinfo"
+	"github.com/satchel/satchel/internal/command"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
+
+// testOptions 是测试用的装配：默认目录加一个假的 serve（真的 serve 在 cmd/satchel 装）。
+func testOptions() Options {
+	opts := DefaultOptions()
+	opts.Local["serve"] = func(context.Context, *command.Invocation) (any, error) {
+		return nil, v1.New(v1.CodeInternal, "测试里没有 serve")
+	}
+	return opts
+}
 
 // run 执行一次根命令，返回 stdout、stderr 与退出码。
 func run(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code = Execute(args, &out, &errOut)
+	code = Execute(testOptions(), args, &out, &errOut)
 	return out.String(), errOut.String(), code
 }
 

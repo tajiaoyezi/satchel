@@ -30,11 +30,20 @@ COPY --from=builder /out/satchel /usr/local/bin/satchel
 COPY docker-entrypoint.sh /usr/local/bin/satchel-entrypoint
 RUN chmod 0755 /usr/local/bin/satchel /usr/local/bin/satchel-entrypoint
 
-# 数据目录布局见 storage-dual-database：database.json、satchel.db、master.key、subscribes/、rule_templates/。
+# 数据目录布局见 storage-dual-database：database.json、config.yaml、satchel.db、master.key、satchel.sock、subscribes/、rule_templates/、public/。
 ENV SATCHEL_DATA_DIR=/var/lib/satchel
+# 主控监听地址（master-serve）；compose 透传同名变量可改。健康检查从它取端口。
+ENV SATCHEL_LISTEN=0.0.0.0:12889
 VOLUME ["/var/lib/satchel"]
 
-# 容器内一律不原地替换二进制，升级走换镜像 tag（M1 的自升级在容器里拒绝原地替换）。
+# 健康检查打无身份的 /api/v1/healthz；start-period 留给迁移与启动。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -qO- "http://127.0.0.1:${SATCHEL_LISTEN##*:}/api/v1/healthz" >/dev/null || exit 1
+
+# nginx 官方镜像把 STOPSIGNAL 设成 SIGQUIT（nginx 的优雅停止信号），Go 进程收到 SIGQUIT 会打印 goroutine 转储后退出 2；
+# 主控的优雅停止认 SIGTERM，这里改回来，docker stop 才是优雅停止。
+STOPSIGNAL SIGTERM
+
+# 容器内一律不原地替换二进制，升级走换镜像 tag（m1-08 的自升级在容器里拒绝原地替换）。
 ENTRYPOINT ["/usr/local/bin/satchel-entrypoint"]
-# serve 随 M1 交付；M0 的镜像只能跑 version 与 db 子命令。
 CMD ["serve"]

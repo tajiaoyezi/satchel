@@ -2,7 +2,7 @@
 
 Agent-first 的多服务器代理管理系统。主控、CLI 与 MCP 在这一个仓库、一个二进制 `satchel` 里；节点守护是 [satchel-agent](https://github.com/satchel/satchel-agent)。
 
-**状态：M0 骨架阶段，还没有可用功能。**
+**状态：M1 主控基础阶段。主控能起来（`serve`）、REST / CLI / MCP 三个投影同构上线，业务命令随后续 change 加入。**
 
 ## 构建
 
@@ -11,9 +11,40 @@ go build ./cmd/satchel
 ./satchel version
 ```
 
+## 运行
+
+```sh
+./satchel serve --data-dir ./data        # 只在 Linux 上；起主控：迁移 → 监听 TCP 与 unix socket → 等 SIGINT / SIGTERM
+./satchel whoami --data-dir ./data       # 在主控本机经 socket 调它：root 或运行主控的 OS 用户就是本机管理员
+./satchel explain "audit list"           # 不需要主控在跑：命令表与 kind 清单编在二进制里
+```
+
+`serve` 读数据目录下的 `config.yaml`（可不存在，只认两个键）和环境变量，环境变量覆盖文件；非 Linux 上 `serve` 以 `unsupported_platform` 拒绝（那四个平台只保证客户端子命令）。
+
+| 变量 | 说明 | 默认值 |
+|---|---|---|
+| `SATCHEL_DATA_DIR` | 数据目录（等价于 `--data-dir`） | `/var/lib/satchel` |
+| `SATCHEL_CONFIG` | 配置文件路径（等价于 `serve --config`） | `<数据目录>/config.yaml` |
+| `SATCHEL_LISTEN` | TCP 监听地址，对应 `config.yaml` 的 `listen` | `0.0.0.0:12889` |
+| `SATCHEL_LOG_LEVEL` | 日志级别 `debug` / `info` / `warn` / `error`，对应 `log_level` | `info` |
+| `SATCHEL_DATABASE_DRIVER` 等 | 数据库连接，见「数据库」一节 | SQLite |
+| `SATCHEL_OUTPUT` | 设为 `json` 时 CLI 默认 JSON 输出（等价于 `--json`） | 文本 |
+
+主控同时监听 TCP 与数据目录下的 unix socket `satchel.sock`（0600）。**身份只从连接判定**：经 socket 进来、对端是 root 或运行主控的那个 OS 用户 → 本机管理员（全部权限）；TCP 上的请求在令牌（m1-04）交付前一律没有身份，除了两个无身份入口——`GET /api/v1/healthz` 与 `/public/<file>`（数据目录 `public/` 里的文件，目录不列、`..` 出不去）。收到 SIGINT / SIGTERM 后停止接受新连接、等进行中的请求最多 10 秒、关库、删 socket、退出码 0。
+
+## REST 与 MCP
+
+三个投影都从 `internal/command` 的命令表构造，一条命令登记进表就同时有 CLI 子命令、REST 路由与 MCP 可达；`docs/commands.md` 是由表生成的「命令 × scope 对照表」（`go generate ./internal/command/`，CI 守着一致）。
+
+- **REST**：`/api/v1/…`，路径由命令路径推出（`read` 用 GET、flag 作查询参数；其余用 POST、flag 与 `confirm` 在 JSON 体里；列表命令去掉末尾的 `list`，`limit` 默认 50、上限 500、`cursor` 翻页）。成功 200，body 与 CLI `--json` 是同一个对象；失败 body 是四字段错误，状态码按错误码折算（400 / 401 / 403 / 404 / 409 / 428 / 503 / 500）。未登记的键、类型不对、文件路径类参数（`-f` / `--filename` / `--file`）都是 `bad_request`；不兼容 mmwx 的 `/api/admin/*`。
+- **MCP**：`/mcp`（Streamable HTTP，无状态），只有两个工具：`satchel_run`（`args` 命令数组 + 可选 `confirm`，输出恒为 JSON）与 `satchel_explain`（`target`）。命令数组交给与 CLI 相同的解析器、不经 shell；身份只来自这次连接，`args` 里的 `--token` / `--server`、本地命令（`version`、`db`、`serve`）、人类专属命令、文件路径参数一律拒绝。
+- **审计**：每条经主控执行的命令（含被权限或 confirm 拒绝的）写一条 `audit_logs`，`satchel audit list` 看（只对管理员开放）；无身份的请求、`explain`、`healthz`、`/public/` 不记。
+
+现有经主控的命令：`whoami`（身份对象）、`audit list`（`--actor` / `--command` / `--since` / `--limit` / `--cursor`）、`explain [target]`。
+
 ## 安装
 
-三种方式（技术方案第 09 章）。**M0 阶段还没有 `serve` 子命令**，装完服务起不来是预期的；二进制、数据目录、服务文件的形状已定，M1 交付 `serve` 后不用改。
+三种方式（技术方案第 09 章）。装完 `systemctl status satchel`（或 `rc-service satchel status`）能看到主控在跑，`curl http://127.0.0.1:12889/api/v1/healthz` 返回 `{"status":"ok",…}`。
 
 ```sh
 # 一键脚本：裸机（Debian / Ubuntu / RHEL 系 / Alpine，systemd 或 OpenRC；POSIX sh，Alpine 也能跑）
@@ -25,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/tajiaoyezi/satchel/main/install.sh 
 
 脚本从 GitHub Release 下载二进制与 `.sig`（直连失败回退 gh-proxy），**用脚本自己内嵌的发布公钥（与 `pkg/release` 同一份）经 openssl 验签、验不过不落盘**——信任锚是这份脚本，不是刚下载的二进制——再装到 `/usr/local/bin/satchel`，数据目录 `/var/lib/satchel`，服务名 `satchel`。M0 只有预发布版：一键脚本要加 `--prerelease`。
 
-Docker Compose：仓库根的 `docker-compose.yml` 与 `.env.example`（`cp .env.example .env` 后 `docker compose up -d`；`--profile postgres` 起本机的 PostgreSQL，主控走 host 网络所以 `SATCHEL_DATABASE_HOST=127.0.0.1`）。镜像 `ghcr.io/tajiaoyezi/satchel`，入口脚本先跑 `db migrate` 再执行传入的子命令；容器内不原地替换二进制，升级换镜像 tag。
+Docker Compose：仓库根的 `docker-compose.yml` 与 `.env.example`（`cp .env.example .env` 后 `docker compose up -d`；`--profile postgres` 起本机的 PostgreSQL，主控走 host 网络所以 `SATCHEL_DATABASE_HOST=127.0.0.1`；`SATCHEL_LISTEN` 改监听地址）。镜像 `ghcr.io/tajiaoyezi/satchel`，入口脚本先跑 `db migrate` 再执行传入的子命令（默认 `serve`），`HEALTHCHECK` 打 `/api/v1/healthz`；容器内不原地替换二进制，升级换镜像 tag。
 
 裸二进制：从 Release 下载对应平台的文件与 `.sig`，用已装的 `satchel __verify <file> <sig>`（或 openssl 加仓库里的公钥）核对后放到 PATH 里；`__verify` 是自升级用的验签入口，别拿刚下载的文件验它自己。六个平台里只有 Linux 两个承诺能跑主控，其它四个只保证客户端部分可用。
 
@@ -39,7 +70,7 @@ Docker Compose：仓库根的 `docker-compose.yml` 与 `.env.example`（`cp .env
 
 主控默认用 SQLite（数据目录下的 `satchel.db`），可选 PostgreSQL（数据目录下的 `database.json` 写 `driver: postgres`，或用环境变量 `SATCHEL_DATABASE_*` 覆盖）。数据目录由 `--data-dir` 或环境变量 `SATCHEL_DATA_DIR` 指定，默认 `/var/lib/satchel`。
 
-数据目录的布局是固定的，名字都是 `internal/base/db` 里的常量：`database.json`（数据库配置）、`satchel.db`（SQLite 库文件）、`master.key`（主控通信密钥）、`subscribes/`（订阅文件）、`rule_templates/`（规则模板）。`db migrate` 会把目录和两个子目录一起建出来（0700），postgres 模式也一样——库在别处，但主控密钥、订阅文件、规则模板仍在这里；`db status` 是只读命令，不建目录。备份的内容表按这份布局取。
+数据目录的布局是固定的，名字都是 `internal/base/db` 里的常量：`database.json`（数据库配置）、`config.yaml`（主控配置，可不存在）、`satchel.db`（SQLite 库文件）、`master.key`（主控通信密钥）、`satchel.sock`（主控运行时的 unix socket）、`subscribes/`（订阅文件）、`rule_templates/`（规则模板）、`public/`（`/public/` 对外提供的静态文件）。`db migrate` 与 `serve` 会把目录和三个子目录一起建出来（0700），postgres 模式也一样——库在别处，但主控密钥、订阅文件、规则模板、静态文件仍在这里；`db status` 是只读命令，不建目录。备份的内容表按这份布局取（socket 与 `public/` 不进备份）。
 
 ```sh
 ./satchel db migrate --data-dir ./data   # 执行迁移，然后比对库结构与注册表
@@ -47,7 +78,7 @@ Docker Compose：仓库根的 `docker-compose.yml` 与 `.env.example`（`cp .env
 ./satchel db unlock --data-dir ./data    # 清除上一次迁移被中断后残留的迁移锁
 ```
 
-每条命令都支持 `--json`，输出是带 `apiVersion` 的 JSON 对象；失败时 stderr 是 `code`、`reason`、`state`、`next` 四字段（`--json` 时是 JSON 对象）。退出码按第 05 章的表：命令行用法错误（未知子命令、未知 flag、多余参数）是错误码 `usage`、退出码 2，只有它是 2；请求内容不对（`bad_request`，含 CHECK / 外键 / NOT NULL 违反）、配置不合法（`config`）都是 1。
+每条命令都支持 `--json`，输出是带 `apiVersion` 的 JSON 对象；失败时 stderr 是 `code`、`reason`、`state`、`next` 四字段（`--json` 时是 JSON 对象）。退出码按第 05 章的表：0 成功、1 一般失败、2 用法错误（未知子命令、未知 flag、多余参数、重复的 flag；只有 `usage` 是 2）、3 认证失败、4 权限不足、5 对象不存在、6 版本冲突、7 危险操作未确认、8 部分失败、9 人类专属操作未验证身份；请求内容不对（`bad_request`）、配置不合法（`config`）、连不上主控（`unavailable`）都是 1。
 
 ### 结构漂移提示
 
@@ -92,6 +123,8 @@ psql "$SATCHEL_TEST_PG_DSN" -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public
 ## 代码分层
 
 六层，依赖只向下：契约（`pkg/api/v1`、`internal/command`）→ 投影（`internal/projection`）→ 横切（`internal/middleware`）→ 业务（`internal/service`）→ 仓储（`internal/core`）→ 基础设施（`internal/base`）。每个目录的 `doc.go` 写了该层的职责；引用规则由 `internal/layering_test.go` 钉住，违反即 `go test` 失败。
+
+一条经主控的命令走的路：投影（cli / rest / mcp）把请求解成 `command.Invocation` → 执行链 `audit(authz(dispatch))`（横切层：留痕在最外层、权限在里面、最里面按绑定分发；身份由 `authn` 在 HTTP 层按连接判定后放进 ctx）→ service 的处理函数。命令表（`internal/command`）只放元数据，处理函数的绑定与各层的装配都在 `cmd/satchel`（`app.go`），端到端测试也在那里。CLI 进程里的执行链换成连 socket 的 REST 客户端；MCP 的 `satchel_run` 用同一棵 cobra 树解析、用主控进程内的链执行。
 
 ## 许可证
 

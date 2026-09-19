@@ -5,12 +5,13 @@ services:
   satchel:
     image: ${SATCHEL_IMAGE:-ghcr.io/tajiaoyezi/satchel:latest}
     container_name: satchel
-    # M0 没有 serve：容器跑完迁移就退出，只在失败时重试有限次；M1 交付 serve 后改回 unless-stopped。
-    restart: on-failure:5
+    restart: unless-stopped
     # host 网络：主控要管 80 / 443、多端口入站、agent 反向连接，bridge 模式每加一个端口都要改 compose。
     network_mode: host
     environment:
       - SATCHEL_DATA_DIR=/var/lib/satchel
+      # 监听地址；host 网络下就是宿主的地址与端口（默认 0.0.0.0:12889）。
+      - SATCHEL_LISTEN=${SATCHEL_LISTEN:-0.0.0.0:12889}
       - SATCHEL_DATABASE_DRIVER=${SATCHEL_DATABASE_DRIVER:-}
       - SATCHEL_DATABASE_HOST=${SATCHEL_DATABASE_HOST:-}
       - SATCHEL_DATABASE_PORT=${SATCHEL_DATABASE_PORT:-}

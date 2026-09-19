@@ -10,21 +10,6 @@ import (
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
-// writeJSON 把载荷编码成一个 JSON 对象写出，并注入 apiVersion。载荷必须能编码成 JSON 对象。
-func writeJSON(w io.Writer, payload any) error {
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return v1.Wrap(v1.CodeInternal, "编码 JSON 输出失败", err)
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return v1.Wrap(v1.CodeInternal, "JSON 输出必须是对象", err)
-	}
-	fields["apiVersion"] = json.RawMessage(`"` + v1.APIVersion + `"`)
-	enc := json.NewEncoder(w)
-	return enc.Encode(fields)
-}
-
 // writeError 把四字段错误写到 stderr：JSON 时是恰好四个键的对象；文本时逐行 code、reason、state、next，
 // 底层原因（Unwrap 链）另起一行，只给人看。
 func writeError(w io.Writer, e *v1.Error, asJSON bool) {

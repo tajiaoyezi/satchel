@@ -26,6 +26,9 @@ type KindInfo struct {
 	// DefaultTrueFields 是「省略即为真」的布尔字段：库默认 FALSE，但 mmwx 默认 1，没填时创建路径与 DecodeSpec 置 true。
 	// 含非 spec 字段（如 User 的 is_active，动作专属），DecodeSpec 只处理其中属于 spec 的。
 	DefaultTrueFields []string
+	// SpecType 与 StatusType 是生成的 Spec / Status 结构体类型，explain 用它们报字段的 JSON 类型。
+	SpecType   reflect.Type
+	StatusType reflect.Type
 	// notApplyable 是 apply 拒收清单：字段名 → 它所属的分档。spec 之外的每个字段都在这里，元数据也算。
 	notApplyable map[string]string
 }

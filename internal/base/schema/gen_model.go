@@ -75,9 +75,20 @@ func writeImports(b *bytes.Buffer, cols []Column, extra ...string) {
 	if needJSON {
 		std = append(std, `"encoding/json"`)
 	}
+	// extra 里不带点的是标准库路径（如 "reflect"），并进标准库那一组；带点的是第三方，另起一组。
+	var third []string
+	for _, s := range extra {
+		if strings.Contains(s, ".") {
+			third = append(third, s)
+		} else {
+			std = append(std, s)
+		}
+	}
 	if needTime {
 		std = append(std, `"time"`)
 	}
+	sort.Strings(std)
+	extra = third
 	if len(std) == 0 && len(extra) == 0 {
 		return
 	}

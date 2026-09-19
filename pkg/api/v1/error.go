@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 )
 
 // Code 是机器可读的错误码。
@@ -33,7 +34,21 @@ const (
 	CodeDatabase              Code = "database"
 	CodeConfig                Code = "config"
 	CodeInternal              Code = "internal"
+	// unsupported_platform：在只保证客户端的平台上要求起主控（第 09 章）；unavailable：CLI 连不上主控。两者退出码 1。
+	CodeUnsupportedPlatform Code = "unsupported_platform"
+	CodeUnavailable         Code = "unavailable"
 )
+
+// allCodes 是全部错误码，新加错误码要同时加进来：测试用它保证每个码都有 HTTP 状态码。
+var allCodes = []Code{
+	CodeUsage, CodeBadRequest, CodeUnsupportedAPIVersion, CodeUnknownField, CodeFieldNotApplyable,
+	CodeUnauthenticated, CodeForbidden, CodeNotFound, CodeVersionConflict, CodeConfirmRequired,
+	CodePartialFailure, CodeHumanRequired, CodeNameTaken, CodeConflict, CodeAppendOnly,
+	CodeSchemaMismatch, CodeDatabase, CodeConfig, CodeInternal, CodeUnsupportedPlatform, CodeUnavailable,
+}
+
+// Codes 返回全部错误码，按声明顺序。
+func Codes() []Code { return append([]Code(nil), allCodes...) }
 
 // Error 是第 05 章功能⑤的四字段错误，REST、CLI、MCP 三个投影同一份。
 // Reason 必须是人话，不能是未包装的内部错误文本；原始错误只在 Unwrap 链里。
@@ -136,4 +151,42 @@ func ExitCodeOf(err error) int {
 		}
 	}
 	return ExitFailure
+}
+
+// httpStatuses 是错误码到 HTTP 状态码的折算表（resource-model「Structured error shape」）。
+// 状态码只给通用 HTTP 工具看，客户端以 code 为准；没列的一律 500。
+var httpStatuses = map[Code]int{
+	CodeUsage:                 http.StatusBadRequest,
+	CodeBadRequest:            http.StatusBadRequest,
+	CodeUnknownField:          http.StatusBadRequest,
+	CodeFieldNotApplyable:     http.StatusBadRequest,
+	CodeUnsupportedAPIVersion: http.StatusBadRequest,
+	CodeConfig:                http.StatusBadRequest,
+	CodeUnauthenticated:       http.StatusUnauthorized,
+	CodeForbidden:             http.StatusForbidden,
+	CodeHumanRequired:         http.StatusForbidden,
+	CodeNotFound:              http.StatusNotFound,
+	CodeVersionConflict:       http.StatusConflict,
+	CodeConflict:              http.StatusConflict,
+	CodeNameTaken:             http.StatusConflict,
+	CodeAppendOnly:            http.StatusConflict,
+	CodeConfirmRequired:       http.StatusPreconditionRequired,
+	CodeUnavailable:           http.StatusServiceUnavailable,
+}
+
+// HTTPStatusOf 把错误码折算成 HTTP 状态码；没登记的（internal、database、schema_mismatch、partial_failure、unsupported_platform）是 500。
+func HTTPStatusOf(code Code) int {
+	if status, ok := httpStatuses[code]; ok {
+		return status
+	}
+	return http.StatusInternalServerError
+}
+
+// AsError 把任何 error 规范成四字段错误：已是四字段的原样返回，其它包成 internal。
+func AsError(err error) *Error {
+	var e *Error
+	if errors.As(err, &e) {
+		return e
+	}
+	return Wrap(CodeInternal, "命令执行失败", err)
 }

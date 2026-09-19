@@ -39,8 +39,8 @@ func layerOf(pkg string) (l layer, ok bool) {
 	switch {
 	case strings.HasPrefix(rel, "pkg/"), rel == "internal/command":
 		return layerContract, true
-	case strings.HasPrefix(rel, "cmd/"), strings.HasPrefix(rel, "tools/"):
-		return layerCmd, true // 装配与开发工具（如发布签名程序 tools/sign），可引用任何层
+	case strings.HasPrefix(rel, "cmd/"), strings.HasPrefix(rel, "tools/"), strings.HasPrefix(rel, "internal/command/cmd/"):
+		return layerCmd, true // 装配与开发工具（发布签名程序 tools/sign、命令表的对照表生成器），可引用任何层
 	case strings.HasPrefix(rel, "internal/projection/"):
 		return layerProjection, true
 	case strings.HasPrefix(rel, "internal/middleware/"):
@@ -173,6 +173,7 @@ func TestCheckLayeringAcceptsCompliantGraph(t *testing.T) {
 		p("internal/core/users"):       {p("internal/base/model"), p("internal/base/store")},
 		p("internal/base/store"):       {p("internal/base/model"), "database/sql"},
 		p("internal/command"):          {p("pkg/api/v1")},
+		p("internal/command/cmd/gen"):  {p("internal/command")},
 		p("pkg/api/v1"):                {"encoding/json"},
 		p("pkg/securechan"):            {p("pkg/api/v1"), "crypto/ed25519"},
 		p("pkg/xrpc"):                  {p("pkg/securechan"), p("pkg/api/v1")},

@@ -85,3 +85,16 @@ jobs:
           cache-to: type=gha,mode=max
       - name: image reports version
         run: docker run --rm satchel:ci version | grep -q "satchel 0.0.0-dev"
+
+      - name: default command serves and turns healthy
+        run: |
+          cid=$(docker run -d --network host satchel:ci)
+          for _ in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' "$cid")
+            [ "$status" = "healthy" ] && break
+            sleep 2
+          done
+          docker logs "$cid"
+          [ "$status" = "healthy" ] || { echo "::error::容器 $(docker inspect --format '{{.State.Status}}' "$cid")，健康状态 $status"; exit 1; }
+          curl -fsS http://127.0.0.1:12889/api/v1/healthz | grep -q '"status":"ok"'
+          docker stop "$cid" >/dev/null
