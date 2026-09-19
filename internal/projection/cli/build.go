@@ -93,6 +93,9 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 			}
 		}
 		if c.List {
+			if cmd.Flags().Changed("limit") && (page.Limit < 1 || page.Limit > command.MaxLimit) {
+				return v1.Newf(v1.CodeBadRequest, "limit 必须在 1 到 %d 之间，得到 %d", command.MaxLimit, page.Limit)
+			}
 			p := page
 			inv.Page = &p
 		}
@@ -121,7 +124,7 @@ func execute(ctx context.Context, c *command.Command, inv *command.Invocation, o
 			return nil, v1.Newf(v1.CodeInternal, "本地命令 %s 没有装配处理函数", c.Name())
 		}
 		return h(ctx, inv)
-	case c.Offline:
+	case c.Offline && !opts.ServerSide:
 		return command.Explain(opts.Table, inv.Arg(0))
 	}
 	var runner command.Runner

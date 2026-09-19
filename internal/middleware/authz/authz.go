@@ -4,6 +4,7 @@ package authz
 
 import (
 	"context"
+	"regexp"
 
 	"github.com/satchel/satchel/internal/command"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
@@ -66,8 +67,11 @@ func Wrap(t *command.Table, verifier HumanVerifier, next command.Runner) command
 	})
 }
 
-// checkConfirm 按口径核对 confirm 字符串：object 与指定位置参数的值逐字相等；count 在本 change 里只要求非空，
-// 与受影响数量的比对随 M2 的 plan 交付（那时才有数量可比）。
+// decimalRe 是 count 口径接受的形状：规范的非负十进制（没有前导零、正负号、空白）。
+var decimalRe = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
+
+// checkConfirm 按口径核对 confirm 字符串：object 与指定位置参数的值逐字相等（不去空白）；count 必须是规范的十进制数，
+// 与受影响数量相等的比对随 M2 的 plan 交付（那时才有数量可比）。
 func checkConfirm(cmd *command.Command, inv *command.Invocation) error {
 	switch cmd.Confirm.Kind {
 	case command.ConfirmObject:
@@ -83,9 +87,9 @@ func checkConfirm(cmd *command.Command, inv *command.Invocation) error {
 				WithNext("重新执行并加上 --confirm " + expected)
 		}
 	case command.ConfirmCount:
-		if inv.Confirm == "" {
-			return v1.Newf(v1.CodeConfirmRequired, "%s 是危险操作，需要用 confirm 填本次受影响的数量确认", cmd.Name()).
-				WithState("kind", string(command.ConfirmCount)).
+		if !decimalRe.MatchString(inv.Confirm) {
+			return v1.Newf(v1.CodeConfirmRequired, "%s 是危险操作，需要用 confirm 填本次受影响的数量（十进制整数）确认", cmd.Name()).
+				WithState("kind", string(command.ConfirmCount)).WithState("given", inv.Confirm).
 				WithNext("先 plan 看受影响数量，再用 --confirm <数量> 执行")
 		}
 	}

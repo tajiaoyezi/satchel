@@ -41,17 +41,27 @@ func Wrap(rec Recorder, t *command.Table, logger *slog.Logger, next command.Runn
 		if err != nil {
 			entry.Result = string(v1.AsError(err).Code)
 		}
-		if werr := rec.Record(ctx, entry); werr != nil {
+		// 命令已经跑完，记录不能因为客户端取消了请求而丢：写入用不带取消的 ctx。
+		if werr := rec.Record(context.WithoutCancel(ctx), entry); werr != nil {
 			logger.Error("审计记录写入失败，命令结果照常返回",
-				"error", werr, "command", entry.Command, "actor", entry.Actor, "actor_kind", entry.ActorKind,
-				"args_digest", entry.ArgsDigest, "result", entry.Result, "at", entry.At)
+				"error", werr, "at", entry.At, "actor", entry.Actor, "actor_kind", entry.ActorKind, "token_id", derefID(entry.TokenID),
+				"command", entry.Command, "args_digest", entry.ArgsDigest, "plan_id", derefID(entry.PlanID), "result", entry.Result)
 		}
 		return result, err
 	})
 }
 
-// Digest 生成参数摘要：{"args":[…],"flags":{…}} 的紧凑 JSON，命令表里标 Secret 的 flag 值换成打码标记，
-// 超过 DigestLimit 截断并以 … 结尾（在 UTF-8 边界上截）。cmd 为 nil 时没有 Secret 信息，全部原样。
+// derefID 把可空的 id 变成日志里可读的值：nil 打 <nil>。
+func derefID(id *int64) any {
+	if id == nil {
+		return nil
+	}
+	return *id
+}
+
+// Digest 生成参数摘要：{"args":[…],"flags":{…}} 的紧凑 JSON，带了 confirm 或分页时再加 "confirm" 与 "page" 两个键；
+// 命令表里标 Secret 的 flag 值换成打码标记，超过 DigestLimit 截断并以 … 结尾（在 UTF-8 边界上截）。
+// cmd 为 nil 时没有 Secret 信息，全部原样。
 func Digest(cmd *command.Command, inv *command.Invocation) string {
 	flags := make(map[string]any, len(inv.Flags))
 	for name, v := range inv.Flags {
@@ -70,10 +80,17 @@ func Digest(cmd *command.Command, inv *command.Invocation) string {
 	if args == nil {
 		args = []string{}
 	}
+	var page *command.Page
+	if inv.Page != nil {
+		p := *inv.Page
+		page = &p
+	}
 	raw, err := json.Marshal(struct {
-		Args  []string       `json:"args"`
-		Flags map[string]any `json:"flags"`
-	}{args, flags})
+		Args    []string       `json:"args"`
+		Flags   map[string]any `json:"flags"`
+		Confirm string         `json:"confirm,omitempty"`
+		Page    *command.Page  `json:"page,omitempty"`
+	}{args, flags, inv.Confirm, page})
 	if err != nil {
 		return `{"args":[],"flags":{}}`
 	}

@@ -98,3 +98,6 @@ jobs:
           [ "$status" = "healthy" ] || { echo "::error::容器 $(docker inspect --format '{{.State.Status}}' "$cid")，健康状态 $status"; exit 1; }
           curl -fsS http://127.0.0.1:12889/api/v1/healthz | grep -q '"status":"ok"'
           docker stop "$cid" >/dev/null
+          code=$(docker inspect --format '{{.State.ExitCode}}' "$cid")
+          docker logs "$cid" 2>&1 | grep -q '主控已停止' || { echo "::error::docker stop 后日志里没有优雅停止的记录"; exit 1; }
+          [ "$code" = "0" ] || { echo "::error::docker stop 后退出码是 $code，不是 0（STOPSIGNAL 不对？）"; exit 1; }

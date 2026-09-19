@@ -360,8 +360,13 @@ func (c *Command) argByName(name string) (Arg, bool) {
 // --confirm 随危险类自动加，--limit / --cursor 随列表命令自动加，--server / --token 是 m1-04 的客户端 flag。
 var reservedFlags = map[string]bool{"json": true, "data-dir": true, "confirm": true, "limit": true, "cursor": true, "server": true, "token": true, "help": true}
 
-// ClientOnlyFlags 是只属于 CLI 客户端的根 flag：主控端（REST、MCP）见到它们一律拒绝——身份只来自连接。
-var ClientOnlyFlags = []string{"server", "token"}
+// ClientOnlyFlags 是只属于 CLI 客户端的根 flag（--data-dir 现在就有，--server / --token 随 m1-04 登记）：
+// 主控端（REST、MCP）见到它们一律拒绝——身份只来自连接，数据目录是主控自己的。CLI 投影登记根 flag 时用同一份。
+var ClientOnlyFlags = []string{"server", "token", "data-dir"}
+
+// ClientOnlyCommands 是只在 CLI 里有意义的命令路径的首段（第 05 章：login、mcp init 在 satchel_run 的拒绝清单里）；
+// m1-04 把它们登记成本地命令之前，MCP 已经按名拒绝。
+var ClientOnlyCommands = []string{"login", "mcp"}
 
 // FilePathFlags 是 CLI 惯用的文件路径 flag 名（含短名 -f），REST 与 MCP 上一律拒绝、不打开任何路径。
 var FilePathFlags = []string{"f", "filename", "file"}

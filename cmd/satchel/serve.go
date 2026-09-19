@@ -20,6 +20,8 @@ func serveCommand(ctx context.Context, inv *command.Invocation) (any, error) {
 		return nil, v1.Newf(v1.CodeUnsupportedPlatform, "主控只在 Linux 上运行；%s 上的 satchel 只保证客户端子命令可用（第 09 章）", runtime.GOOS).
 			WithNext("在 Linux 服务器上安装主控（install.sh 或 Docker），本机用 satchel --server … 连它")
 	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	dataDir := cli.DataDir(ctx)
 	cfg, err := db.LoadServeConfig(dataDir, inv.String("config", ""))
 	if err != nil {
@@ -46,9 +48,7 @@ func serveCommand(ctx context.Context, inv *command.Invocation) (any, error) {
 		bdb.Close()
 		return nil, err
 	}
-	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := a.serve(runCtx, tcp, unix); err != nil {
+	if err := a.serve(ctx, tcp, unix); err != nil {
 		return nil, err
 	}
 	return map[string]any{"stopped": true}, nil

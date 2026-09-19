@@ -34,6 +34,9 @@ type Options struct {
 	Remote func(dataDir string) command.Runner
 	// Renderers 是按命令名的文本渲染；没登记的用通用渲染。
 	Renderers map[string]Renderer
+	// ServerSide 表示这份选项跑在主控进程里（MCP 的 satchel_run）：离线命令也经执行链（要身份、要权限），
+	// 不像本机 CLI 那样本地作答。
+	ServerSide bool
 }
 
 // DefaultOptions 是 satchel 二进制的默认装配（不含 serve，它要 cmd/satchel 才能装）。
@@ -86,9 +89,21 @@ func newRoot(opts Options) (*cobra.Command, *options) {
 	}
 	root.PersistentFlags().BoolVar(&o.json, "json", false, "以 JSON 输出（等价于环境变量 SATCHEL_OUTPUT=json）")
 	root.PersistentFlags().StringVar(&o.dataDir, "data-dir", "", "数据目录（默认取环境变量 "+db.EnvDataDir+"，再默认 "+db.DefaultDataDir+"）")
+	// 树里只能有命令表里的命令：cobra 自带的 completion 命令关掉；help 命令换成一个不叫 help 的隐藏桩
+	// （cobra 的帮助模板会把名字叫 help 的命令硬列出来），这样 satchel help 就是普通的未知子命令，帮助用 --help 或 explain。
+	root.CompletionOptions.DisableDefaultCmd = true
+	root.SetHelpCommand(&cobra.Command{
+		Use: "__no-help", Hidden: true,
+		RunE: func(*cobra.Command, []string) error {
+			return usageError("没有子命令 help：看帮助用 satchel --help 或 satchel explain")
+		},
+	})
 	buildTree(root, opts, o)
 	return root, o
 }
+
+// shellCompletionCommands 是 cobra 在被点名时才临时挂上的补全内部命令；completion 命令已关，这两个也不放行。
+var shellCompletionCommands = map[string]bool{cobra.ShellCompRequestCmd: true, cobra.ShellCompNoDescRequestCmd: true}
 
 // Execute 跑一次 satchel 命令：解析 args、执行、把失败按四字段输出到 stderr，返回进程退出码。
 func Execute(opts Options, args []string, stdout, stderr io.Writer) int {
@@ -101,7 +116,12 @@ func ExecuteContext(ctx context.Context, opts Options, args []string, stdout, st
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	err := checkDuplicateFlags(root, opts.Table, args)
+	var err error
+	if len(args) > 0 && shellCompletionCommands[args[0]] {
+		err = usageError("没有子命令 %s", args[0])
+	} else {
+		err = checkDuplicateFlags(root, opts.Table, args)
+	}
 	if err == nil {
 		err = root.ExecuteContext(ctx)
 	}
@@ -116,10 +136,11 @@ func ExecuteContext(ctx context.Context, opts Options, args []string, stdout, st
 }
 
 // Resolve 用命令表构造的树找出 args 指向的命令（不执行）。找不到、或指向的是分组节点时返回 false。
-// MCP 在执行前用它做拒绝清单检查。
+// 只看 -- 之前的片段：-- 之后一律是位置参数，不能用来选命令。MCP 在执行前用它做拒绝清单检查。
 func Resolve(opts Options, args []string) (*command.Command, bool) {
+	head, _ := SplitDashDash(args)
 	root := NewRoot(opts)
-	found, _, err := root.Find(args)
+	found, _, err := root.Find(head)
 	if err != nil || found == nil {
 		return nil, false
 	}
@@ -128,6 +149,16 @@ func Resolve(opts Options, args []string) (*command.Command, bool) {
 		return nil, false
 	}
 	return opts.Table.Lookup(name)
+}
+
+// SplitDashDash 把参数在第一个 -- 处切开：head 是 -- 之前的片段，tail 是 -- 本身与其后的全部片段（没有 -- 时 tail 为空）。
+func SplitDashDash(args []string) (head, tail []string) {
+	for i, a := range args {
+		if a == "--" {
+			return args[:i], args[i:]
+		}
+	}
+	return args, nil
 }
 
 // normalizeError 把任何错误规范成四字段错误：用法错误 → usage（退出码 2，只有它是 2），

@@ -21,15 +21,16 @@ import (
 const Path = "/mcp"
 
 type runInput struct {
-	Args    []string `json:"args" jsonschema:"要执行的 satchel 命令数组，如 [\"audit\",\"list\",\"--limit\",\"10\"]；不经 shell，不要带 satchel 本身"`
-	Confirm string   `json:"confirm,omitempty" jsonschema:"危险操作的确认字符串：删除、重启、权限、节点执行、主控自身类填对象名，批量类填本次受影响数量"`
+	Args []string `json:"args" jsonschema:"要执行的 satchel 命令数组，如 [\"audit\",\"list\",\"--limit\",\"10\"]；不经 shell，不要带 satchel 本身"`
+	// Confirm 收任意 JSON 值：不是字符串时视为没给（master-identity-and-authz「confirm 是字符串」），由执行链报 confirm_required。
+	Confirm any `json:"confirm,omitempty" jsonschema:"危险操作的确认字符串：删除、重启、权限、节点执行、主控自身类填对象名，批量类填本次受影响数量"`
 }
 
 type explainInput struct {
 	Target string `json:"target,omitempty" jsonschema:"命令路径（如 \"audit list\"）或 kind 名（如 Task）；不给则列出全部命令与 kind"`
 }
 
-// NewHandler 建 /mcp 的 Streamable HTTP 处理器。opts 是主控进程内装配好的 CLI 选项：Remote 返回执行链本身。
+// NewHandler 建 /mcp 的 Streamable HTTP 处理器。opts 是主控进程内装配好的 CLI 选项：Remote 返回执行链本身、ServerSide 为 true。
 func NewHandler(opts cli.Options) http.Handler {
 	server := sdk.NewServer(&sdk.Implementation{Name: "satchel", Version: buildinfo.Version}, &sdk.ServerOptions{
 		Instructions: "Satchel 主控的 MCP 接口。satchel_run 跑一条 satchel 命令（与 CLI 同构，输出恒为 JSON），satchel_explain 看命令与 kind 的说明；不预载工具定义，需要时先 explain。",
@@ -53,11 +54,13 @@ func runTool(opts cli.Options) sdk.ToolHandlerFor[runInput, any] {
 		if err := precheck(opts, in.Args); err != nil {
 			return errorResult(err), nil, nil
 		}
-		args := stripJSONFlags(in.Args)
-		if in.Confirm != "" {
-			args = append(args, "--confirm", in.Confirm)
+		// --json 与 confirm 要放在 -- 之前：-- 之后的一切都是位置参数。
+		head, tail := cli.SplitDashDash(stripJSONFlags(in.Args))
+		args := append([]string{}, head...)
+		if confirm, ok := in.Confirm.(string); ok && confirm != "" {
+			args = append(args, "--confirm", confirm)
 		}
-		args = append(args, "--json")
+		args = append(append(args, "--json"), tail...)
 		var stdout, stderr bytes.Buffer
 		code := cli.ExecuteContext(ctx, opts, args, &stdout, &stderr)
 		if code != v1.ExitOK {
@@ -67,8 +70,12 @@ func runTool(opts cli.Options) sdk.ToolHandlerFor[runInput, any] {
 	}
 }
 
+// explainTool 与 REST 的 explain 同一条口径：要有身份（TCP 上的 MCP 除协议握手外没有无身份的内容）。
 func explainTool(t *command.Table) sdk.ToolHandlerFor[explainInput, any] {
-	return func(_ context.Context, _ *sdk.CallToolRequest, in explainInput) (*sdk.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in explainInput) (*sdk.CallToolResult, any, error) {
+		if v1.IdentityFrom(ctx).IsAnonymous() {
+			return errorResult(v1.New(v1.CodeUnauthenticated, "没有身份：请经主控本机的 unix socket 连接，或带上令牌")), nil, nil
+		}
 		result, err := command.Explain(t, in.Target)
 		if err != nil {
 			return errorResult(err), nil, nil
@@ -86,29 +93,44 @@ func errorResult(err error) *sdk.CallToolResult {
 	return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(raw)}}, IsError: true}
 }
 
-// precheck 在任何东西被打开或执行之前按拒绝清单检查命令数组（清单全部从命令表推出，见 master-command-table「拒绝清单只从表推出」）：
-// 客户端专用 flag（--token、--server）、文件路径类参数、本地命令、人类专属命令。
+// precheck 在任何东西被打开或执行之前按拒绝清单检查命令数组（清单全部从命令表推出，见 master-command-table「拒绝清单只从表推出」）。
+// 只看 -- 之前的片段（-- 之后一律是位置参数）：帮助 flag、客户端专用 flag（--token、--server、--data-dir）、文件路径类参数、
+// 客户端专用命令（login、mcp）、解析不到命令表里的命令、本地命令、人类专属命令。
 func precheck(opts cli.Options, args []string) error {
-	cmd, resolved := cli.Resolve(opts, args)
-	for _, a := range args {
-		if a == "--" {
-			break
-		}
-		name, ok := flagName(a)
-		if !ok {
+	head, _ := cli.SplitDashDash(args)
+	cmd, resolved := cli.Resolve(opts, head)
+	var words []string
+	for _, a := range head {
+		name, isFlag := flagName(a)
+		if !isFlag {
+			words = append(words, a)
 			continue
+		}
+		if name == "help" || name == "h" {
+			return v1.New(v1.CodeBadRequest, "satchel_run 不提供帮助文本：看说明用 satchel_explain").
+				WithNext("调用 satchel_explain，target 填命令路径或 kind 名")
 		}
 		for _, banned := range command.ClientOnlyFlags {
 			if name == banned {
-				return v1.Newf(v1.CodeBadRequest, "命令数组里不能带 --%s：MCP 调用的身份固定来自这次连接的认证，不能在命令里改", name)
+				return v1.Newf(v1.CodeBadRequest, "命令数组里不能带 --%s：它只属于 CLI 客户端，MCP 调用的身份与数据目录固定来自主控这一端", name)
 			}
 		}
 		if isFilePathFlag(name, cmd) {
 			return v1.Newf(v1.CodeBadRequest, "参数 %s 是文件路径：文件只在 CLI 本地读取、内联后发给主控，主控不读服务端路径", a)
 		}
 	}
+	if len(words) > 0 {
+		for _, banned := range command.ClientOnlyCommands {
+			if words[0] == banned {
+				return v1.Newf(v1.CodeBadRequest, "%s 只在 CLI 客户端里有，MCP 上不可用", words[0])
+			}
+		}
+	}
 	if !resolved {
-		return nil // 交给 cobra 出 usage
+		if len(words) == 0 {
+			return v1.New(v1.CodeUsage, "用法错误：缺少命令").WithNext("调用 satchel_explain 查看全部命令")
+		}
+		return v1.Newf(v1.CodeUsage, "用法错误：没有命令 %s", strings.Join(words, " ")).WithNext("调用 satchel_explain 查看全部命令")
 	}
 	if cmd.Class == command.ClassLocal {
 		return v1.Newf(v1.CodeBadRequest, "%s 是本地命令，只在主控本机的 CLI 里有，不经主控、MCP 上不可用", cmd.Name())
@@ -120,14 +142,15 @@ func precheck(opts cli.Options, args []string) error {
 	return nil
 }
 
-// flagName 认三种写法：--name、--name=value、-f（短名只有文件参数那一种要拦）。
+// flagName 认 --name、--name=value、-x、-x=value 四种写法（短名只有帮助与文件参数那几个要拦）。
 func flagName(a string) (string, bool) {
 	switch {
 	case strings.HasPrefix(a, "--") && len(a) > 2:
 		name, _, _ := strings.Cut(a[2:], "=")
 		return name, true
-	case strings.HasPrefix(a, "-") && len(a) == 2:
-		return a[1:], true
+	case strings.HasPrefix(a, "-") && len(a) >= 2 && a != "--":
+		name, _, _ := strings.Cut(a[1:], "=")
+		return name, true
 	}
 	return "", false
 }
@@ -148,17 +171,15 @@ func isFilePathFlag(name string, cmd *command.Command) bool {
 	return false
 }
 
-// stripJSONFlags 去掉命令数组里的 --json / --json=true / --json=false：satchel_run 恒为 JSON，这些 flag 被接受但没有效果。
+// stripJSONFlags 去掉 -- 之前的 --json / --json=true / --json=false：satchel_run 恒为 JSON，这些 flag 被接受但没有效果。
 func stripJSONFlags(args []string) []string {
+	head, tail := cli.SplitDashDash(args)
 	out := make([]string, 0, len(args))
-	for i, a := range args {
-		if a == "--" {
-			return append(out, args[i:]...)
-		}
+	for _, a := range head {
 		if a == "--json" || strings.HasPrefix(a, "--json=") {
 			continue
 		}
 		out = append(out, a)
 	}
-	return out
+	return append(out, tail...)
 }

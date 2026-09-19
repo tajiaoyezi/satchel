@@ -37,8 +37,10 @@ ENV SATCHEL_LISTEN=0.0.0.0:12889
 VOLUME ["/var/lib/satchel"]
 
 # 健康检查打无身份的 /api/v1/healthz；start-period 留给迁移与启动。
+# 地址取 SATCHEL_LISTEN：监听全部地址（0.0.0.0、[::]、空）时探 127.0.0.1，绑了具体地址就探那个地址。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD wget -qO- "http://127.0.0.1:${SATCHEL_LISTEN##*:}/api/v1/healthz" >/dev/null || exit 1
+    CMD sh -c 'host="${SATCHEL_LISTEN%:*}"; case "$host" in ""|0.0.0.0|"[::]"|"::") host=127.0.0.1;; esac; wget -qO- "http://$host:${SATCHEL_LISTEN##*:}/api/v1/healthz" >/dev/null || exit 1'
+
 
 # nginx 官方镜像把 STOPSIGNAL 设成 SIGQUIT（nginx 的优雅停止信号），Go 进程收到 SIGQUIT 会打印 goroutine 转储后退出 2；
 # 主控的优雅停止认 SIGTERM，这里改回来，docker stop 才是优雅停止。

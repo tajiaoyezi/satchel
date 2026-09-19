@@ -109,8 +109,8 @@ const (
 
 // Page 是列表命令的分页参数。Cursor 是不透明字符串，来自上一页的 NextCursor。
 type Page struct {
-	Limit  int
-	Cursor string
+	Limit  int    `json:"limit"`
+	Cursor string `json:"cursor,omitempty"`
 }
 
 // Normalize 补默认值并校验范围：limit 不在 1 到 500 之间报 bad_request，不静默截断。

@@ -45,6 +45,7 @@ func testOptions(t *testing.T, extra ...*command.Command) cli.Options {
 	opts := cli.DefaultOptions()
 	opts.Table = table
 	opts.Remote = func(string) command.Runner { return runner }
+	opts.ServerSide = true
 	opts.Local["serve"] = func(context.Context, *command.Invocation) (any, error) {
 		t.Fatal("serve 不该被执行")
 		return nil, nil
@@ -242,9 +243,9 @@ func TestConfirmPassthrough(t *testing.T) {
 	}
 }
 
-// master-mcp「explain 工具」：三种 target，不需要身份。
+// master-mcp「explain 工具」：三种 target（要有身份，无身份的用例在 review_test.go）。
 func TestExplainTool(t *testing.T) {
-	s := connect(t, testOptions(t), nil)
+	s := connect(t, testOptions(t), admin())
 	text, isErr := s.explain("audit list")
 	if isErr || !strings.Contains(text, `"path":"/api/v1/audit"`) || !strings.Contains(text, `"list":true`) || !strings.Contains(text, `"limit"`) {
 		t.Fatalf("解释命令：%v %s", isErr, text)

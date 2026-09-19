@@ -118,6 +118,10 @@ func decodeQuery(c *command.Command, r *http.Request, inv *command.Invocation) e
 			if err != nil {
 				return err
 			}
+			// 显式给的 limit 就按给的算：0 与越界都拒绝，不静默换成默认值。
+			if n := v.(int); n < 1 || n > command.MaxLimit {
+				return v1.Newf(v1.CodeBadRequest, "limit 必须在 1 到 %d 之间，得到 %d", command.MaxLimit, n)
+			}
 			inv.Page.Limit = v.(int)
 			continue
 		case c.List && name == "cursor":

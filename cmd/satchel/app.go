@@ -67,6 +67,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 	opts := cli.DefaultOptions()
 	opts.Table = table
 	opts.Remote = func(string) command.Runner { return runner }
+	opts.ServerSide = true
 
 	mux := http.NewServeMux()
 	mux.Handle(command.APIPrefix, rest.NewHandler(table, runner))
@@ -79,9 +80,17 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 	return &app{table: table, runner: runner, handler: authn.Middleware(mux), db: bdb, dataDir: dataDir, logger: logger}, nil
 }
 
-// listen 建两个监听：TCP 在 listenAddr，unix socket 在数据目录下（残留的 socket 文件先删，权限 0600）。
+// listen 建两个监听：TCP 在 listenAddr，unix socket 在数据目录下（权限 0600）。socket 文件已存在时先试着连它：
+// 连得上说明另一个主控还在跑，拒绝启动而不是把它的 socket 删掉；连不上才是残留文件，删掉重建。
 func (a *app) listen(listenAddr string) (tcp, unix net.Listener, err error) {
 	sock := filepath.Join(a.dataDir, db.SocketFile)
+	if _, statErr := os.Stat(sock); statErr == nil {
+		if conn, dialErr := net.DialTimeout("unix", sock, time.Second); dialErr == nil {
+			conn.Close()
+			return nil, nil, v1.Newf(v1.CodeConflict, "数据目录 %s 已有一个主控在运行（%s 有进程在监听）", a.dataDir, sock).
+				WithNext("先停掉那个主控，或给这个实例另指定数据目录")
+		}
+	}
 	if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, nil, v1.Wrap(v1.CodeInternal, "清理残留的 socket 文件 "+sock+" 失败", err)
 	}
@@ -128,6 +137,7 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 	defer cancel()
 	if err := srv.Shutdown(stopCtx); err != nil {
 		a.logger.Warn("优雅停止超时，仍在进行的请求被中断", "error", err)
+		_ = srv.Close()
 	}
 	if err := a.db.Close(); err != nil {
 		a.logger.Warn("关闭数据库失败", "error", err)
