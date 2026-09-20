@@ -188,8 +188,9 @@ func source(id v1.Identity, src v1.CredentialSource, next http.Handler) http.Han
 func TestSameOrigin(t *testing.T) {
 	user := v1.Identity{Actor: "alice", ActorKind: v1.ActorUser, Role: v1.RoleAdmin}
 	e := &echo{}
-	viaSession := source(user, v1.SourceSession, NewHandler(testTable(t), e, &fakeSessions{}))
-	viaSocket := source(v1.LocalAdmin("root"), v1.SourceSocket, NewHandler(testTable(t), e, &fakeSessions{}))
+	viaSession := source(user, v1.SourceSession, SameOrigin(NewHandler(testTable(t), e, &fakeSessions{})))
+	viaSocket := source(v1.LocalAdmin("root"), v1.SourceSocket, SameOrigin(NewHandler(testTable(t), e, &fakeSessions{})))
+	anonymous := SameOrigin(NewHandler(testTable(t), e, &fakeSessions{}))
 	post := func(h http.Handler, header map[string]string) int {
 		rec := raw(t, h, "POST", "/api/v1/demo/remove/alice", `{"confirm":"alice"}`, func(r *http.Request) {
 			r.Host = "satchel.example:8080"
@@ -238,6 +239,33 @@ func TestSameOrigin(t *testing.T) {
 	rec = raw(t, viaSession, "DELETE", SessionPath, "", func(r *http.Request) { r.Header.Set("Origin", "http://evil.example"); r.Host = "satchel.example:8080" })
 	if rec.Code != 403 {
 		t.Fatalf("跨站登出应当 403：%d", rec.Code)
+	}
+	// 没有身份的写请求（登录入口）同样检查：跨站的登录被拒（登录 CSRF），同源或非浏览器放行到业务。
+	login := func(header map[string]string) int {
+		rec := raw(t, anonymous, "POST", SessionPath, `{"username":"admin","password":"pw"}`, func(r *http.Request) {
+			r.Host = "satchel.example:8080"
+			for k, v := range header {
+				r.Header.Set(k, v)
+			}
+		})
+		return rec.Code
+	}
+	if got := login(map[string]string{"Origin": "http://evil.example"}); got != 403 {
+		t.Fatalf("跨站登录应当 403：%d", got)
+	}
+	if got := login(map[string]string{"Sec-Fetch-Site": "cross-site"}); got != 403 {
+		t.Fatalf("Sec-Fetch-Site 跨站的登录应当 403：%d", got)
+	}
+	if got := login(map[string]string{"Origin": "http://satchel.example:8080"}); got != 200 {
+		t.Fatalf("同源登录应当到业务：%d", got)
+	}
+	if got := login(nil); got != 200 {
+		t.Fatalf("非浏览器客户端登录应当到业务：%d", got)
+	}
+	// 没有身份的 GET 不检查。
+	rec = raw(t, anonymous, "GET", "/api/v1/healthz", "", func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") })
+	if rec.Code != 200 {
+		t.Fatalf("无身份的 GET 不做同源检查：%d", rec.Code)
 	}
 }
 

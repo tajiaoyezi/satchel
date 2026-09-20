@@ -85,7 +85,8 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 		rest.WriteError(w, v1.Newf(v1.CodeNotFound, "没有这个路径：%s", r.URL.Path))
 	})
 
-	return &app{table: table, runner: runner, handler: authn.Middleware(identity, mux), db: bdb, dataDir: dataDir, logger: logger}, nil
+	// 顺序：authn 先判身份（同源检查要看身份来源），SameOrigin 管住所有浏览器发来的写请求（REST、/mcp、会话入口）。
+	return &app{table: table, runner: runner, handler: authn.Middleware(identity, rest.SameOrigin(mux)), db: bdb, dataDir: dataDir, logger: logger}, nil
 }
 
 // listen 建两个监听：TCP 在 listenAddr，unix socket 在数据目录下（权限 0600）。socket 文件已存在时先试着连它：

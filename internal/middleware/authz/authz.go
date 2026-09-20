@@ -11,7 +11,7 @@ import (
 )
 
 // HumanVerifier 是第 05 章七组的当场验证：人类专属命令对本机管理员与用户身份要在同一请求里验密码与第二因素。
-// 原语由 m1-02 交付；本 change 里没有人类专属命令，传 nil 即可。
+// 生产装配传 service/auth 的 Verifier；传 nil 时人类专属命令一律 human_required（没有验证入口）。
 type HumanVerifier interface {
 	Verify(ctx context.Context, inv *command.Invocation) error
 }

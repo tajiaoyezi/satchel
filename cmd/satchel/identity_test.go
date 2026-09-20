@@ -283,6 +283,13 @@ func TestIdentityEndToEnd(t *testing.T) {
 		if status, _, _ := alice.call("GET", base+"/api/v1/whoami", "", nil); status != 200 {
 			t.Fatalf("跨站登出不该作废会话：%d", status)
 		}
+		// 同源检查也管 /mcp（带会话 cookie 的浏览器请求）与没有身份的登录入口（登录 CSRF）。
+		if status, fields, _ := alice.call("POST", base+"/mcp", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, map[string]string{"Origin": "http://evil.example", "Accept": "application/json, text/event-stream"}); status != 403 || str(fields["code"]) != "forbidden" {
+			t.Fatalf("跨站打 /mcp 应当 403：%d %v", status, fields)
+		}
+		if status, fields, _ := newBrowser(t).call("POST", base+"/api/v1/session", `{"username":"admin","password":"secret12"}`, map[string]string{"Origin": "http://evil.example"}); status != 403 || str(fields["code"]) != "forbidden" {
+			t.Fatalf("跨站登录应当 403：%d %v", status, fields)
+		}
 		// 本机重置管理员密码：作废全部会话；两步验证不动；新密码能登录。
 		revoked, err := cli.ResetAdminPassword(context.Background(), bdb, "admin", "resetpass1")
 		if err != nil || revoked != 1 {

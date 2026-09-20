@@ -37,8 +37,8 @@ func (v *Verifier) Verify(ctx context.Context, inv *command.Invocation) error {
 			return humanRequired("当场验证只能验自己的账号", "去掉 verify-user，或填自己的用户名")
 		}
 		a, err := v.s.users.GetByUsername(ctx, id.Actor)
-		if err != nil {
-			return humanRequired("会话对应的账号已不存在", "重新登录")
+		if err != nil || a.Deleted || !a.IsActive {
+			return humanRequired("会话对应的账号已不存在或已停用", "重新登录")
 		}
 		account = a
 	case v1.ActorLocalAdmin:
@@ -51,6 +51,10 @@ func (v *Verifier) Verify(ctx context.Context, inv *command.Invocation) error {
 		}
 		if err != nil {
 			return err
+		}
+		if !a.IsActive {
+			// 停用的管理员在会话侧已经认不出，它的密码也不能再给本机管理员当「当场验证」用。
+			return humanRequired("verify-user 指向的管理员账号已停用", "填一个启用中的管理员用户名")
 		}
 		account = a
 	default:

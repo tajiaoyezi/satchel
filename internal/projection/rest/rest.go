@@ -20,7 +20,7 @@ const MaxBodyBytes = 1 << 20
 
 // NewHandler 从命令表建路由。每条非本地命令一条路由（可选位置参数每少一个再登记一条），
 // 加 GET /api/v1/healthz、三个会话入口（sessions 非 nil 时）与两个 404 兜底；方法不匹配也是 404 的 not_found。
-// 整个处理器外面套同源检查：身份来自会话 cookie 的写请求要过 Origin / Sec-Fetch-Site（master-web-session）。
+// 同源检查不在这里：装配根用 SameOrigin 套在整棵路由外面（REST 与 /mcp 一起）。
 func NewHandler(t *command.Table, runner command.Runner, sessions SessionAPI) http.Handler {
 	mux := http.NewServeMux()
 	for _, c := range t.Remote() {
@@ -41,7 +41,7 @@ func NewHandler(t *command.Table, runner command.Runner, sessions SessionAPI) ht
 	}
 	mux.HandleFunc(command.APIPrefix, func(w http.ResponseWriter, r *http.Request) { WriteError(w, notFound(r)) })
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { WriteError(w, notFound(r)) })
-	return sameOrigin(mux)
+	return mux
 }
 
 // pathWithArgs 去掉路径模板末尾多余的可选参数段，只留前 n 个。

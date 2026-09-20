@@ -137,6 +137,10 @@ func (s *Service) totpSetup(ctx context.Context, _ *command.Invocation) (any, er
 	if err != nil {
 		return nil, err
 	}
+	if a.TOTPEnabled {
+		// 已启用时 setup 会把开关关掉、清掉恢复码（账号在 confirm 之前只剩密码）：不许，先 disable。
+		return nil, v1.New(v1.CodeConflict, "两步验证已经启用").WithNext("要换密钥先 account totp disable 再 setup")
+	}
 	key, err := newTOTPKey(a.Username)
 	if err != nil {
 		return nil, err
