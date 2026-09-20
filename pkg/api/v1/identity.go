@@ -112,3 +112,28 @@ func (id Identity) HasDanger(d Danger) bool {
 	}
 	return false
 }
+
+// CredentialSource 是身份从哪来：socket 对端凭据、网页会话 cookie、API 令牌（m1-04）。REST 的同源检查只对会话来的写请求做。
+type CredentialSource string
+
+const (
+	SourceNone    CredentialSource = ""
+	SourceSocket  CredentialSource = "socket"
+	SourceSession CredentialSource = "session"
+	SourceToken   CredentialSource = "token"
+)
+
+type sourceKey struct{}
+
+// WithCredentialSource 把身份来源放进 ctx。
+func WithCredentialSource(ctx context.Context, s CredentialSource) context.Context {
+	return context.WithValue(ctx, sourceKey{}, s)
+}
+
+// CredentialSourceFrom 取 ctx 里的身份来源；没有就是 SourceNone。
+func CredentialSourceFrom(ctx context.Context) CredentialSource {
+	if s, ok := ctx.Value(sourceKey{}).(CredentialSource); ok {
+		return s
+	}
+	return SourceNone
+}

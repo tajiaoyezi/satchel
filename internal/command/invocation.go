@@ -23,6 +23,15 @@ type Invocation struct {
 	Confirm string
 	// Page 只在列表命令上有。
 	Page *Page
+	// Verify 是人类专属命令的当场验证值；不在 Flags 里，永不进审计摘要。没给为 nil。
+	Verify *Verification
+}
+
+// Verification 是第 05 章七组的当场验证：密码、第二因素（TOTP 或恢复码）、要验的管理员账号（本机管理员必填）。
+type Verification struct {
+	Password string
+	Code     string
+	User     string
 }
 
 // Name 是命令名（各段空格连接）。

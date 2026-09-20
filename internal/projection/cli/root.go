@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/command"
@@ -37,11 +38,31 @@ type Options struct {
 	// ServerSide 表示这份选项跑在主控进程里（MCP 的 satchel_run）：离线命令也经执行链（要身份、要权限），
 	// 不像本机 CLI 那样本地作答。
 	ServerSide bool
+	// Prompt 从终端读一个不回显的值（密码、验证码）；nil 时用真终端。没有终端时 MUST 返回 ErrNoTerminal，不等待。
+	Prompt func(label string) (string, error)
+}
+
+// ErrNoTerminal 表示 stdin 不是终端：要从终端读的值拿不到，命令直接拒绝、不等待。
+var ErrNoTerminal = errors.New("stdin 不是终端")
+
+// terminalPrompt 是默认的终端读取：提示写到 stderr，输入不回显。
+func terminalPrompt(label string) (string, error) {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return "", ErrNoTerminal
+	}
+	fmt.Fprint(os.Stderr, label+"：")
+	raw, err := term.ReadPassword(fd)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // DefaultOptions 是 satchel 二进制的默认装配（不含 serve，它要 cmd/satchel 才能装）。
 func DefaultOptions() Options {
-	opts := Options{Table: command.Catalog(), Local: command.Bindings{}, Renderers: map[string]Renderer{}}
+	opts := Options{Table: command.Catalog(), Local: command.Bindings{}, Renderers: map[string]Renderer{}, Prompt: terminalPrompt}
 	registerBuiltins(&opts)
 	return opts
 }
@@ -116,6 +137,7 @@ func ExecuteContext(ctx context.Context, opts Options, args []string, stdout, st
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
+	ctx = withPrompt(withStderr(ctx, stderr), opts.Prompt)
 	var err error
 	if len(args) > 0 && shellCompletionCommands[args[0]] {
 		err = usageError("没有子命令 %s", args[0])

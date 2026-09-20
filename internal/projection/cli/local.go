@@ -44,6 +44,12 @@ func registerBuiltins(opts *Options) {
 	}
 	opts.Renderers["explain"] = renderExplain
 	opts.Renderers["whoami"] = renderWhoami
+	opts.Local["admin reset-password"] = adminResetPassword
+	opts.Renderers["admin reset-password"] = func(w io.Writer, result any) error {
+		out := result.(resetPasswordOutput)
+		_, err := fmt.Fprintf(w, "已重置 %s 的密码，作废了 %d 个会话\n", out.Username, out.SessionsRevoked)
+		return err
+	}
 }
 
 // OpenForWrite 为会写库的命令打开数据库：先确保数据目录与子目录存在（两种驱动都一样——

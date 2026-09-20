@@ -13,7 +13,7 @@ import (
 // master-rest-api「列表分页」：显式 limit=0 与越界都 400，不换成默认值。
 func TestLimitZeroRejected(t *testing.T) {
 	e := &echo{}
-	h := NewHandler(testTable(t), e)
+	h := NewHandler(testTable(t), e, nil)
 	for _, q := range []string{"limit=0", "limit=-5", "limit=501"} {
 		code, fields := do(t, h, "GET", "/api/v1/audit?"+q, "", nil)
 		if code != 400 || errorOf(t, fields).Code != v1.CodeBadRequest || !strings.Contains(errorOf(t, fields).Reason, "limit") {
@@ -36,7 +36,7 @@ func identity(id v1.Identity, next http.Handler) http.Handler {
 func TestBooleanConfirmThroughAuthz(t *testing.T) {
 	table := testTable(t)
 	e := &echo{}
-	h := identity(v1.LocalAdmin("root"), NewHandler(table, authz.Wrap(table, nil, e)))
+	h := identity(v1.LocalAdmin("root"), NewHandler(table, authz.Wrap(table, nil, e), nil))
 	js := map[string]string{"Content-Type": "application/json"}
 	for _, body := range []string{`{"confirm":true}`, `{"confirm":1}`, `{}`, `{"confirm":"bob"}`} {
 		code, fields := do(t, h, "POST", "/api/v1/demo/remove/alice", body, js)

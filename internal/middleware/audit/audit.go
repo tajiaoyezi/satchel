@@ -31,8 +31,12 @@ func Wrap(rec Recorder, t *command.Table, logger *slog.Logger, next command.Runn
 		result, err := next.Run(ctx, inv)
 		id := v1.IdentityFrom(ctx)
 		cmd, known := t.Lookup(inv.Name())
-		if id.IsAnonymous() || (known && (cmd.Offline || cmd.Class == command.ClassLocal)) {
+		// anonymous 被拒的请求不记（扫描器会刷满）；但标了不要身份的命令（setup *）执行了就要记。
+		if (id.IsAnonymous() && !(known && cmd.Anonymous)) || (known && (cmd.Offline || cmd.Class == command.ClassLocal)) {
 			return result, err
+		}
+		if id.IsAnonymous() {
+			id = v1.Anonymous()
 		}
 		entry := svc.Entry{
 			At: time.Now().UTC(), Actor: id.Actor, ActorKind: id.ActorKind, TokenID: id.TokenID,
@@ -66,7 +70,7 @@ func Digest(cmd *command.Command, inv *command.Invocation) string {
 	flags := make(map[string]any, len(inv.Flags))
 	for name, v := range inv.Flags {
 		if cmd != nil {
-			if f, ok := cmd.FlagByName(name); ok && f.Secret {
+			if f, ok := cmd.FlagByName(name); ok && f.Masked() {
 				flags[name] = v1.Redacted
 				continue
 			}

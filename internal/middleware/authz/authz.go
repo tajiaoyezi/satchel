@@ -31,10 +31,14 @@ func Wrap(t *command.Table, verifier HumanVerifier, next command.Runner) command
 		if cmd.Class == command.ClassLocal {
 			return nil, v1.Newf(v1.CodeBadRequest, "%s 是本地命令，只在 CLI 里有、不经主控", cmd.Name())
 		}
+		// 不要身份的命令（初始化向导）对谁都开放：跳过身份与 scope 检查；表校验保证它没有人类专属与危险类。
+		if cmd.Anonymous {
+			return next.Run(ctx, inv)
+		}
 		id := v1.IdentityFrom(ctx)
 		if id.IsAnonymous() {
-			return nil, v1.New(v1.CodeUnauthenticated, "没有身份：请经主控本机的 unix socket 调用，或带上令牌").
-				WithNext("在主控本机以 root 或运行主控的用户执行 satchel；远程用法随 m1-04 的令牌交付")
+			return nil, v1.New(v1.CodeUnauthenticated, "没有身份：请登录、经主控本机的 unix socket 调用，或带上令牌").
+				WithNext("网页上登录；在主控本机以 root 或运行主控的用户执行 satchel；远程用法随 m1-04 的令牌交付")
 		}
 		if cmd.HumanOnly {
 			if id.ActorKind == v1.ActorToken || id.ActorKind == v1.ActorSystem {

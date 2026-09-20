@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -74,12 +75,21 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 		Args:        argsValidator(c),
 	}
 	for _, f := range c.Flags {
+		if f.Type == command.TypePassword {
+			continue // 密码只从终端读，不作为命令行参数存在（给了就是未知 flag → usage）
+		}
 		values[f.Name] = registerFlag(leaf.Flags(), f)
 	}
 	var confirm string
 	var page command.Page
 	if c.Danger != "" {
 		leaf.Flags().StringVar(&confirm, "confirm", "", "危险操作的确认字符串："+confirmHint(c))
+	}
+	var verifyCode, verifyUser string
+	if c.HumanOnly {
+		// 当场验证：密码只从终端读；验证码可以作参数也可以终端输入；verify-user 是本机管理员要指明的管理员账号。
+		leaf.Flags().StringVar(&verifyCode, command.VerifyCodeFlag, "", "当场验证的第二因素：验证器当前的码或一枚恢复码（不给会在终端里问）")
+		leaf.Flags().StringVar(&verifyUser, command.VerifyUserFlag, "", "当场验证要验的管理员账号（本机管理员必填；登录的用户只能验自己）")
 	}
 	if c.List {
 		leaf.Flags().IntVar(&page.Limit, "limit", command.DefaultLimit, fmt.Sprintf("每页条数（1 到 %d）", command.MaxLimit))
@@ -98,6 +108,17 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 			}
 			p := page
 			inv.Page = &p
+		}
+		if !opts.ServerSide && c.Class != command.ClassLocal {
+			// 密码类 flag 从终端读两遍（新密钥），人类专属命令再读当场验证的密码与可选的验证码。
+			if err := readPasswords(c, inv, opts); err != nil {
+				return err
+			}
+			if c.HumanOnly {
+				if err := readVerification(c, inv, verifyCode, verifyUser, opts); err != nil {
+					return err
+				}
+			}
 		}
 		result, err := execute(cmd.Context(), c, inv, opts, o)
 		if err != nil {
@@ -134,6 +155,64 @@ func execute(ctx context.Context, c *command.Command, inv *command.Invocation, o
 		runner = NewClient(opts.Table, socketPath(o.dataDir))
 	}
 	return runner.Run(ctx, inv)
+}
+
+// readPasswords 让 password 类型的 flag 从终端读两遍并比对；没有终端直接拒绝（人类专属命令是 human_required，其它 bad_request）。
+func readPasswords(c *command.Command, inv *command.Invocation, opts Options) error {
+	for _, f := range c.Flags {
+		if f.Type != command.TypePassword {
+			continue
+		}
+		first, err := prompt(opts, f.Description)
+		if err != nil {
+			return noTerminal(c, err)
+		}
+		second, err := prompt(opts, "再输入一次确认")
+		if err != nil {
+			return noTerminal(c, err)
+		}
+		if first != second {
+			return v1.Newf(v1.CodeBadRequest, "两次输入的 %s 不一致", f.Name)
+		}
+		inv.Flags[f.Name] = first
+	}
+	return nil
+}
+
+// readVerification 读当场验证的值：密码只从终端读；验证码没作参数给就问一次（没开两步验证直接回车）。
+func readVerification(c *command.Command, inv *command.Invocation, code, user string, opts Options) error {
+	pw, err := prompt(opts, "当场验证：请输入你的密码")
+	if err != nil {
+		return noTerminal(c, err)
+	}
+	if code == "" {
+		code, err = prompt(opts, "两步验证码或恢复码（没开两步验证直接回车）")
+		if err != nil {
+			return noTerminal(c, err)
+		}
+	}
+	inv.Verify = &command.Verification{Password: pw, Code: code, User: user}
+	return nil
+}
+
+func prompt(opts Options, label string) (string, error) {
+	if opts.Prompt == nil {
+		return terminalPrompt(label)
+	}
+	return opts.Prompt(label)
+}
+
+// noTerminal 把「没有终端」翻成四字段错误：人类专属命令是 human_required（退出码 9），其它 bad_request。
+func noTerminal(c *command.Command, err error) error {
+	if !errors.Is(err, ErrNoTerminal) {
+		return v1.Wrap(v1.CodeInternal, "从终端读取失败", err)
+	}
+	if c.HumanOnly {
+		return v1.Wrap(v1.CodeHumanRequired, c.Name()+" 是只有人能做的操作，要在终端里当场验证身份；当前没有终端", err).
+			WithNext("在有终端的会话里执行，或在网页上操作")
+	}
+	return v1.Wrap(v1.CodeBadRequest, c.Name()+" 要从终端读密码，当前没有终端", err).
+		WithNext("在有终端的会话里执行，或在网页上操作")
 }
 
 // argsValidator 按表校验位置参数个数，文案点名缺的或多余的那个。

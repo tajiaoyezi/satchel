@@ -44,6 +44,14 @@ func TestExplainCommand(t *testing.T) {
 	if strings.Join(info.Reserved, ",") != "limit,cursor" {
 		t.Fatalf("列表命令应当报出 limit 与 cursor：%v", info.Reserved)
 	}
+	human, _ := Explain(Catalog(), "account set-password")
+	if strings.Join(human.(CommandInfo).Reserved, ",") != "verify-password,verify-code,verify-user" || !human.(CommandInfo).HumanOnly {
+		t.Fatalf("人类专属命令应当报出 verify-* 保留 flag：%+v", human)
+	}
+	anon, _ := Explain(Catalog(), "setup status")
+	if !anon.(CommandInfo).Anonymous {
+		t.Fatal("setup status 应当报出不要身份")
+	}
 	flags := map[string]bool{}
 	for _, f := range info.Flags {
 		flags[f.Name] = true

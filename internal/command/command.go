@@ -35,7 +35,8 @@ func (c Class) Scope() (v1.Scope, bool) {
 
 var validClasses = map[Class]bool{ClassLocal: true, ClassRead: true, ClassConfig: true, ClassAction: true, ClassMasterSettings: true}
 
-// FlagType 是 flag 的取值类型。file 是 CLI 本地读取的文件路径，只有 CLI 投影接受。
+// FlagType 是 flag 的取值类型。file 是 CLI 本地读取的文件路径，只有 CLI 投影接受；
+// password 是 CLI 从终端读、不作为命令行参数存在的值（REST 从请求体读），审计摘要与日志里恒打码。
 type FlagType string
 
 const (
@@ -45,9 +46,10 @@ const (
 	TypeDuration FlagType = "duration"
 	TypeStrings  FlagType = "strings" // 可重复
 	TypeFile     FlagType = "file"
+	TypePassword FlagType = "password"
 )
 
-var validFlagTypes = map[FlagType]bool{TypeString: true, TypeInt: true, TypeBool: true, TypeDuration: true, TypeStrings: true, TypeFile: true}
+var validFlagTypes = map[FlagType]bool{TypeString: true, TypeInt: true, TypeBool: true, TypeDuration: true, TypeStrings: true, TypeFile: true, TypePassword: true}
 
 // Arg 是位置参数。
 type Arg struct {
@@ -56,7 +58,7 @@ type Arg struct {
 	Optional    bool
 }
 
-// Flag 是命令的一个 flag。Secret 标密钥类：审计摘要与日志里打码。表里的 flag 一律没有短名。
+// Flag 是命令的一个 flag。Secret 标密钥类：审计摘要与日志里打码（password 类型隐含）。表里的 flag 一律没有短名。
 type Flag struct {
 	Name        string
 	Type        FlagType
@@ -65,10 +67,13 @@ type Flag struct {
 	Secret      bool
 }
 
+// Masked 报告这个 flag 的值在摘要与日志里要不要打码：标了 Secret 或类型是 password。
+func (f Flag) Masked() bool { return f.Secret || f.Type == TypePassword }
+
 // Parse 把命令行或查询参数里的字符串按类型解析。strings 类型由调用方逐个值调它。
 func (f Flag) Parse(raw string) (any, error) {
 	switch f.Type {
-	case TypeString, TypeFile, TypeStrings:
+	case TypeString, TypeFile, TypeStrings, TypePassword:
 		return raw, nil
 	case TypeInt:
 		n, err := strconv.Atoi(raw)
@@ -100,7 +105,7 @@ func (f Flag) FromJSON(v any) (any, error) {
 		return nil, v1.Newf(v1.CodeBadRequest, "参数 %s 的值 %v 不是 %s", f.Name, v, f.Type)
 	}
 	switch f.Type {
-	case TypeString, TypeFile:
+	case TypeString, TypeFile, TypePassword:
 		s, ok := v.(string)
 		if !ok {
 			return bad()
@@ -174,8 +179,11 @@ type Command struct {
 	Danger v1.Danger
 	// Confirm 只在 Danger 非空时登记。
 	Confirm *Confirm
-	// HumanOnly 是第 05 章七组人类专属操作：任何令牌都拒绝，本机管理员与用户要当场验证。
+	// HumanOnly 是第 05 章七组人类专属操作：任何令牌都拒绝，本机管理员与用户要当场验证
+	// （请求里自动带保留 flag verify-password / verify-code / verify-user，见 VerifyFlags）。
 	HumanOnly bool
+	// Anonymous 表示不要身份也能调（只给初始化向导的 setup status / setup init 用）：authz 跳过身份检查，MCP 一律拒绝，审计照记。
+	Anonymous bool
 	// List 表示列表命令：一律分页，REST 用 GET 并去掉末尾的 list 段。
 	List bool
 	// Hidden 的命令不出现在帮助里（如 __verify）。
@@ -298,12 +306,26 @@ func (c *Command) validate() error {
 		if !validFlagTypes[f.Type] {
 			return fmt.Errorf("命令 %q 的 flag %s 类型 %q 不认识", name, f.Name, f.Type)
 		}
-		if reservedFlags[f.Name] {
+		// 本地命令没有危险类，投影层不会给它自动加 confirm；它可以自己登记一个 --confirm 做确认（admin reset-password）。
+		if reservedFlags[f.Name] && !(c.Class == ClassLocal && f.Name == "confirm") {
 			return fmt.Errorf("命令 %q 的 flag %s 与投影层保留的 flag 撞名", name, f.Name)
 		}
 	}
 	if c.Danger != "" && !validDanger(c.Danger) {
 		return fmt.Errorf("命令 %q 的危险类 %q 不认识", name, c.Danger)
+	}
+	for _, f := range c.Flags {
+		if f.Type == TypePassword && c.Class != ClassAction && c.Class != ClassConfig && c.Class != ClassMasterSettings {
+			return fmt.Errorf("命令 %q 的 flag %s 是 password 类型，只能登记在有写路径的命令上（不能是 read 或 local）", name, f.Name)
+		}
+	}
+	if c.Anonymous {
+		if c.Class != ClassRead && c.Class != ClassAction {
+			return fmt.Errorf("命令 %q 标了不要身份，类别只能是 read 或 action", name)
+		}
+		if c.HumanOnly || c.Danger != "" {
+			return fmt.Errorf("命令 %q 标了不要身份，不能同时是人类专属或危险类", name)
+		}
 	}
 	if c.Class == ClassLocal {
 		if c.Danger != "" || c.HumanOnly || c.REST != nil || c.List || c.Offline {
@@ -357,8 +379,19 @@ func (c *Command) argByName(name string) (Arg, bool) {
 }
 
 // reservedFlags 是投影层自己加的 flag，命令不许再登记：--json、--data-dir 是 CLI 的全局 flag，
-// --confirm 随危险类自动加，--limit / --cursor 随列表命令自动加，--server / --token 是 m1-04 的客户端 flag。
-var reservedFlags = map[string]bool{"json": true, "data-dir": true, "confirm": true, "limit": true, "cursor": true, "server": true, "token": true, "help": true}
+// --confirm 随危险类自动加，--limit / --cursor 随列表命令自动加，verify-* 随人类专属自动加，--server / --token 是 m1-04 的客户端 flag。
+var reservedFlags = map[string]bool{"json": true, "data-dir": true, "confirm": true, "limit": true, "cursor": true, "server": true, "token": true, "help": true,
+	VerifyPasswordFlag: true, VerifyCodeFlag: true, VerifyUserFlag: true}
+
+// 人类专属命令自动带的当场验证保留 flag（master-human-verification）：值不进 Invocation.Flags，进 Invocation.Verify，永不进审计摘要。
+const (
+	VerifyPasswordFlag = "verify-password"
+	VerifyCodeFlag     = "verify-code"
+	VerifyUserFlag     = "verify-user"
+)
+
+// VerifyFlags 是三个保留 flag 的名字，投影层登记与解码时用同一份。
+var VerifyFlags = []string{VerifyPasswordFlag, VerifyCodeFlag, VerifyUserFlag}
 
 // ClientOnlyFlags 是只属于 CLI 客户端的根 flag（--data-dir 现在就有，--server / --token 随 m1-04 登记）：
 // 主控端（REST、MCP）见到它们一律拒绝——身份只来自连接，数据目录是主控自己的。CLI 投影登记根 flag 时用同一份。

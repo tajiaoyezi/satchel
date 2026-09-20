@@ -20,6 +20,8 @@ import (
 	"github.com/satchel/satchel/internal/base/store"
 	"github.com/satchel/satchel/internal/command"
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
+	"github.com/satchel/satchel/internal/core/sessions"
+	"github.com/satchel/satchel/internal/core/users"
 	mwaudit "github.com/satchel/satchel/internal/middleware/audit"
 	"github.com/satchel/satchel/internal/middleware/authn"
 	"github.com/satchel/satchel/internal/middleware/authz"
@@ -28,6 +30,7 @@ import (
 	"github.com/satchel/satchel/internal/projection/rest"
 	"github.com/satchel/satchel/internal/projection/web"
 	svcaudit "github.com/satchel/satchel/internal/service/audit"
+	"github.com/satchel/satchel/internal/service/auth"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -49,6 +52,8 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 	table := command.Catalog()
 	st := store.New(bdb, schema.Default())
 	audits := svcaudit.New(coreaudit.New(bdb, st))
+	// 身份：用户与会话两个仓储归 service/auth 持有；它同时是 authn 的会话解析器、authz 的当场验证器、REST 会话入口的业务。
+	identity := auth.New(users.New(bdb, st), sessions.New(bdb))
 
 	bindings := command.Bindings{
 		"whoami":     func(ctx context.Context, _ *command.Invocation) (any, error) { return v1.IdentityFrom(ctx), nil },
@@ -57,11 +62,14 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 			return command.Explain(table, inv.Arg(0))
 		},
 	}
+	for name, h := range identity.Bindings() {
+		bindings[name] = h
+	}
 	if err := table.CheckBindings(bindings); err != nil {
 		return nil, v1.Wrap(v1.CodeInternal, "命令表与处理函数的绑定不一致", err)
 	}
 	// 执行链：留痕在最外层，权限在里面，最里面按绑定分发；身份在 HTTP 层由 authn 放进 ctx。
-	runner := mwaudit.Wrap(audits, table, logger, authz.Wrap(table, nil, command.Dispatch(bindings)))
+	runner := mwaudit.Wrap(audits, table, logger, authz.Wrap(table, identity.Verifier(), command.Dispatch(bindings)))
 
 	// CLI 的选项在主控进程里也要一份：MCP 的 satchel_run 用它解析命令数组、用进程内的执行链执行。
 	opts := cli.DefaultOptions()
@@ -70,14 +78,14 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 	opts.ServerSide = true
 
 	mux := http.NewServeMux()
-	mux.Handle(command.APIPrefix, rest.NewHandler(table, runner))
+	mux.Handle(command.APIPrefix, rest.NewHandler(table, runner, identity))
 	mux.Handle(mcp.Path, mcp.NewHandler(opts))
 	mux.Handle(web.PublicPrefix, web.PublicHandler(filepath.Join(dataDir, db.PublicDir)))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		rest.WriteError(w, v1.Newf(v1.CodeNotFound, "没有这个路径：%s", r.URL.Path))
 	})
 
-	return &app{table: table, runner: runner, handler: authn.Middleware(mux), db: bdb, dataDir: dataDir, logger: logger}, nil
+	return &app{table: table, runner: runner, handler: authn.Middleware(identity, mux), db: bdb, dataDir: dataDir, logger: logger}, nil
 }
 
 // listen 建两个监听：TCP 在 listenAddr，unix socket 在数据目录下（权限 0600）。socket 文件已存在时先试着连它：

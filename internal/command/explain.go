@@ -26,6 +26,7 @@ type CommandInfo struct {
 	Danger    string     `json:"danger"`
 	Confirm   *Confirm   `json:"confirm,omitempty"`
 	HumanOnly bool       `json:"human_only"`
+	Anonymous bool       `json:"anonymous"`
 	List      bool       `json:"list"`
 	Offline   bool       `json:"offline"`
 	Args      []ArgInfo  `json:"args"`
@@ -119,7 +120,7 @@ func overview(t *Table) Overview {
 func Describe(c *Command) CommandInfo {
 	info := CommandInfo{
 		Name: c.Name(), Summary: c.Summary, Class: c.Class, Danger: string(c.Danger), Confirm: c.Confirm,
-		HumanOnly: c.HumanOnly, List: c.List, Offline: c.Offline, Args: []ArgInfo{}, Flags: []FlagInfo{}, Reserved: []string{},
+		HumanOnly: c.HumanOnly, Anonymous: c.Anonymous, List: c.List, Offline: c.Offline, Args: []ArgInfo{}, Flags: []FlagInfo{}, Reserved: []string{},
 	}
 	if scope, ok := c.Scope(); ok {
 		info.Scope = string(scope)
@@ -139,6 +140,9 @@ func Describe(c *Command) CommandInfo {
 	}
 	if c.Danger != "" {
 		info.Reserved = append(info.Reserved, "confirm")
+	}
+	if c.HumanOnly {
+		info.Reserved = append(info.Reserved, VerifyFlags...)
 	}
 	return info
 }

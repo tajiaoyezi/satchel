@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/satchel/satchel/internal/command"
+	"github.com/satchel/satchel/internal/service/auth"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -18,13 +19,14 @@ import (
 const MaxBodyBytes = 1 << 20
 
 // NewHandler 从命令表建路由。每条非本地命令一条路由（可选位置参数每少一个再登记一条），
-// 加 GET /api/v1/healthz 与两个 404 兜底；方法不匹配也是 404 的 not_found。
-func NewHandler(t *command.Table, runner command.Runner) http.Handler {
+// 加 GET /api/v1/healthz、三个会话入口（sessions 非 nil 时）与两个 404 兜底；方法不匹配也是 404 的 not_found。
+// 整个处理器外面套同源检查：身份来自会话 cookie 的写请求要过 Origin / Sec-Fetch-Site（master-web-session）。
+func NewHandler(t *command.Table, runner command.Runner, sessions SessionAPI) http.Handler {
 	mux := http.NewServeMux()
 	for _, c := range t.Remote() {
 		route := c.Route()
 		for n := c.RequiredArgs(); n <= len(c.Args); n++ {
-			mux.Handle(pathWithArgs(route.Path, c, n), commandHandler(c, route, n, runner))
+			mux.Handle(pathWithArgs(route.Path, c, n), commandHandler(c, route, n, runner, sessions))
 		}
 	}
 	mux.HandleFunc(command.APIPrefix+"healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -34,9 +36,12 @@ func NewHandler(t *command.Table, runner command.Runner) http.Handler {
 		}
 		WriteResult(w, map[string]string{"status": "ok"})
 	})
+	if sessions != nil {
+		mountSessionEndpoints(mux, sessions)
+	}
 	mux.HandleFunc(command.APIPrefix, func(w http.ResponseWriter, r *http.Request) { WriteError(w, notFound(r)) })
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { WriteError(w, notFound(r)) })
-	return mux
+	return sameOrigin(mux)
 }
 
 // pathWithArgs 去掉路径模板末尾多余的可选参数段，只留前 n 个。
@@ -52,7 +57,7 @@ func notFound(r *http.Request) *v1.Error {
 		WithNext("接口清单见 satchel explain 或 docs/commands.md")
 }
 
-func commandHandler(c *command.Command, route command.REST, nargs int, runner command.Runner) http.Handler {
+func commandHandler(c *command.Command, route command.REST, nargs int, runner command.Runner, sessions SessionAPI) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != route.Method {
 			WriteError(w, notFound(r))
@@ -67,6 +72,15 @@ func commandHandler(c *command.Command, route command.REST, nargs int, runner co
 		if err != nil {
 			WriteError(w, err)
 			return
+		}
+		// 初始化向导建完第一个管理员顺手发一个会话，网页上接着往下走（master-setup-wizard）。这是唯一一处「命令结果后处理」。
+		if sr, ok := result.(auth.SetupResult); ok && sessions != nil {
+			token, expires, err := sessions.IssueSession(r.Context(), sr.Username, false)
+			if err != nil {
+				WriteError(w, err)
+				return
+			}
+			setSessionCookie(w, r, token, expires)
 		}
 		WriteResult(w, result)
 	})
@@ -168,6 +182,22 @@ func decodeBody(c *command.Command, r *http.Request, inv *command.Invocation) er
 		if isFileFlag(c, name) {
 			return fileFlagError(name)
 		}
+		if c.HumanOnly && isVerifyFlag(name) {
+			// 当场验证的值进 inv.Verify，不进 Flags，永不进审计摘要；不是字符串就当没给。
+			s, _ := raw.(string)
+			if inv.Verify == nil {
+				inv.Verify = &command.Verification{}
+			}
+			switch name {
+			case command.VerifyPasswordFlag:
+				inv.Verify.Password = s
+			case command.VerifyCodeFlag:
+				inv.Verify.Code = s
+			case command.VerifyUserFlag:
+				inv.Verify.User = s
+			}
+			continue
+		}
 		if name == "confirm" && c.Danger != "" {
 			// 非字符串的 confirm 视为缺失（master-identity-and-authz「confirm 是字符串」），由 authz 报 confirm_required。
 			if s, ok := raw.(string); ok {
@@ -186,6 +216,15 @@ func decodeBody(c *command.Command, r *http.Request, inv *command.Invocation) er
 		inv.Flags[name] = v
 	}
 	return nil
+}
+
+func isVerifyFlag(name string) bool {
+	for _, f := range command.VerifyFlags {
+		if f == name {
+			return true
+		}
+	}
+	return false
 }
 
 // WriteResult 写成功响应：200 与带 apiVersion 的 JSON 对象。

@@ -38,6 +38,13 @@ func testOptions(t *testing.T, extra ...*command.Command) cli.Options {
 		name := c.Name()
 		bindings[name] = func(context.Context, *command.Invocation) (any, error) { return map[string]any{"ran": name}, nil }
 	}
+	// 表里其余经主控的命令（setup *、account *）用桩绑定：这里只测投影，不测业务。
+	for _, c := range table.Remote() {
+		name := c.Name()
+		if _, ok := bindings[name]; !ok {
+			bindings[name] = func(context.Context, *command.Invocation) (any, error) { return map[string]any{"ran": name}, nil }
+		}
+	}
 	if err := table.CheckBindings(bindings); err != nil {
 		t.Fatal(err)
 	}

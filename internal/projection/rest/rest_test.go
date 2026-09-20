@@ -87,7 +87,7 @@ func errorOf(t *testing.T, fields map[string]json.RawMessage) v1.Error {
 // master-rest-api「路径与方法从命令表推出」「失败响应」。
 func TestRoutes(t *testing.T) {
 	e := &echo{}
-	h := NewHandler(testTable(t), e)
+	h := NewHandler(testTable(t), e, nil)
 	code, fields := do(t, h, "GET", "/api/v1/whoami", "", nil)
 	if code != 200 || string(fields["apiVersion"]) != `"satchel/v1"` || string(fields["name"]) != `"whoami"` {
 		t.Fatalf("GET /api/v1/whoami：%d %v", code, fields)
@@ -122,7 +122,7 @@ func TestRoutes(t *testing.T) {
 // master-rest-api「请求解码」。
 func TestDecodeQuery(t *testing.T) {
 	e := &echo{}
-	h := NewHandler(testTable(t), e)
+	h := NewHandler(testTable(t), e, nil)
 	cases := []struct {
 		path string
 		want string
@@ -153,7 +153,7 @@ func TestDecodeQuery(t *testing.T) {
 
 func TestDecodeBody(t *testing.T) {
 	e := &echo{}
-	h := NewHandler(testTable(t), e)
+	h := NewHandler(testTable(t), e, nil)
 	js := map[string]string{"Content-Type": "application/json; charset=utf-8"}
 	if code, _ := do(t, h, "POST", "/api/v1/demo/remove/alice", `{"force":true,"confirm":"alice"}`, js); code != 200 {
 		t.Fatal(code)
@@ -196,14 +196,14 @@ func TestDecodeBody(t *testing.T) {
 // master-rest-api「失败响应」：状态码按折算表；「成功响应」：列表形状。
 func TestStatusCodesAndPage(t *testing.T) {
 	for code, status := range map[v1.Code]int{v1.CodeUnauthenticated: 401, v1.CodeForbidden: 403, v1.CodeNotFound: 404, v1.CodeConfirmRequired: 428, v1.CodeVersionConflict: 409, v1.CodeInternal: 500} {
-		h := NewHandler(testTable(t), &echo{err: v1.New(code, "x")})
+		h := NewHandler(testTable(t), &echo{err: v1.New(code, "x")}, nil)
 		got, fields := do(t, h, "GET", "/api/v1/whoami", "", nil)
 		if got != status || errorOf(t, fields).Code != code {
 			t.Errorf("%s 应当 %d，得到 %d %v", code, status, got, fields)
 		}
 	}
 	page := &command.PageResult{Items: []any{map[string]any{"id": 1}}, Total: 120, NextCursor: "c2"}
-	h := NewHandler(testTable(t), &echo{page: page})
+	h := NewHandler(testTable(t), &echo{page: page}, nil)
 	code, fields := do(t, h, "GET", "/api/v1/audit", "", nil)
 	if code != 200 || string(fields["total"]) != "120" || string(fields["nextCursor"]) != `"c2"` || !bytes.HasPrefix(fields["items"], []byte("[")) || string(fields["apiVersion"]) != `"satchel/v1"` {
 		t.Fatalf("列表响应形状：%d %v", code, fields)

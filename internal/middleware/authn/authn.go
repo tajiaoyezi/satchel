@@ -1,7 +1,7 @@
 // Package authn 是横切层的身份：判定「谁在调用」并把身份对象放进 ctx（master-identity-and-authz）。
-// 本 change 只有两种身份：经数据目录 unix socket 连进来、对端 uid 是 0 或运行主控的 OS 用户 → 本机管理员；
-// 其余（含一切 TCP 请求）→ anonymous。会话（m1-02）与令牌（m1-04）往同一个形状里填。
-// 判定只信操作系统给的对端凭据，不信请求头或请求体里的任何自称。
+// 三种来源按顺序：经数据目录 unix socket 连进来、对端 uid 是 0 或运行主控的 OS 用户 → 本机管理员；
+// 带有效会话 cookie → 用户（master-web-session）；令牌（m1-04）；其余 → anonymous。
+// 判定只信操作系统给的对端凭据与库里的会话，不信请求头或请求体里的任何自称。
 package authn
 
 import (
@@ -12,8 +12,17 @@ import (
 	"os/user"
 	"strconv"
 
+	"github.com/satchel/satchel/internal/service/auth"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
+
+// SessionCookie 是会话 cookie 的名字。
+const SessionCookie = "satchel_session"
+
+// SessionResolver 把会话令牌解析成身份（service/auth 实现）：返回身份、会话哈希、是否有效。
+type SessionResolver interface {
+	Resolve(ctx context.Context, token string) (v1.Identity, string, bool, error)
+}
 
 type peerKey struct{}
 
@@ -36,16 +45,27 @@ func ConnContext(ctx context.Context, c net.Conn) context.Context {
 	return context.WithValue(ctx, peerKey{}, peer{uid: uid})
 }
 
-// Middleware 按连接判定身份并放进 ctx：对端 uid 为 0 或等于本进程 uid → 本机管理员，否则 anonymous。
+// Middleware 判定身份并放进 ctx：对端 uid 为 0 或等于本进程 uid → 本机管理员（cookie 不看）；
+// 否则有会话 cookie 且 resolver 认 → 用户（会话哈希与来源一并进 ctx）；否则 anonymous。
 // 它不拒绝任何请求——拒绝由 authz 按命令表做，无身份的入口（healthz、/public/）本来就不看身份。
-func Middleware(next http.Handler) http.Handler {
+// resolver 为 nil 时不认会话。
+func Middleware(resolver SessionResolver, next http.Handler) http.Handler {
 	selfUID := uint32(os.Getuid())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		id := v1.Anonymous()
-		if p, ok := r.Context().Value(peerKey{}).(peer); ok && (p.uid == 0 || p.uid == selfUID) {
+		if p, ok := ctx.Value(peerKey{}).(peer); ok && (p.uid == 0 || p.uid == selfUID) {
 			id = v1.LocalAdmin(actorName(p.uid))
+			ctx = v1.WithCredentialSource(ctx, v1.SourceSocket)
+		} else if resolver != nil {
+			if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
+				if sid, hash, ok, rerr := resolver.Resolve(ctx, c.Value); rerr == nil && ok {
+					id = sid
+					ctx = v1.WithCredentialSource(auth.WithSessionHash(ctx, hash), v1.SourceSession)
+				}
+			}
 		}
-		next.ServeHTTP(w, r.WithContext(v1.WithIdentity(r.Context(), id)))
+		next.ServeHTTP(w, r.WithContext(v1.WithIdentity(ctx, id)))
 	})
 }
 

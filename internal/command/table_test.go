@@ -20,7 +20,10 @@ func TestCatalog(t *testing.T) {
 	table := Catalog()
 	want := map[string]Class{
 		"version": ClassLocal, "db migrate": ClassLocal, "db status": ClassLocal, "db unlock": ClassLocal, "__verify": ClassLocal, "serve": ClassLocal,
-		"whoami": ClassRead, "audit list": ClassRead, "explain": ClassRead,
+		"admin reset-password": ClassLocal,
+		"whoami":               ClassRead, "audit list": ClassRead, "explain": ClassRead, "setup status": ClassRead, "account show": ClassRead,
+		"setup init": ClassAction, "account set-password": ClassAction, "account totp setup": ClassAction, "account totp confirm": ClassAction,
+		"account totp disable": ClassAction, "account recovery-codes regenerate": ClassAction,
 	}
 	if len(table.All()) != len(want) {
 		t.Fatalf("目录里应当恰好 %d 条命令，得到 %v", len(want), table.Names())
@@ -52,8 +55,21 @@ func TestCatalog(t *testing.T) {
 	if c, _ := table.Lookup("version"); func() bool { _, ok := c.Scope(); return ok }() {
 		t.Error("version 是本地命令，不该有 scope")
 	}
-	if len(table.HumanOnly()) != 0 {
-		t.Errorf("m1-01 的目录里不该有人类专属命令：%v", table.HumanOnly())
+	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup" {
+		t.Errorf("人类专属命令清单不对：%v", table.HumanOnly())
+	}
+	for _, name := range []string{"setup status", "setup init"} {
+		if c, _ := table.Lookup(name); !c.Anonymous {
+			t.Errorf("%s 应当标不要身份", name)
+		}
+	}
+	for _, name := range []string{"whoami", "account show", "audit list"} {
+		if c, _ := table.Lookup(name); c.Anonymous {
+			t.Errorf("%s 不该标不要身份", name)
+		}
+	}
+	if c, _ := table.Lookup("setup init"); func() bool { f, _ := c.FlagByName("password"); return f.Type == TypePassword && f.Masked() }() != true {
+		t.Error("setup init 的 password 应当是 password 类型且打码")
 	}
 }
 
@@ -84,6 +100,11 @@ func TestTableRules(t *testing.T) {
 		{"必填参数排在可选之后", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassRead, Args: []Arg{{Name: "a", Optional: true}, {Name: "b"}}}}, "可选参数之后"},
 		{"REST 方法不对", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassRead, REST: &REST{Method: "PUT", Path: "/api/v1/x"}}}, "GET 或 POST"},
 		{"REST 路径没前缀", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassRead, REST: &REST{Method: "GET", Path: "/x"}}}, "/api/v1/"},
+		{"不要身份 + 人类专属", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Anonymous: true, HumanOnly: true}}, "不要身份"},
+		{"不要身份 + 本地", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassLocal, Anonymous: true}}, "read 或 action"},
+		{"不要身份 + 危险类", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Anonymous: true, Danger: v1.DangerDelete, Confirm: &Confirm{Kind: ConfirmCount}}}, "不要身份"},
+		{"password 登记在 read 上", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassRead, Flags: []Flag{{Name: "p", Type: TypePassword}}}}, "password"},
+		{"verify-* 撞保留名", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Flags: []Flag{{Name: "verify-password", Type: TypePassword}}}}, "保留"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,14 +154,20 @@ func TestRouteDefaults(t *testing.T) {
 
 func TestCheckBindings(t *testing.T) {
 	table := Catalog()
-	b := Bindings{"whoami": nil, "audit list": nil, "explain": nil}
+	b := Bindings{}
+	for _, c := range table.Remote() {
+		b[c.Name()] = nil
+	}
 	if err := table.CheckBindings(b); err != nil {
 		t.Fatalf("非本地命令都有绑定时应当通过：%v", err)
 	}
-	if err := table.CheckBindings(Bindings{"whoami": nil, "explain": nil}); err == nil || !strings.Contains(err.Error(), "audit list") {
+	delete(b, "audit list")
+	if err := table.CheckBindings(b); err == nil || !strings.Contains(err.Error(), "audit list") {
 		t.Fatalf("缺绑定应当点名命令：%v", err)
 	}
-	if err := table.CheckBindings(Bindings{"whoami": nil, "audit list": nil, "explain": nil, "nosuch": nil}); err == nil || !strings.Contains(err.Error(), "nosuch") {
+	b["audit list"] = nil
+	b["nosuch"] = nil
+	if err := table.CheckBindings(b); err == nil || !strings.Contains(err.Error(), "nosuch") {
 		t.Fatalf("表外绑定应当被点名：%v", err)
 	}
 }

@@ -29,7 +29,12 @@ func TestCommandsDocUpToDate(t *testing.T) {
 
 func TestGenerateDocsShape(t *testing.T) {
 	doc := string(GenerateDocs(Catalog()))
-	for _, want := range []string{"| `whoami` | read | read | — | — | 否 | 否 | `GET /api/v1/whoami` |", "| `audit list` | read | read | — | — | 否 | 是 | `GET /api/v1/audit` |", "`__verify`（隐藏）", "`serve`"} {
+	for _, want := range []string{
+		"| `whoami` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/whoami` |",
+		"| `audit list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/audit` |",
+		"| `setup init` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/init` |",
+		"| `account set-password` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/set-password` |",
+		"`__verify`（隐藏）", "`serve`", "`admin reset-password`"} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("对照表缺 %q：\n%s", want, doc)
 		}

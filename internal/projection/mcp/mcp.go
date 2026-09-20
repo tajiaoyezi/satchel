@@ -135,6 +135,9 @@ func precheck(opts cli.Options, args []string) error {
 	if cmd.Class == command.ClassLocal {
 		return v1.Newf(v1.CodeBadRequest, "%s 是本地命令，只在主控本机的 CLI 里有，不经主控、MCP 上不可用", cmd.Name())
 	}
+	if cmd.Anonymous {
+		return v1.Newf(v1.CodeBadRequest, "%s 是初始化向导的命令，只给人在网页或主控本机的 CLI 上用，MCP 上不可用", cmd.Name())
+	}
 	if cmd.HumanOnly {
 		return v1.Newf(v1.CodeHumanRequired, "%s 是只有人能做的操作，MCP 上不可用", cmd.Name()).
 			WithNext("在网页或主控本机的 CLI 上由管理员本人执行")
