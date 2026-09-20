@@ -2,6 +2,7 @@ package command
 
 import (
 	stdctx "context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -47,11 +48,18 @@ func TestFlagFromJSON(t *testing.T) {
 	if got, err := n.FromJSON(float64(7)); err != nil || got != 7 {
 		t.Fatalf("JSON 数字应当收窄成 int：%v %v", got, err)
 	}
+	if got, err := n.FromJSON(json.Number("7")); err != nil || got != 7 {
+		t.Fatalf("json.Number 应当收窄成 int：%v %v", got, err)
+	}
+	if _, err := n.FromJSON(json.Number("7.5")); err == nil {
+		t.Fatal("json.Number 小数不是整数")
+	}
 	if _, err := n.FromJSON(7.5); err == nil {
 		t.Fatal("小数不是整数")
 	}
-	if _, err := n.FromJSON("7"); err == nil {
-		t.Fatal("字符串不是整数")
+	err := func() error { _, err := n.FromJSON("7"); return err }()
+	if err == nil || !strings.Contains(v1.AsError(err).Reason, `"7"`) {
+		t.Fatalf("字符串不是整数，文案里要带引号：%v", err)
 	}
 	ss := Flag{Name: "s", Type: TypeStrings}
 	if got, err := ss.FromJSON([]any{"a", "b"}); err != nil || len(got.([]string)) != 2 {

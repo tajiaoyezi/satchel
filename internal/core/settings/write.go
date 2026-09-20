@@ -29,7 +29,7 @@ type WriteRequest struct {
 }
 
 // Write 在一个事务里完成一次设置写（master-settings「settings set 是日常运维档的事务写」）：
-// PostgreSQL 先锁住单例行 → 读写前值 → 比对版本并抬版本（有 spec 列时经 UpdateSpec，否则经 Bump）→ 写别的档的列 → 写 key → 写前快照。
+// PostgreSQL 先锁住单例行 → 读写前值 → 写前快照 → 比对版本并抬版本（有 spec 列时经 UpdateSpec，否则经 Bump）→ 写别的档的列 → 写 key。
 // 任一步失败整个事务回滚，快照行随之不存在。返回的是这次写之后的对象（事务内重读，不会混进别人紧接着的写）。
 func (r *Repo) Write(ctx context.Context, req WriteRequest) (*State, error) {
 	if len(req.Values) == 0 {
@@ -42,11 +42,12 @@ func (r *Repo) Write(ctx context.Context, req WriteRequest) (*State, error) {
 		if !ok {
 			return nil, v1.Newf(v1.CodeUnknownField, "系统设置没有字段 %s", name)
 		}
-		// 列与 key 同一条口径：只读档没有写路径；哪些档允许写由调用方按命令限定，这里只守住「只读永远写不了」。
+		// 列与 key 同一条口径：只读档没有写路径；运行态是系统自己写的、不算设置写、不抬版本（resource-model），
+		// 不走这里（M6 的自愈自己经 UpdateStatus 与键值表写，不 Bump）。哪些档允许写由调用方按命令限定。
 		switch f.Class {
-		case schema.ClassSpec, schema.ClassHuman, schema.ClassMasterSelf, schema.ClassStatus:
+		case schema.ClassSpec, schema.ClassHuman, schema.ClassMasterSelf:
 		default:
-			return nil, v1.Newf(v1.CodeFieldNotApplyable, "字段 %s 是%s档，没有写路径", name, f.Class)
+			return nil, v1.Newf(v1.CodeFieldNotApplyable, "字段 %s 是%s档，不能经设置写接口写入", name, f.Class)
 		}
 		if f.Column {
 			cols[f.Class] = append(cols[f.Class], name)
@@ -76,6 +77,16 @@ func (r *Repo) Write(ctx context.Context, req WriteRequest) (*State, error) {
 			}
 		}
 		ts := r.store.WithTx(tx)
+		// 顺序照 spec：写前快照 → 比对版本并抬版本 → 写列 → 写 key；都在同一个事务里，版本不匹配整单回滚、快照随之不存在。
+		if req.Snapshot {
+			snap, err := r.snapshotOf(before, req.Source)
+			if err != nil {
+				return err
+			}
+			if err := ts.Insert(ctx, snap); err != nil {
+				return err
+			}
+		}
 		if spec := cols[schema.ClassSpec]; len(spec) > 0 {
 			if err := ts.UpdateSpec(ctx, row, req.Force, spec...); err != nil {
 				return err
@@ -93,11 +104,6 @@ func (r *Repo) Write(ctx context.Context, req WriteRequest) (*State, error) {
 				return err
 			}
 		}
-		if names := cols[schema.ClassStatus]; len(names) > 0 {
-			if err := ts.UpdateStatus(ctx, row, names); err != nil {
-				return err
-			}
-		}
 		now := time.Now().UTC().Truncate(time.Microsecond)
 		for _, name := range keys {
 			text, err := Encode(r.fields[name].Type, req.Values[name])
@@ -108,15 +114,6 @@ func (r *Repo) Write(ctx context.Context, req WriteRequest) (*State, error) {
 			if _, err := tx.NewInsert().Model(entry).On("CONFLICT (key) DO UPDATE").
 				Set("value = EXCLUDED.value").Set("updated_at = EXCLUDED.updated_at").Exec(ctx); err != nil {
 				return v1.Wrap(v1.CodeDatabase, "写系统设置的键值表失败", err)
-			}
-		}
-		if req.Snapshot {
-			snap, err := r.snapshotOf(before, req.Source)
-			if err != nil {
-				return err
-			}
-			if err := ts.Insert(ctx, snap); err != nil {
-				return err
 			}
 		}
 		after, _, err = r.load(ctx, tx, false)

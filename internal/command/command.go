@@ -1,6 +1,7 @@
 package command
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -110,10 +111,11 @@ func (f Flag) Parse(raw string) (any, error) {
 	return nil, v1.Newf(v1.CodeInternal, "参数 %s 的类型 %s 不认识", f.Name, f.Type)
 }
 
-// FromJSON 把 JSON 请求体里解出来的值按类型校验、归一（int 从 float64 收窄，duration 从字符串解析）。
+// FromJSON 把 JSON 请求体里解出来的值按类型校验、归一（int 从 float64 或 json.Number 收窄，duration 从字符串解析）。
+// 错误文案里的值按 JSON 写法给出，字符串带引号，"1" 与 1 分得清。
 func (f Flag) FromJSON(v any) (any, error) {
 	bad := func() (any, error) {
-		return nil, v1.Newf(v1.CodeBadRequest, "参数 %s 的值 %v 不是 %s", f.Name, v, f.Type)
+		return nil, v1.Newf(v1.CodeBadRequest, "参数 %s 的值 %s 不是 %s", f.Name, jsonText(v), f.Type)
 	}
 	switch f.Type {
 	case TypeString, TypeFile, TypePassword:
@@ -123,11 +125,20 @@ func (f Flag) FromJSON(v any) (any, error) {
 		}
 		return s, nil
 	case TypeInt:
-		n, ok := v.(float64)
-		if !ok || n != float64(int(n)) {
-			return bad()
+		switch n := v.(type) {
+		case float64:
+			if n != float64(int(n)) {
+				return bad()
+			}
+			return int(n), nil
+		case json.Number:
+			i, err := strconv.Atoi(n.String())
+			if err != nil {
+				return bad()
+			}
+			return i, nil
 		}
-		return int(n), nil
+		return bad()
 	case TypeBool:
 		b, ok := v.(bool)
 		if !ok {
@@ -162,6 +173,15 @@ func (f Flag) FromJSON(v any) (any, error) {
 		return obj, nil
 	}
 	return nil, v1.Newf(v1.CodeInternal, "参数 %s 的类型 %s 不认识", f.Name, f.Type)
+}
+
+// jsonText 把一个值按 JSON 写法编成文本给错误文案用；编不了的退回 %v。
+func jsonText(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(raw)
 }
 
 // ObjectFromPairs 把 CLI 上可重复给出的 字段=值 拼成 object 类型的值：按第一个 = 拆，值原样是字符串（可以含 =）。

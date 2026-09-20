@@ -100,8 +100,20 @@ func versionArgs(inv *command.Invocation) (expected int64, force bool, err error
 			WithNext("先运行 satchel settings show --json 看当前版本")
 	}
 	if given {
-		n, _ := raw.(int)
-		expected = int64(n)
+		switch n := raw.(type) {
+		case int:
+			expected = int64(n)
+		case int64:
+			expected = n
+		case json.Number:
+			i, err := n.Int64()
+			if err != nil {
+				return 0, false, v1.Newf(v1.CodeBadRequest, "参数 resource-version 的值 %s 不是整数", n)
+			}
+			expected = i
+		default:
+			return 0, false, v1.Newf(v1.CodeBadRequest, "参数 resource-version 必须是整数，得到 %T", raw)
+		}
 	}
 	return expected, force, nil
 }

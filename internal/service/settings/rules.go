@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -39,10 +40,14 @@ var rules = map[string]func(v any) error{
 	"notify_server_tolerance_seconds": atLeast(0),
 	// handler/user_config.go:358-373。
 	"proxy_groups_source_url": httpURLOrEmpty,
-	// handler/system_settings.go:1384-1390。
-	"login_wallpaper": maxBytes(2000),
+	// handler/system_settings.go:1384-1390 只限 2000 字节、不看形状；Satchel 加一条与探针 logo 相同的形状规则，
+	// 免得 javascript: 之类进了库、m1-10 登录页当 URL 用时变成存储型 XSS。
+	"login_wallpaper": imageRef(2000),
 	// handler/system_settings.go:638-666：<= 128KB，非空须以 /、http://、https:// 或 data:image/ 开头。
-	"probe_disguise_logo": logoRef,
+	"probe_disguise_logo": imageRef(128 * 1024),
+	// Satchel 新增：mmwx 收明文 token 自己算 SHA-256（handler/system_settings.go:616-624），Satchel 由客户端算好交上来，
+	// 库里存的就是 64 位小写十六进制；不合形状的哈希 M7 比对时只会让外部探针全部 401，现在就拦住。
+	"probe_external_token_sha256": sha256HexOrEmpty,
 	// handler/security_settings.go:138-153（> 0 否则 400）。
 	"brute_force_max_failures":   atLeast(1),
 	"brute_force_window_minutes": atLeast(1),
@@ -119,8 +124,10 @@ func emptyOrMinLen(min int) func(any) error {
 
 func maxItems(limit int) func(any) error {
 	return func(v any) error {
+		raw := bytes.TrimSpace(v.(json.RawMessage))
 		var items []json.RawMessage
-		if err := json.Unmarshal(v.(json.RawMessage), &items); err != nil {
+		// json.Unmarshal 会把 null 解成空切片，所以先看第一个字符。
+		if !bytes.HasPrefix(raw, []byte("[")) || json.Unmarshal(raw, &items) != nil {
 			return fmt.Errorf("必须是 JSON 数组")
 		}
 		if len(items) > limit {
@@ -128,6 +135,15 @@ func maxItems(limit int) func(any) error {
 		}
 		return nil
 	}
+}
+
+var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+func sha256HexOrEmpty(v any) error {
+	if s := v.(string); s != "" && !sha256HexRe.MatchString(s) {
+		return fmt.Errorf("必须是 64 位小写十六进制的 SHA-256（或空串表示清掉）")
+	}
+	return nil
 }
 
 var themeNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -151,20 +167,23 @@ func httpURLOrEmpty(v any) error {
 	return nil
 }
 
-func logoRef(v any) error {
-	s := v.(string)
-	if len(s) > 128*1024 {
-		return fmt.Errorf("最长 128KB，得到 %d 字节", len(s))
-	}
-	if s == "" {
-		return nil
-	}
-	for _, prefix := range []string{"/", "http://", "https://", "data:image/"} {
-		if strings.HasPrefix(s, prefix) {
+// imageRef 是图片引用的形状：不超过 limit 字节，非空须以 /、http://、https:// 或 data:image/ 开头。
+func imageRef(limit int) func(any) error {
+	return func(v any) error {
+		s := v.(string)
+		if len(s) > limit {
+			return fmt.Errorf("最长 %d 字节，得到 %d 字节", limit, len(s))
+		}
+		if s == "" {
 			return nil
 		}
+		for _, prefix := range []string{"/", "http://", "https://", "data:image/"} {
+			if strings.HasPrefix(s, prefix) {
+				return nil
+			}
+		}
+		return fmt.Errorf("必须以 /、http://、https:// 或 data:image/ 开头")
 	}
-	return fmt.Errorf("必须以 /、http://、https:// 或 data:image/ 开头")
 }
 
 // normalizeOrigin 把主控地址或订阅域名归一成干净的 HTTP(S) origin（master-settings「主控地址是人类专属的设置写」）：

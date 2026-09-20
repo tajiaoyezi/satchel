@@ -168,6 +168,8 @@ func decodeBody(c *command.Command, r *http.Request, inv *command.Invocation) er
 	}
 	var body map[string]any
 	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, MaxBodyBytes))
+	// 数字保留原始字面量（json.Number）：object 类型 flag 里超过 2^53 的整数不经 float64 改写，int 类型的 flag 由 FromJSON 收窄。
+	dec.UseNumber()
 	if err := dec.Decode(&body); err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {

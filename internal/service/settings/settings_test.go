@@ -179,14 +179,24 @@ func TestSet(t *testing.T) {
 		if obj.Metadata.ResourceVersion != 2 || obj.Spec.HeartbeatInterval != 45 || obj.Spec.BrandingSiteTitle != "Satchel" || f.snapshots() != 1 {
 			t.Fatalf("写后：%+v %d", obj.Metadata, f.snapshots())
 		}
-		// REST 形式的原生类型。
-		obj = f.mustSet(map[string]any{"heartbeat_interval": float64(50), "agent_log_enabled": true, "probe_disguise_server_ids": []any{float64(1), float64(2)}}, 2)
+		// REST 形式的原生类型（含 json.Number）。
+		obj = f.mustSet(map[string]any{"heartbeat_interval": json.Number("50"), "agent_log_enabled": true, "probe_disguise_server_ids": []any{float64(1), json.Number("2")}}, 2)
 		if obj.Spec.HeartbeatInterval != 50 || !obj.Spec.AgentLogEnabled || string(obj.Spec.ProbeDisguiseServerIds) != "[1,2]" {
 			t.Fatalf("原生类型：%+v", obj.Spec)
 		}
+		// 布尔列写回 false 也落地（bun 只写点名的列，零值不会被跳过）。
+		if obj := f.mustSet(map[string]any{"agent_log_enabled": "0"}, 3); obj.Spec.AgentLogEnabled || obj.Metadata.ResourceVersion != 4 {
+			t.Fatalf("布尔列写 false：%+v", obj.Spec.AgentLogEnabled)
+		}
+		f.mustSet(map[string]any{"agent_log_enabled": "1"}, 4)
+		if row := f.show(); !row.Spec.AgentLogEnabled || row.Metadata.ResourceVersion != 5 {
+			t.Fatalf("布尔列写回 true：%+v", row.Metadata)
+		}
+		// 后面的期望版本都从 show 里取，不写死。
+		version := int(f.show().Metadata.ResourceVersion)
 		// 混进别的档整单拒绝。
 		err := func() error {
-			_, err := f.set(map[string]any{"heartbeat_interval": "60", "master_url": "https://a.example"}, 3)
+			_, err := f.set(map[string]any{"heartbeat_interval": "60", "master_url": "https://a.example"}, version)
 			return err
 		}()
 		e := wantCode(t, err, v1.CodeFieldNotApplyable)
@@ -194,29 +204,29 @@ func TestSet(t *testing.T) {
 			t.Errorf("reason 应当点名 master_url 与人类专属：%s", e.Reason)
 		}
 		for name, value := range map[string]any{"update_cdn_enabled": "false", "require_encryption": "false", "master_https_recovery_pending": "true"} {
-			if _, err := f.set(map[string]any{name: value}, 3); v1.AsError(err).Code != v1.CodeFieldNotApplyable {
+			if _, err := f.set(map[string]any{name: value}, version); v1.AsError(err).Code != v1.CodeFieldNotApplyable {
 				t.Errorf("%s 应当 field_not_applyable：%v", name, err)
 			}
 		}
-		if got := f.show(); got.Spec.HeartbeatInterval != 50 || got.Metadata.ResourceVersion != 3 || f.snapshots() != 2 {
+		if got := f.show(); got.Spec.HeartbeatInterval != 50 || int(got.Metadata.ResourceVersion) != version || f.snapshots() != 4 {
 			t.Fatalf("被拒的写不该改任何东西：%+v %d", got.Metadata, f.snapshots())
 		}
 		// 未知字段与类型错误。
-		if _, err := f.set(map[string]any{"heartbeat": "45"}, 3); v1.AsError(err).Code != v1.CodeUnknownField {
+		if _, err := f.set(map[string]any{"heartbeat": "45"}, version); v1.AsError(err).Code != v1.CodeUnknownField {
 			t.Errorf("未知字段：%v", err)
 		}
-		for name, value := range map[string]any{"heartbeat_interval": "abc", "probe_disguise_server_ids": "not json", "agent_log_enabled": "yes", "branding_site_title": float64(5)} {
-			_, err := f.set(map[string]any{name: value}, 3)
+		for name, value := range map[string]any{"heartbeat_interval": "abc", "probe_disguise_server_ids": "not json", "agent_log_enabled": "yes", "branding_site_title": float64(5), "probe_disguise_ping_targets": "null"} {
+			_, err := f.set(map[string]any{name: value}, version)
 			e := wantCode(t, err, v1.CodeBadRequest)
 			if !strings.Contains(e.Reason, name) {
 				t.Errorf("reason 应当点名 %s：%s", name, e.Reason)
 			}
 		}
-		if _, err := f.set(map[string]any{"heartbeat_interval": "30 "}, 3); v1.AsError(err).Code != v1.CodeBadRequest || !strings.Contains(v1.AsError(err).Reason, "30 ") {
+		if _, err := f.set(map[string]any{"heartbeat_interval": "30 "}, version); v1.AsError(err).Code != v1.CodeBadRequest || !strings.Contains(v1.AsError(err).Reason, "30 ") {
 			t.Errorf("带空格的数字应当拒绝并点名值：%v", err)
 		}
 		// 空 set 与缺版本。
-		if _, err := f.set(map[string]any{}, 3); v1.AsError(err).Code != v1.CodeBadRequest {
+		if _, err := f.set(map[string]any{}, version); v1.AsError(err).Code != v1.CodeBadRequest {
 			t.Errorf("空 set：%v", err)
 		}
 		_, err = f.run(f.admin, "settings set", nil, map[string]any{"set": map[string]any{"heartbeat_interval": "45"}})
@@ -224,30 +234,40 @@ func TestSet(t *testing.T) {
 		if !strings.Contains(e.Reason, "resource-version") || !strings.Contains(e.Next, "settings show") {
 			t.Errorf("缺版本的提示：%s / %s", e.Reason, e.Next)
 		}
+		if _, err := f.run(f.admin, "settings set", nil, map[string]any{"set": map[string]any{"heartbeat_interval": "45"}, "resource-version": "1"}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("版本不是整数：%v", err)
+		}
 		// 过期版本与 force。
 		e = wantCode(t, func() error { _, err := f.set(map[string]any{"heartbeat_interval": "60"}, 1); return err }(), v1.CodeVersionConflict)
-		if e.State["resourceVersion"] != int64(3) || f.snapshots() != 2 {
+		if e.State["resourceVersion"] != int64(version) || f.snapshots() != 4 {
 			t.Errorf("version_conflict 的 state 与快照数：%v %d", e.State, f.snapshots())
 		}
 		obj, err = f.set(map[string]any{"heartbeat_interval": "60"}, 1, "force")
-		if err != nil || obj.Metadata.ResourceVersion != 4 || obj.Spec.HeartbeatInterval != 60 || f.snapshots() != 3 {
+		if err != nil || int(obj.Metadata.ResourceVersion) != version+1 || obj.Spec.HeartbeatInterval != 60 || f.snapshots() != 5 {
 			t.Fatalf("force：%v %+v %d", err, obj.Metadata, f.snapshots())
 		}
-		// 打码字段：写进去、读出来是 ***、*** 交回表示不变、空串清掉。
-		f.mustSet(map[string]any{"probe_external_token_sha256": "abc123"}, 4)
+		version++
+		// 打码字段：写进去、读出来是 ***、*** 交回表示不变、空串清掉；形状是 64 位小写十六进制。
+		token := strings.Repeat("ab", 32)
+		if _, err := f.set(map[string]any{"probe_external_token_sha256": "abc123"}, version); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("不是 SHA-256 形状的 token 应当拒绝：%v", err)
+		}
+		f.mustSet(map[string]any{"probe_external_token_sha256": token}, version)
+		version++
 		_, _, all := jsonFields(t, f.show())
-		if strings.Contains(all, "abc123") || !strings.Contains(all, `"probe_external_token_sha256":"***"`) {
+		if strings.Contains(all, token) || !strings.Contains(all, `"probe_external_token_sha256":"***"`) {
 			t.Errorf("打码字段应当输出 ***：%s", all)
 		}
-		f.mustSet(map[string]any{"probe_external_token_sha256": "***", "heartbeat_interval": "45"}, 5)
+		f.mustSet(map[string]any{"probe_external_token_sha256": "***", "heartbeat_interval": "45"}, version)
+		version++
 		var entry model.SystemSettingEntry
-		if err := bdb.NewSelect().Model(&entry).Where("key = ?", "probe_external_token_sha256").Scan(context.Background()); err != nil || entry.Value != "abc123" {
+		if err := bdb.NewSelect().Model(&entry).Where("key = ?", "probe_external_token_sha256").Scan(context.Background()); err != nil || entry.Value != token {
 			t.Fatalf("*** 应当保持不变：%v %+v", err, entry)
 		}
-		if _, err := f.set(map[string]any{"probe_external_token_sha256": "***"}, 6); v1.AsError(err).Code != v1.CodeBadRequest {
+		if _, err := f.set(map[string]any{"probe_external_token_sha256": "***"}, version); v1.AsError(err).Code != v1.CodeBadRequest {
 			t.Errorf("只有 *** 等于没有要改的字段：%v", err)
 		}
-		f.mustSet(map[string]any{"probe_external_token_sha256": ""}, 6)
+		f.mustSet(map[string]any{"probe_external_token_sha256": ""}, version)
 		if err := bdb.NewSelect().Model(&entry).Where("key = ?", "probe_external_token_sha256").Scan(context.Background()); err != nil || entry.Value != "" {
 			t.Fatalf("空串应当清掉：%v %+v", err, entry)
 		}

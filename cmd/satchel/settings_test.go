@@ -172,12 +172,13 @@ func TestSettingsEndToEnd(t *testing.T) {
 			t.Fatalf("被拒的都没写：%+v", env.Metadata)
 		}
 		// 会话经 REST 用原生类型改设置；MCP 读得到；三处同一个对象。
-		status, fields, _ = alice.call("POST", base+"/api/v1/settings/set", `{"set":{"heartbeat_interval":45,"agent_log_enabled":true,"probe_external_token_sha256":"abc123"},"resource-version":5}`, nil)
+		token := strings.Repeat("ab", 32)
+		status, fields, _ = alice.call("POST", base+"/api/v1/settings/set", `{"set":{"heartbeat_interval":45,"agent_log_enabled":true,"probe_external_token_sha256":"`+token+`"},"resource-version":5}`, nil)
 		if status != 200 {
 			t.Fatalf("REST settings set：%d %v", status, fields)
 		}
 		text, isErr := h.mcpRun("settings", "show")
-		if isErr || !strings.Contains(text, `"kind":"SystemSettings"`) || !strings.Contains(text, `"heartbeat_interval":45`) || !strings.Contains(text, `"probe_external_token_sha256":"***"`) || strings.Contains(text, "abc123") {
+		if isErr || !strings.Contains(text, `"kind":"SystemSettings"`) || !strings.Contains(text, `"heartbeat_interval":45`) || !strings.Contains(text, `"probe_external_token_sha256":"***"`) || strings.Contains(text, token) {
 			t.Fatalf("MCP settings show：%v %s", isErr, text)
 		}
 		if text, isErr := h.mcpRun("settings", "set", "--set", "heartbeat_interval=46", "--resource-version", "6"); isErr || !strings.Contains(text, `"resourceVersion":7`) {
@@ -185,7 +186,7 @@ func TestSettingsEndToEnd(t *testing.T) {
 		}
 		// 审计：settings set 的摘要含字段名，打码字段是 ***。
 		stdout, _, _ = h.cli("audit", "list", "--json", "--limit", "10", "--command", "settings set")
-		if strings.Contains(stdout, "abc123") || !strings.Contains(stdout, `probe_external_token_sha256\":\"***\"`) || !strings.Contains(stdout, `heartbeat_interval`) {
+		if strings.Contains(stdout, token) || !strings.Contains(stdout, `probe_external_token_sha256\":\"***\"`) || !strings.Contains(stdout, `heartbeat_interval`) {
 			t.Fatalf("审计摘要：%s", stdout)
 		}
 		// 普通用户：forbidden。
@@ -199,6 +200,15 @@ func TestSettingsEndToEnd(t *testing.T) {
 		}
 		if status, fields, _ := bob.call("POST", base+"/api/v1/settings/set", `{"set":{"heartbeat_interval":45},"resource-version":7}`, nil); status != 403 || str(fields["code"]) != "forbidden" {
 			t.Fatalf("普通用户 set：%d %v", status, fields)
+		}
+		if status, fields, _ := bob.call("GET", base+"/api/v1/settings/snapshots", "", nil); status != 403 || str(fields["code"]) != "forbidden" {
+			t.Fatalf("普通用户 snapshots list：%d %v", status, fields)
+		}
+		if status, fields, _ := bob.call("POST", base+"/api/v1/settings/rollback/"+firstID, `{"resource-version":7}`, nil); status != 403 || str(fields["code"]) != "forbidden" {
+			t.Fatalf("普通用户 rollback：%d %v", status, fields)
+		}
+		if env, _, _ := h.settingsCLI("settings", "show"); env.Metadata.ResourceVersion != 7 {
+			t.Fatalf("普通用户的请求不该改任何东西：%+v", env.Metadata)
 		}
 	})
 }

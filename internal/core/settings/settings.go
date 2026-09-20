@@ -114,10 +114,27 @@ func (r *Repo) EnsureSingleton(ctx context.Context) error {
 	return nil
 }
 
+// loadAttempts 是 Load 为了读到一致的一份最多重试的次数。
+const loadAttempts = 5
+
 // Load 读整个设置对象：行的每一列加键值表里的每个 key（缺的补默认值），require_encryption 恒为 true。
+// 读不在写事务里，列与 key 是两条查询：靠「任何一档的写都抬整单版本」核对一致性——读完再看一次版本，
+// 与读到的不同就说明中间有写提交过，整份重读；连续几次都撞上才放弃。
 func (r *Repo) Load(ctx context.Context) (*State, error) {
-	st, _, err := r.load(ctx, r.db, false)
-	return st, err
+	for attempt := 0; attempt < loadAttempts; attempt++ {
+		st, _, err := r.load(ctx, r.db, false)
+		if err != nil {
+			return nil, err
+		}
+		var version int64
+		if err := r.db.NewSelect().Model((*model.SystemSettings)(nil)).Column("resource_version").Where("id = ?", SingletonID).Scan(ctx, &version); err != nil {
+			return nil, v1.Wrap(v1.CodeDatabase, "读取系统设置失败", err)
+		}
+		if version == st.Version {
+			return st, nil
+		}
+	}
+	return nil, v1.New(v1.CodeConflict, "系统设置正在被连续修改，没能读到一致的一份").WithNext("稍后重试")
 }
 
 // load 用给定的句柄读，同时返回行模型（写路径要在它上面改列）；forUpdate 为真时在 PostgreSQL 上锁住那一行

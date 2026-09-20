@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -303,11 +304,13 @@ func TestWrite(t *testing.T) {
 			_, err := r.Write(ctx, WriteRequest{Values: map[string]any{"nosuch": "x"}, ExpectedVersion: 1})
 			return err
 		}(), v1.CodeUnknownField)
-		// 只读档的 key 在仓储层就没有写路径（与只读列同一条口径）；运行态的 key 是系统写，仓储层放行。
-		wantCode(t, func() error {
-			_, err := r.Write(ctx, WriteRequest{Values: map[string]any{"require_encryption": false}, ExpectedVersion: 1})
-			return err
-		}(), v1.CodeFieldNotApplyable)
+		// 只读档与运行态在仓储层就没有写路径（列与 key 同一条口径）：运行态是系统写、不抬版本，M6 自己走别的入口。
+		for _, name := range []string{"require_encryption", "master_https_recovery_pending"} {
+			wantCode(t, func() error {
+				_, err := r.Write(ctx, WriteRequest{Values: map[string]any{name: true}, ExpectedVersion: 1})
+				return err
+			}(), v1.CodeFieldNotApplyable)
+		}
 		if st, _ := r.Load(ctx); st.Version != 1 {
 			t.Fatalf("被拒的写不该抬版本：%d", st.Version)
 		}
@@ -423,9 +426,65 @@ func TestWrite(t *testing.T) {
 		if n, _ := bdb.NewSelect().Model((*model.SystemSettingEntry)(nil)).Where("key = ?", "branding_brand_title").Count(ctx); n != 1 {
 			t.Errorf("同一个 key 应当只有一行，得到 %d", n)
 		}
-		// 运行态的 key 经仓储层可写（系统路径），同样抬版本。
-		if st, err := r.Write(ctx, WriteRequest{Values: map[string]any{"master_https_recovery_pending": true}, ExpectedVersion: 9}); err != nil || st.Values["master_https_recovery_pending"] != true || st.Version != 10 {
-			t.Fatalf("运行态 key：%v %+v", err, st)
+	})
+}
+
+// master-settings「settings show」在并发写之下也是一致的一份：列与 key 在同一次写里一起变，读者永远看不到只变了一半的对象。
+func TestLoadIsConsistentUnderWrites(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		r := repo(t, bdb)
+		if err := r.EnsureSingleton(ctx); err != nil {
+			t.Fatal(err)
+		}
+		const rounds = 30
+		var wg sync.WaitGroup
+		wg.Add(1)
+		writeErr := make(chan error, 1)
+		go func() {
+			defer wg.Done()
+			version := int64(1)
+			for i := 0; i < rounds; i++ {
+				n := int64(100 + i)
+				st, err := r.Write(ctx, WriteRequest{Values: map[string]any{"heartbeat_interval": n, "branding_site_title": fmt.Sprint(n)}, ExpectedVersion: version})
+				if err != nil {
+					writeErr <- err
+					return
+				}
+				version = st.Version
+			}
+			writeErr <- nil
+		}()
+		readErr := make(chan error, 4)
+		for g := 0; g < 4; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < 60; i++ {
+					st, err := r.Load(ctx)
+					if err != nil {
+						readErr <- err
+						return
+					}
+					hb := st.Values["heartbeat_interval"].(int64)
+					title := st.Values["branding_site_title"].(string)
+					if st.Version > 1 && fmt.Sprint(hb) != title {
+						readErr <- fmt.Errorf("读到撕开的对象：版本 %d，heartbeat_interval %d，branding_site_title %q", st.Version, hb, title)
+						return
+					}
+				}
+				readErr <- nil
+			}()
+		}
+		wg.Wait()
+		if err := <-writeErr; err != nil {
+			t.Fatalf("写者失败：%v", err)
+		}
+		close(readErr)
+		for err := range readErr {
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 	})
 }
