@@ -3,6 +3,7 @@ package command
 import (
 	stdctx "context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,36 @@ func TestFlagFromJSON(t *testing.T) {
 	b := Flag{Name: "b", Type: TypeBool}
 	if _, err := b.FromJSON("true"); err == nil {
 		t.Fatal("布尔不接受字符串")
+	}
+	// master-rest-api「请求解码」：object 只收 JSON 对象，值原样保留。
+	obj := Flag{Name: "set", Type: TypeObject, Kind: "SystemSettings"}
+	got, err := obj.FromJSON(map[string]any{"heartbeat_interval": float64(30), "s": "x"})
+	if err != nil || got.(map[string]any)["s"] != "x" || got.(map[string]any)["heartbeat_interval"] != float64(30) {
+		t.Fatalf("object 应当原样收下对象：%v %v", got, err)
+	}
+	for _, bad := range []any{"heartbeat_interval=30", []any{"a"}, nil, float64(1)} {
+		if _, err := obj.FromJSON(bad); err == nil || v1.AsError(err).Code != v1.CodeBadRequest || !strings.Contains(v1.AsError(err).Reason, "set") {
+			t.Errorf("object 收到 %v 应当 bad_request 并点名 set：%v", bad, err)
+		}
+	}
+	if _, err := obj.Parse("a=b"); err == nil {
+		t.Fatal("object 没有单个字符串的解析形式")
+	}
+}
+
+// master-cli「settings 子命令」：字段=值 按第一个 = 拆，重复字段与缺等号是 usage。
+func TestObjectFromPairs(t *testing.T) {
+	got, err := ObjectFromPairs("set", []string{"heartbeat_interval=45", "sub_info_expire_prefix=到期=2026", "empty="})
+	if err != nil || got["heartbeat_interval"] != "45" || got["sub_info_expire_prefix"] != "到期=2026" || got["empty"] != "" {
+		t.Fatalf("拼对象不对：%v %v", got, err)
+	}
+	for _, bad := range [][]string{{"heartbeat_interval"}, {"=1"}, {"a=1", "a=2"}} {
+		if _, err := ObjectFromPairs("set", bad); err == nil || v1.AsError(err).Code != v1.CodeUsage {
+			t.Errorf("%v 应当是 usage：%v", bad, err)
+		}
+	}
+	if got, err := ObjectFromPairs("set", nil); err != nil || len(got) != 0 {
+		t.Fatalf("没给就是空对象：%v %v", got, err)
 	}
 }
 

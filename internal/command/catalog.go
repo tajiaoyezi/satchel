@@ -1,5 +1,7 @@
 package command
 
+import v1 "github.com/satchel/satchel/pkg/api/v1"
+
 // GroupSummaries 是分组节点在帮助里的一句话说明；分组只做分组，本身不是命令。
 var GroupSummaries = map[string]string{
 	"db":                     "数据库：执行迁移、查看迁移状态、清除迁移锁",
@@ -9,6 +11,9 @@ var GroupSummaries = map[string]string{
 	"account totp":           "两步验证（TOTP）：启用、确认、禁用",
 	"account recovery-codes": "两步验证的恢复码",
 	"admin":                  "主控本机的应急操作",
+	"settings":               "系统设置：一个单例对象，整单一个 resourceVersion（主控设置类）",
+	"settings snapshots":     "系统设置的写前快照",
+	"settings master-url":    "主控地址与订阅域名（七组人类专属：改的时候当场验证）",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -21,7 +26,34 @@ func catalogCommands() []*Command {
 	all = append(all, localCommands()...)
 	all = append(all, baseCommands()...)
 	all = append(all, identityCommands()...)
+	all = append(all, settingsCommands()...)
 	return all
+}
+
+// settingsCommands 是 m1-03 的系统设置命令（master-settings）：读合并后的整个对象、写日常运维档、快照与回滚、
+// 七组的主控地址。写命令都要带 --resource-version（整单一个版本，任何一档的写都比对并抬版本）。
+func settingsCommands() []*Command {
+	version := Flag{Name: "resource-version", Type: TypeInt, Description: "当前的 metadata.resourceVersion（settings show 里的值）；不匹配整单拒绝"}
+	force := Flag{Name: "force", Type: TypeBool, Description: "跳过 resourceVersion 比对（其它校验照做，版本仍加 1）"}
+	return []*Command{
+		{Path: []string{"settings", "show"}, Summary: "显示系统设置：spec 是日常运维档，status 是人类专属、主控自身类、只读与运行态", Class: ClassRead},
+		{Path: []string{"settings", "set"}, Summary: "改日常运维档的设置字段（列与 key 混着给，整体校验，同一个事务写入并存写前快照）", Class: ClassMasterSettings,
+			Flags: []Flag{
+				{Name: "set", Type: TypeObject, Kind: v1.Kind("SystemSettings"), Description: "要改的字段与值（字段名见 satchel explain SystemSettings 的 spec 字段）"},
+				version, force,
+			}},
+		{Path: []string{"settings", "snapshots", "list"}, Summary: "按时间倒序列出系统设置的写前快照（不含内容）", Class: ClassRead, List: true,
+			Columns: []string{"id", "object_version", "created_at", "source", "content_hash"}},
+		{Path: []string{"settings", "rollback"}, Summary: "把一份快照的内容当成一次 settings set 写回（重过字段分档与规则，先存写前快照）", Class: ClassMasterSettings,
+			Args:  []Arg{{Name: "snapshot", Description: "快照 id（settings snapshots list 里的 id）"}},
+			Flags: []Flag{version, force}},
+		{Path: []string{"settings", "master-url", "set"}, Summary: "改主控地址与订阅域名（人类专属：当场验证；干净的 HTTP(S) origin，空串清掉）", Class: ClassMasterSettings, HumanOnly: true,
+			Flags: []Flag{
+				{Name: "url", Type: TypeString, Description: "主控地址，如 https://panel.example.com"},
+				{Name: "subscription-url", Type: TypeString, Description: "订阅域名，如 https://sub.example.com"},
+				version, force,
+			}},
+	}
 }
 
 // localCommands 只在 CLI 进程里跑，不经主控（master-cli）。

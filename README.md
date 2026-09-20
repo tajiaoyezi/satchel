@@ -40,15 +40,25 @@ go build ./cmd/satchel
 - **当场验证**：`account set-password` / `account totp setup` / `account totp confirm` / `account totp disable` / `account recovery-codes regenerate` 是人类专属命令：每次执行都要在同一个请求里带上自己的密码（`verify-password`）与——账号开了两步验证时——第二因素（`verify-code`），验一次用一次，不签发任何提升票据。CLI 上密码只从终端读（`--verify-password` 不是命令行参数，给了就是用法错误），`--verify-code` 可以作参数也可以终端输入（恢复码建议终端输入，写在命令行上会留在 shell 历史与进程列表里）；stdin 不是终端时直接以 `human_required` 拒绝、不等待。本机管理员不是账号，要用 `--verify-user <管理员用户名>` 指明验谁；登录的用户只能验自己。REST 上这三个值放在 JSON 体里，它们永不进审计摘要。`account set-password --new-password`（终端读两遍）改完作废该账号其它全部会话、保留当前这一个。
 - **忘了管理员密码**：在主控本机执行 `satchel admin reset-password <用户名> --confirm <用户名>`（本地命令，直接开数据目录里的库，主控在不在跑都行；只对管理员账号；新密码在终端里读两遍）。它作废该账号全部会话、不动两步验证，且因为不经主控而**不进审计**（stderr 会提示这一点）。
 
+### 系统设置
+
+系统设置是**一个单例对象**（kind `SystemSettings`，第 07 章「主控设置类」）：`system_config` 的列与 `system_settings` 键值表的 92 个 key 合在一起，整单一个 `resourceVersion`。`serve` 启动时（迁移之后、监听之前）确保那一行存在，空库起来就是版本 1。`settings *` 只对管理员开放（本机管理员与管理员账号），普通用户 `forbidden`。
+
+- **读**：`satchel settings show`（`--json` 是资源信封）。`spec` 是日常运维档的 100 个字段（既有列如 `heartbeat_interval`，也有 key 如 `branding_site_title`），`status` 是其余四档（七组人类专属如 `master_url`、主控自身类如 `update_cdn_enabled`、只读的 `require_encryption` 恒为 true、运行态如 `master_https_recovery_pending`）。键值表里没有的 key 按默认值表补（照 mmwx 读侧的 fallback，`default_theme` 默认 `flat`）；打码字段（`telegram_bot_token`、`turnstile_secret_key`、`tgbot_token`、`probe_external_token_sha256`）非空时输出 `***`。字段清单与分档看 `satchel explain SystemSettings`。
+- **写日常运维档**：`satchel settings set --set <字段>=<值> [--set …] --resource-version <N>`，REST 是 `POST /api/v1/settings/set`，体 `{"set":{"heartbeat_interval":45,"branding_site_title":"Satchel"},"resource-version":3}`。一次可以改任意多个字段，列与 key 混着给；服务端先整体校验——字段必须是 `spec` 里的（别的档一律 `field_not_applyable` 并点名分档，不认识的 `unknown_field`），值是字符串时按键值表的编码规则解析（布尔 `true` / `false` / `1` / `0` / 空，整数规范十进制，json 必须是合法 JSON 文本），JSON 原生类型直接收，再过照 mmwx 抄来的字段规则（如 `subscription_output_format` 只收 `yaml` / `json`、`default_theme` 四个主题名、`heartbeat_interval` 至少 5、`dashboard_refresh_interval_ms` 在 1000 到 60000 之间；mmwx 静默改写的地方这里一律拒绝并说明范围）——任一字段不过整单拒绝、不部分写入。然后在**一个事务**里：比对 `resourceVersion`（不匹配 `version_conflict`，退出码 6；`--force` 只跳过比对）→ 存一份写前快照 → 写两张表 → 版本加 1。打码字段交回 `***` 表示保持不变，空串表示清掉。成功返回写后的整个对象，新版本在 `metadata.resourceVersion` 里。
+- **快照与回滚**：每次成功的 `settings set` / `settings rollback` 在 `config_snapshots` 里追加一行写前的日常运维档（七组字段不进快照；主控自身类字段随 m1-08 的第一条写命令再进）。`satchel settings snapshots list` 按时间倒序列出（id、object_version、created_at、source、content_hash；不给内容，里面有原文密钥）；`satchel settings rollback <id> --resource-version <N>` 把那份快照的内容当成一次 `settings set` 写回：重过字段分档与规则、同样比对版本、同样先存写前快照——回滚本身也能被回滚。它不走 apply、不把版本号倒回去。
+- **主控地址（七组）**：`satchel settings master-url set --url <主控地址> --subscription-url <订阅域名> --resource-version <N>` 是人类专属命令：要当场验证（见上一节），MCP 与令牌一律 `human_required`。两个至少给一个；值必须是干净的 HTTP(S) origin（只有 scheme 与 host，可带端口；末尾斜杠去掉），空串表示清掉。它同样比对并抬版本，但不存快照。改完不推送到节点、不做主控迁移（随 M2 的节点通道）。
+- **哪些 key 什么时候生效**：本 change 交付的是存储与写路径；三道门与静默模式的写命令随 m1-05，更新 CDN 开关随 m1-08，通知参数随 M4，TG 机器人随 M5，HTTPS 自愈与 `external_https` 随 M6，采集间隔与 agent 日志开关下发到节点随 M2。
+
 ## REST 与 MCP
 
 三个投影都从 `internal/command` 的命令表构造，一条命令登记进表就同时有 CLI 子命令、REST 路由与 MCP 可达；`docs/commands.md` 是由表生成的「命令 × scope 对照表」（`go generate ./internal/command/`，CI 守着一致）。
 
-- **REST**：`/api/v1/…`，路径由命令路径推出（`read` 用 GET、flag 作查询参数；其余用 POST、flag 与 `confirm` 在 JSON 体里；`password` 类型的 flag 与当场验证的 `verify-*` 也在 JSON 体里；列表命令去掉末尾的 `list`，`limit` 默认 50、上限 500、`cursor` 翻页）。成功 200，body 与 CLI `--json` 是同一个对象；失败 body 是四字段错误，状态码按错误码折算（400 / 401 / 403 / 404 / 409 / 428 / 503 / 500）。未登记的键、类型不对、文件路径类参数（`-f` / `--filename` / `--file`）都是 `bad_request`；不兼容 mmwx 的 `/api/admin/*`。命令表之外只有四条路由：`GET /api/v1/healthz`、`POST /api/v1/session`（登录）、`POST /api/v1/session/two-factor`（第二步）、`DELETE /api/v1/session`（登出）。
+- **REST**：`/api/v1/…`，路径由命令路径推出（`read` 用 GET、flag 作查询参数；其余用 POST、flag 与 `confirm` 在 JSON 体里；`password` 类型的 flag 与当场验证的 `verify-*` 也在 JSON 体里；`object` 类型的 flag（如 `settings set` 的 `set`）在 JSON 体里是一个对象、CLI 上写成可重复的 `--set 字段=值`；列表命令去掉末尾的 `list`，`limit` 默认 50、上限 500、`cursor` 翻页）。成功 200，body 与 CLI `--json` 是同一个对象；失败 body 是四字段错误，状态码按错误码折算（400 / 401 / 403 / 404 / 409 / 428 / 503 / 500）。未登记的键、类型不对、文件路径类参数（`-f` / `--filename` / `--file`）都是 `bad_request`；不兼容 mmwx 的 `/api/admin/*`。命令表之外只有四条路由：`GET /api/v1/healthz`、`POST /api/v1/session`（登录）、`POST /api/v1/session/two-factor`（第二步）、`DELETE /api/v1/session`（登出）。
 - **MCP**：`/mcp`（Streamable HTTP，无状态），只有两个工具：`satchel_run`（`args` 命令数组 + 可选 `confirm`，输出恒为 JSON）与 `satchel_explain`（`target`）。命令数组交给与 CLI 相同的解析器、不经 shell；身份只来自这次连接，`args` 里的 `--token` / `--server`、本地命令（`version`、`db`、`serve`、`admin reset-password`）、人类专属命令、初始化向导的 `setup *`、文件路径参数一律拒绝。
-- **审计**：每条经主控执行的命令（含被权限、confirm 或当场验证拒绝的）写一条 `audit_logs`，`satchel audit list` 看（只对管理员开放）；`password` 类型的 flag 在摘要里打码，当场验证的值不进摘要。无身份的请求被拒时不记，但不要身份的 `setup status` / `setup init` 执行了就记（`actor_kind` 为 `anonymous`）；`explain`、`healthz`、`/public/`、登录 / 登出入口不记。
+- **审计**：每条经主控执行的命令（含被权限、confirm 或当场验证拒绝的）写一条 `audit_logs`，`satchel audit list` 看（只对管理员开放）；`password` 类型的 flag 在摘要里打码，`object` 类型的 flag 按所属 kind 的打码字段逐键打码，当场验证的值不进摘要。无身份的请求被拒时不记，但不要身份的 `setup status` / `setup init` 执行了就记（`actor_kind` 为 `anonymous`）；`explain`、`healthz`、`/public/`、登录 / 登出入口不记。
 
-现有经主控的命令：`whoami`（身份对象）、`audit list`（`--actor` / `--command` / `--since` / `--limit` / `--cursor`）、`explain [target]`。
+现有经主控的命令：`whoami`（身份对象）、`audit list`（`--actor` / `--command` / `--since` / `--limit` / `--cursor`）、`explain [target]`、`setup *`、`account *`、`settings show` / `set` / `snapshots list` / `rollback` / `master-url set`。
 
 ## 安装
 

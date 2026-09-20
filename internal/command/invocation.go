@@ -17,7 +17,8 @@ type Invocation struct {
 	Path []string
 	// Args 是位置参数的值，按登记顺序。
 	Args []string
-	// Flags 是 flag 名到已按类型解析的值：string、int、bool、time.Duration、[]string。没给的 flag 不出现。
+	// Flags 是 flag 名到已按类型解析的值：string、int、bool、time.Duration、[]string，object 类型是 map[string]any
+	// （CLI 给的值是字符串，REST 给的是 JSON 原生类型，由处理函数按字段类型归一）。没给的 flag 不出现。
 	Flags map[string]any
 	// Confirm 是危险命令的确认字符串；缺失为空串。
 	Confirm string

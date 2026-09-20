@@ -15,14 +15,22 @@ import (
 )
 
 // Store 是写入原语。M1 起业务代码只能经这里写 kind 表，core 层不许自己拼 UPDATE。
+// db 只用来取表元数据；查询走 q——平时就是 db 本身，WithTx 之后是那个事务。
 type Store struct {
 	db  *bun.DB
+	q   bun.IDB
 	reg *schema.Registry
 }
 
 // New 建一个写入原语实例；reg 通常是 schema.Default()。
 func New(db *bun.DB, reg *schema.Registry) *Store {
-	return &Store{db: db, reg: reg}
+	return &Store{db: db, q: db, reg: reg}
+}
+
+// WithTx 返回一个在事务 tx 里跑查询的副本：校验、翻译与表元数据都不变，只是每条语句都进这个事务。
+// 一次业务写要把几张表的改动与快照放进同一个事务时用它（设置服务），事务的开与提交仍由调用方管。
+func (s *Store) WithTx(tx bun.Tx) *Store {
+	return &Store{db: s.db, q: tx, reg: s.reg}
 }
 
 // Cond 是更新的前置条件：列必须等于 Value（Value 为 nil 或 nil 指针表示必须为 NULL）。
@@ -146,7 +154,7 @@ func (s *Store) Insert(ctx context.Context, model any) error {
 			exclude = append(exclude, c.Name)
 		}
 	}
-	_, err = s.db.NewInsert().Model(model).ExcludeColumn(exclude...).Returning("*").Exec(ctx)
+	_, err = s.q.NewInsert().Model(model).ExcludeColumn(exclude...).Returning("*").Exec(ctx)
 	return s.translate(tg.table, err)
 }
 
@@ -159,7 +167,7 @@ func (s *Store) Get(ctx context.Context, model any, id int64) error {
 	if _, ok := tg.field("id"); !ok {
 		return v1.Newf(v1.CodeBadRequest, "表 %s 没有整数主键 id", tg.table.Name)
 	}
-	err = s.db.NewSelect().Model(model).Where("id = ?", id).Scan(ctx)
+	err = s.q.NewSelect().Model(model).Where("id = ?", id).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return notFound(tg, id)
 	}
@@ -214,7 +222,44 @@ func (s *Store) UpdateSpec(ctx context.Context, model any, force bool, columns .
 		return err
 	}
 	expected := tg.version()
-	q := s.db.NewUpdate().Model(model).Column(columns...).Where("id = ?", id)
+	q := s.q.NewUpdate().Model(model).Column(columns...).Where("id = ?", id)
+	if !force {
+		q = q.Where("resource_version = ?", expected)
+	}
+	ok, err := s.execBump(ctx, tg, q)
+	if err != nil || ok {
+		return err
+	}
+	current, exists, err := s.currentVersion(ctx, tg, id)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return notFound(tg, id)
+	}
+	return versionConflict(tg, expected, current)
+}
+
+// Bump 只比对 resource_version 并加 1（force 跳过比对），顺手写 updated_at 并回填，不写任何别的列。
+// 给「没有 spec 列可写、但按第 07 章要抬整单版本」的写用：系统设置单例只改键值表的 key、或只改人类专属列的那一次。
+// append-only 的表与没有版本列的表拒绝；行不存在 not_found；版本不匹配 version_conflict。
+func (s *Store) Bump(ctx context.Context, model any, force bool) error {
+	tg, err := s.resolve(model)
+	if err != nil {
+		return err
+	}
+	if tg.table.AppendOnly {
+		return v1.Newf(v1.CodeAppendOnly, "%s 是 append-only 的表，只能追加，不能修改", tg.label())
+	}
+	if !tg.table.HasVersion() {
+		return v1.Newf(v1.CodeBadRequest, "%s 没有 resource_version，不能经 Bump 抬版本", tg.label())
+	}
+	id, err := tg.id()
+	if err != nil {
+		return err
+	}
+	expected := tg.version()
+	q := s.q.NewUpdate().Model(model).Where("id = ?", id)
 	if !force {
 		q = q.Where("resource_version = ?", expected)
 	}
@@ -256,7 +301,7 @@ func (s *Store) execBump(ctx context.Context, tg *target, q *bun.UpdateQuery) (b
 }
 
 func (s *Store) currentVersion(ctx context.Context, tg *target, id int64) (version int64, exists bool, err error) {
-	err = s.db.NewSelect().Table(tg.table.Name).Column("resource_version").Where("id = ?", id).Scan(ctx, &version)
+	err = s.q.NewSelect().Table(tg.table.Name).Column("resource_version").Where("id = ?", id).Scan(ctx, &version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
@@ -316,7 +361,7 @@ func (s *Store) updateClass(ctx context.Context, model any, verb string, class s
 		restore = tg.setTime("updated_at", now())
 		columns = append(columns, "updated_at")
 	}
-	q := s.db.NewUpdate().Model(model).Column(columns...).Where("id = ?", id)
+	q := s.q.NewUpdate().Model(model).Column(columns...).Where("id = ?", id)
 	for _, c := range conds {
 		if c.isNull() {
 			q = q.Where("? IS NULL", bun.Ident(c.Column))
@@ -341,7 +386,7 @@ func (s *Store) updateClass(ctx context.Context, model any, verb string, class s
 		condColumns[i] = c.Column
 	}
 	current := map[string]any{}
-	err = s.db.NewSelect().Table(tg.table.Name).Column(condColumns...).Where("id = ?", id).Scan(ctx, &current)
+	err = s.q.NewSelect().Table(tg.table.Name).Column(condColumns...).Where("id = ?", id).Scan(ctx, &current)
 	if errors.Is(err, sql.ErrNoRows) {
 		return notFound(tg, id)
 	}
@@ -390,7 +435,7 @@ func (s *Store) setDeleted(ctx context.Context, model any, force, deleted bool) 
 	} else {
 		deletedAt.Set(reflect.Zero(deletedAt.Type()))
 	}
-	q := s.db.NewUpdate().Model(model).Column("deleted_at").Where("id = ?", id)
+	q := s.q.NewUpdate().Model(model).Column("deleted_at").Where("id = ?", id)
 	if deleted {
 		q = q.Where("deleted_at IS NULL")
 	} else {
@@ -411,7 +456,7 @@ func (s *Store) setDeleted(ctx context.Context, model any, force, deleted bool) 
 		ResourceVersion int64      `bun:"resource_version"`
 		DeletedAt       *time.Time `bun:"deleted_at"`
 	}
-	err = s.db.NewSelect().Table(tg.table.Name).Column("resource_version", "deleted_at").Where("id = ?", id).Scan(ctx, &row)
+	err = s.q.NewSelect().Table(tg.table.Name).Column("resource_version", "deleted_at").Where("id = ?", id).Scan(ctx, &row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return notFound(tg, id)
 	}

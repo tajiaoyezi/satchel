@@ -35,6 +35,7 @@ func writeJSON(w io.Writer, payload any) error {
 }
 
 // renderGeneric 是通用文本渲染：列表结果画表（列取命令登记的 Columns，没登记就用第一条的键排序），
+// 资源信封（apiVersion / kind / metadata / spec / status）分 metadata、spec、status 三段逐字段列出，
 // 其它结果按 JSON 键排序逐行「键：值」。
 func renderGeneric(w io.Writer, c *command.Command, result any) error {
 	fields, err := toFields(result)
@@ -46,7 +47,36 @@ func renderGeneric(w io.Writer, c *command.Command, result any) error {
 			return renderPage(w, c, fields)
 		}
 	}
+	if isEnvelope(fields) {
+		return renderEnvelope(w, fields)
+	}
 	return renderFields(w, fields)
+}
+
+func isEnvelope(fields map[string]any) bool {
+	for _, k := range []string{"apiVersion", "kind", "metadata", "spec", "status"} {
+		if _, ok := fields[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// renderEnvelope 把一个资源对象分三段打印：第一行是 kind，然后 metadata、spec、status 各一段，段内按键排序。
+func renderEnvelope(w io.Writer, fields map[string]any) error {
+	if _, err := fmt.Fprintf(w, "kind：%s\n", formatValue(fields["kind"])); err != nil {
+		return err
+	}
+	for _, section := range []string{"metadata", "spec", "status"} {
+		if _, err := fmt.Fprintf(w, "\n[%s]\n", section); err != nil {
+			return err
+		}
+		sub, _ := fields[section].(map[string]any)
+		if err := renderFields(w, sub); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // toFields 经 JSON 往返把任何结果变成 map，渲染只认 JSON 里的样子（与 --json 看到的一致）。

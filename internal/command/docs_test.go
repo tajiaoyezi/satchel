@@ -34,6 +34,9 @@ func TestGenerateDocsShape(t *testing.T) {
 		"| `audit list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/audit` |",
 		"| `setup init` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/init` |",
 		"| `account set-password` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/set-password` |",
+		"| `settings set` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/set` |",
+		"| `settings snapshots list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/settings/snapshots` |",
+		"| `settings master-url set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/master-url/set` |",
 		"`__verify`（隐藏）", "`serve`", "`admin reset-password`"} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("对照表缺 %q：\n%s", want, doc)

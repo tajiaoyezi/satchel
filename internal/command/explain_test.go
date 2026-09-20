@@ -52,6 +52,17 @@ func TestExplainCommand(t *testing.T) {
 	if !anon.(CommandInfo).Anonymous {
 		t.Fatal("setup status 应当报出不要身份")
 	}
+	set, _ := Explain(Catalog(), "settings set")
+	if func() bool {
+		for _, f := range set.(CommandInfo).Flags {
+			if f.Name == "set" {
+				return f.Type == TypeObject && f.Kind == "SystemSettings"
+			}
+		}
+		return false
+	}() != true {
+		t.Fatalf("settings set 的 set 应当报出 object 类型与 kind：%+v", set)
+	}
 	flags := map[string]bool{}
 	for _, f := range info.Flags {
 		flags[f.Name] = true

@@ -98,9 +98,20 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 	leaf.RunE = func(cmd *cobra.Command, args []string) error {
 		inv := &command.Invocation{Path: c.Path, Args: args, Flags: map[string]any{}, Confirm: confirm}
 		for _, f := range c.Flags {
-			if cmd.Flags().Changed(f.Name) {
-				inv.Flags[f.Name] = deref(values[f.Name])
+			if !cmd.Flags().Changed(f.Name) {
+				continue
 			}
+			if f.Type == command.TypeObject {
+				// object 类型在命令行上是可重复的 字段=值，这里拼成对象（缺等号、重复字段是 usage）。
+				pairs, _ := deref(values[f.Name]).([]string)
+				obj, err := command.ObjectFromPairs(f.Name, pairs)
+				if err != nil {
+					return err
+				}
+				inv.Flags[f.Name] = obj
+				continue
+			}
+			inv.Flags[f.Name] = deref(values[f.Name])
 		}
 		if c.List {
 			if cmd.Flags().Changed("limit") && (page.Limit < 1 || page.Limit > command.MaxLimit) {
@@ -252,6 +263,10 @@ func registerFlag(fs *pflag.FlagSet, f command.Flag) any {
 	case command.TypeStrings:
 		p := new([]string)
 		fs.StringArrayVar(p, f.Name, nil, f.Description+"（可重复）")
+		return p
+	case command.TypeObject:
+		p := new([]string)
+		fs.StringArrayVar(p, f.Name, nil, f.Description+"（可重复，写成 字段=值）")
 		return p
 	default: // string、file
 		p := new(string)

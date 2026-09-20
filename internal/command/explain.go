@@ -43,13 +43,14 @@ type ArgInfo struct {
 	Optional    bool   `json:"optional"`
 }
 
-// FlagInfo 是 flag 的说明。
+// FlagInfo 是 flag 的说明。Kind 只有 object 类型有：字段名只能是该 kind 的字段（explain <kind> 看得到清单）。
 type FlagInfo struct {
 	Name        string   `json:"name"`
 	Type        FlagType `json:"type"`
 	Default     string   `json:"default,omitempty"`
 	Description string   `json:"description"`
 	Secret      bool     `json:"secret,omitempty"`
+	Kind        v1.Kind  `json:"kind,omitempty"`
 }
 
 // RESTInfo 是命令的 REST 映射。
@@ -129,7 +130,7 @@ func Describe(c *Command) CommandInfo {
 		info.Args = append(info.Args, ArgInfo{Name: a.Name, Description: a.Description, Optional: a.Optional})
 	}
 	for _, f := range c.Flags {
-		info.Flags = append(info.Flags, FlagInfo{Name: f.Name, Type: f.Type, Default: f.Default, Description: f.Description, Secret: f.Secret})
+		info.Flags = append(info.Flags, FlagInfo{Name: f.Name, Type: f.Type, Default: f.Default, Description: f.Description, Secret: f.Secret, Kind: f.Kind})
 	}
 	if c.Class != ClassLocal {
 		r := c.Route()

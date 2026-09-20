@@ -74,6 +74,12 @@ func Digest(cmd *command.Command, inv *command.Invocation) string {
 				flags[name] = v1.Redacted
 				continue
 			}
+			if f, ok := cmd.FlagByName(name); ok && f.Type == command.TypeObject {
+				if obj, ok := v.(map[string]any); ok {
+					flags[name] = maskObject(f.Kind, obj)
+					continue
+				}
+			}
 		}
 		if d, ok := v.(time.Duration); ok {
 			v = d.String()
@@ -99,6 +105,25 @@ func Digest(cmd *command.Command, inv *command.Invocation) string {
 		return `{"args":[],"flags":{}}`
 	}
 	return truncate(string(raw), DigestLimit)
+}
+
+// maskObject 给 object 类型 flag 的值按所属 kind 的打码字段集合逐键打码（master-audit-log「参数摘要」），其余键照记。
+func maskObject(kind v1.Kind, obj map[string]any) map[string]any {
+	masked := map[string]bool{}
+	if info, ok := v1.Lookup(kind); ok {
+		for _, f := range info.MaskedFields {
+			masked[f] = true
+		}
+	}
+	out := make(map[string]any, len(obj))
+	for k, v := range obj {
+		if masked[k] {
+			out[k] = v1.Redacted
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 const ellipsis = "…"

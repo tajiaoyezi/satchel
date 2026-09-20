@@ -250,7 +250,7 @@ func checkDuplicateFlags(root *cobra.Command, t *command.Table, args []string) e
 			if c, ok := t.Lookup(name); ok {
 				multi = map[string]bool{}
 				for _, f := range c.Flags {
-					if f.Type == command.TypeStrings {
+					if f.Type == command.TypeStrings || f.Type == command.TypeObject {
 						multi[f.Name] = true
 					}
 				}

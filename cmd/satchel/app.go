@@ -21,6 +21,7 @@ import (
 	"github.com/satchel/satchel/internal/command"
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
 	"github.com/satchel/satchel/internal/core/sessions"
+	coresettings "github.com/satchel/satchel/internal/core/settings"
 	"github.com/satchel/satchel/internal/core/users"
 	mwaudit "github.com/satchel/satchel/internal/middleware/audit"
 	"github.com/satchel/satchel/internal/middleware/authn"
@@ -31,6 +32,7 @@ import (
 	"github.com/satchel/satchel/internal/projection/web"
 	svcaudit "github.com/satchel/satchel/internal/service/audit"
 	"github.com/satchel/satchel/internal/service/auth"
+	svcsettings "github.com/satchel/satchel/internal/service/settings"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -54,6 +56,12 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 	audits := svcaudit.New(coreaudit.New(bdb, st))
 	// 身份：用户与会话两个仓储归 service/auth 持有；它同时是 authn 的会话解析器、authz 的当场验证器、REST 会话入口的业务。
 	identity := auth.New(users.New(bdb, st), sessions.New(bdb))
+	// 系统设置：迁移之后、监听之前确保单例行存在（master-settings「单例行的建立」），读命令不建行。
+	settingsRepo := coresettings.New(bdb, st, schema.Default())
+	if err := settingsRepo.EnsureSingleton(context.Background()); err != nil {
+		return nil, err
+	}
+	settings := svcsettings.New(settingsRepo)
 
 	bindings := command.Bindings{
 		"whoami":     func(ctx context.Context, _ *command.Invocation) (any, error) { return v1.IdentityFrom(ctx), nil },
@@ -63,6 +71,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 		},
 	}
 	for name, h := range identity.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range settings.Bindings() {
 		bindings[name] = h
 	}
 	if err := table.CheckBindings(bindings); err != nil {

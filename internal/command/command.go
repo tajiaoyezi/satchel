@@ -36,7 +36,9 @@ func (c Class) Scope() (v1.Scope, bool) {
 var validClasses = map[Class]bool{ClassLocal: true, ClassRead: true, ClassConfig: true, ClassAction: true, ClassMasterSettings: true}
 
 // FlagType 是 flag 的取值类型。file 是 CLI 本地读取的文件路径，只有 CLI 投影接受；
-// password 是 CLI 从终端读、不作为命令行参数存在的值（REST 从请求体读），审计摘要与日志里恒打码。
+// password 是 CLI 从终端读、不作为命令行参数存在的值（REST 从请求体读），审计摘要与日志里恒打码；
+// object 是「字段名到值」的一个对象：CLI 上是可重复的 --flag 字段=值（值原样是字符串，由处理函数按字段类型解析），
+// REST 从请求体收 JSON 对象，登记时必须指明所属的 kind（Flag.Kind），审计摘要按该 kind 的打码字段集合逐键打码。
 type FlagType string
 
 const (
@@ -47,9 +49,13 @@ const (
 	TypeStrings  FlagType = "strings" // 可重复
 	TypeFile     FlagType = "file"
 	TypePassword FlagType = "password"
+	TypeObject   FlagType = "object"
 )
 
-var validFlagTypes = map[FlagType]bool{TypeString: true, TypeInt: true, TypeBool: true, TypeDuration: true, TypeStrings: true, TypeFile: true, TypePassword: true}
+var validFlagTypes = map[FlagType]bool{TypeString: true, TypeInt: true, TypeBool: true, TypeDuration: true, TypeStrings: true, TypeFile: true, TypePassword: true, TypeObject: true}
+
+// writeClasses 是有写路径的类别：password 与 object 类型的 flag 只能登记在这些类别的命令上。
+var writeClasses = map[Class]bool{ClassConfig: true, ClassAction: true, ClassMasterSettings: true}
 
 // Arg 是位置参数。
 type Arg struct {
@@ -59,22 +65,27 @@ type Arg struct {
 }
 
 // Flag 是命令的一个 flag。Secret 标密钥类：审计摘要与日志里打码（password 类型隐含）。表里的 flag 一律没有短名。
+// Kind 只给 object 类型：字段名只能是该 kind 的字段，explain 报出来，审计按它的打码字段集合打码。
 type Flag struct {
 	Name        string
 	Type        FlagType
 	Default     string
 	Description string
 	Secret      bool
+	Kind        v1.Kind
 }
 
 // Masked 报告这个 flag 的值在摘要与日志里要不要打码：标了 Secret 或类型是 password。
 func (f Flag) Masked() bool { return f.Secret || f.Type == TypePassword }
 
-// Parse 把命令行或查询参数里的字符串按类型解析。strings 类型由调用方逐个值调它。
+// Parse 把命令行或查询参数里的字符串按类型解析。strings 类型由调用方逐个值调它；
+// object 类型没有单个字符串的形式（CLI 用 ObjectFromPairs 把多个 字段=值 拼成对象），到这里是内部错误。
 func (f Flag) Parse(raw string) (any, error) {
 	switch f.Type {
 	case TypeString, TypeFile, TypeStrings, TypePassword:
 		return raw, nil
+	case TypeObject:
+		return nil, v1.Newf(v1.CodeInternal, "参数 %s 是对象，不能从单个字符串解析", f.Name)
 	case TypeInt:
 		n, err := strconv.Atoi(raw)
 		if err != nil {
@@ -143,8 +154,32 @@ func (f Flag) FromJSON(v any) (any, error) {
 			out = append(out, s)
 		}
 		return out, nil
+	case TypeObject:
+		obj, ok := v.(map[string]any)
+		if !ok {
+			return nil, v1.Newf(v1.CodeBadRequest, "参数 %s 必须是一个 JSON 对象（字段名到值）", f.Name)
+		}
+		return obj, nil
 	}
 	return nil, v1.Newf(v1.CodeInternal, "参数 %s 的类型 %s 不认识", f.Name, f.Type)
+}
+
+// ObjectFromPairs 把 CLI 上可重复给出的 字段=值 拼成 object 类型的值：按第一个 = 拆，值原样是字符串（可以含 =）。
+// 没有 = 的片段、同一个字段给两次都是用法错误（usage，退出码 2）。
+func ObjectFromPairs(flag string, pairs []string) (map[string]any, error) {
+	obj := make(map[string]any, len(pairs))
+	for _, p := range pairs {
+		key, value, ok := strings.Cut(p, "=")
+		if !ok || key == "" {
+			return nil, v1.Newf(v1.CodeUsage, "用法错误：参数 --%s 的值 %q 要写成 字段=值", flag, p).
+				WithNext("例如 --" + flag + " heartbeat_interval=30")
+		}
+		if _, dup := obj[key]; dup {
+			return nil, v1.Newf(v1.CodeUsage, "用法错误：参数 --%s 里字段 %s 给了两次", flag, key)
+		}
+		obj[key] = value
+	}
+	return obj, nil
 }
 
 // ConfirmKind 是危险命令的 confirm 口径：object 填对象名（取某个位置参数的值），count 填本次受影响数量。
@@ -315,8 +350,15 @@ func (c *Command) validate() error {
 		return fmt.Errorf("命令 %q 的危险类 %q 不认识", name, c.Danger)
 	}
 	for _, f := range c.Flags {
-		if f.Type == TypePassword && c.Class != ClassAction && c.Class != ClassConfig && c.Class != ClassMasterSettings {
-			return fmt.Errorf("命令 %q 的 flag %s 是 password 类型，只能登记在有写路径的命令上（不能是 read 或 local）", name, f.Name)
+		if (f.Type == TypePassword || f.Type == TypeObject) && !writeClasses[c.Class] {
+			return fmt.Errorf("命令 %q 的 flag %s 是 %s 类型，只能登记在有写路径的命令上（不能是 read 或 local）", name, f.Name, f.Type)
+		}
+		if f.Type == TypeObject {
+			if _, ok := v1.Lookup(f.Kind); !ok {
+				return fmt.Errorf("命令 %q 的 flag %s 是 object 类型，所属的 kind %q 不在 kind 清单里", name, f.Name, f.Kind)
+			}
+		} else if f.Kind != "" {
+			return fmt.Errorf("命令 %q 的 flag %s 不是 object 类型，不能登记 kind", name, f.Name)
 		}
 	}
 	if c.Anonymous {
