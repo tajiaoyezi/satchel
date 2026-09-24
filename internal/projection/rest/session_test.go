@@ -339,3 +339,19 @@ func TestSetupCookieAndVerifyDecoding(t *testing.T) {
 		t.Fatalf("非人类专属命令的 verify-* 应当 400：%d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// master-identity-and-authz「身份的判定顺序」：无效凭据的写请求与没有身份一样做同源检查；有效令牌不做。
+func TestSameOriginTokenSources(t *testing.T) {
+	e := &echo{}
+	tokenID := int64(3)
+	viaToken := source(v1.Identity{Actor: "admin", ActorKind: v1.ActorToken, Role: v1.RoleAdmin, TokenID: &tokenID, Scopes: v1.AllScopes, Danger: v1.AllDangers},
+		v1.SourceToken, SameOrigin(NewHandler(testTable(t), e, &fakeSessions{})))
+	viaInvalid := source(v1.Anonymous(), v1.SourceInvalid, SameOrigin(NewHandler(testTable(t), e, &fakeSessions{})))
+	cross := func(r *http.Request) { r.Host = "satchel.example:8080"; r.Header.Set("Origin", "http://evil.example") }
+	if rec := raw(t, viaToken, "POST", "/api/v1/demo/remove/alice", `{"confirm":"alice"}`, cross); rec.Code != 200 {
+		t.Fatalf("有效令牌不做同源检查：%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := raw(t, viaInvalid, "POST", "/api/v1/demo/remove/alice", `{"confirm":"alice"}`, cross); rec.Code != 403 || !strings.Contains(rec.Body.String(), "跨站") {
+		t.Fatalf("无效凭据的跨站写请求被同源检查拒：%d %s", rec.Code, rec.Body.String())
+	}
+}

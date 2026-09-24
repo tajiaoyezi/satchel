@@ -22,6 +22,7 @@ import (
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
 	"github.com/satchel/satchel/internal/core/sessions"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
+	coretokens "github.com/satchel/satchel/internal/core/tokens"
 	"github.com/satchel/satchel/internal/core/users"
 	mwaudit "github.com/satchel/satchel/internal/middleware/audit"
 	"github.com/satchel/satchel/internal/middleware/authn"
@@ -33,6 +34,7 @@ import (
 	svcaudit "github.com/satchel/satchel/internal/service/audit"
 	"github.com/satchel/satchel/internal/service/auth"
 	svcsettings "github.com/satchel/satchel/internal/service/settings"
+	svctokens "github.com/satchel/satchel/internal/service/tokens"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -55,7 +57,10 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 	st := store.New(bdb, schema.Default())
 	audits := svcaudit.New(coreaudit.New(bdb, st))
 	// 身份：用户与会话两个仓储归 service/auth 持有；它同时是 authn 的会话解析器、authz 的当场验证器、REST 会话入口的业务。
-	identity := auth.New(users.New(bdb, st), sessions.New(bdb))
+	accounts := users.New(bdb, st)
+	identity := auth.New(accounts, sessions.New(bdb))
+	// API 令牌：service/tokens 同时是 authn 的令牌解析器（按签发者当下的角色取交集，要读用户仓储）。
+	tokens := svctokens.New(coretokens.New(bdb, st), accounts, logger)
 	// 系统设置：迁移之后、监听之前确保单例行存在（master-settings「单例行的建立」），读命令不建行。
 	settingsRepo := coresettings.New(bdb, st, schema.Default())
 	if err := settingsRepo.EnsureSingleton(context.Background()); err != nil {
@@ -74,6 +79,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 		bindings[name] = h
 	}
 	for name, h := range settings.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range tokens.Bindings() {
 		bindings[name] = h
 	}
 	if err := table.CheckBindings(bindings); err != nil {
@@ -97,7 +105,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 	})
 
 	// 顺序：authn 先判身份（同源检查要看身份来源），SameOrigin 管住所有浏览器发来的写请求（REST、/mcp、会话入口）。
-	return &app{table: table, runner: runner, handler: authn.Middleware(identity, rest.SameOrigin(mux)), db: bdb, dataDir: dataDir, logger: logger}, nil
+	return &app{table: table, runner: runner, handler: authn.Middleware(identity, tokens, rest.SameOrigin(mux)), db: bdb, dataDir: dataDir, logger: logger}, nil
 }
 
 // listen 建两个监听：TCP 在 listenAddr，unix socket 在数据目录下（权限 0600）。socket 文件已存在时先试着连它：

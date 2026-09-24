@@ -113,7 +113,7 @@ func (id Identity) HasDanger(d Danger) bool {
 	return false
 }
 
-// CredentialSource 是身份从哪来：socket 对端凭据、网页会话 cookie、API 令牌（m1-04）。REST 的同源检查只对会话来的写请求做。
+// CredentialSource 是身份从哪来：socket 对端凭据、网页会话 cookie、API 令牌，或带了无效凭据。REST 的同源检查只对会话来的与没有身份的写请求做。
 type CredentialSource string
 
 const (
@@ -121,6 +121,9 @@ const (
 	SourceSocket  CredentialSource = "socket"
 	SourceSession CredentialSource = "session"
 	SourceToken   CredentialSource = "token"
+	// SourceInvalid 表示请求带了凭据但无效：令牌不存在、已吊销、已过期、签发者已停用或删除，或 Authorization 头不是 Bearer。
+	// 这时身份是 anonymous，authz 一律 unauthenticated（连不要身份的命令也拒），审计不记，也不退回 socket 或 cookie 的身份。
+	SourceInvalid CredentialSource = "invalid"
 )
 
 type sourceKey struct{}

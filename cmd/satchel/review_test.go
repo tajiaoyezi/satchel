@@ -19,37 +19,43 @@ import (
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
-// master-mcp「身份只来自 HTTP 认证」走真实的 authn：TCP 上的 MCP 没有身份，带自称的头也没用。
+// master-mcp「身份只来自 HTTP 认证」走真实的 authn：TCP 上的 MCP 不带凭据没有身份，带自称的头也没用；
+// 带无效令牌是无效凭据（m1-04），同样 unauthenticated。
 func TestMCPOverTCPHasNoIdentity(t *testing.T) {
 	bdb := dbtest.OpenSQLite(t)
 	if _, err := db.Migrate(context.Background(), bdb); err != nil {
 		t.Fatal(err)
 	}
 	h := start(t, bdb)
-	client := &http.Client{Transport: headerTransport{header: http.Header{"Authorization": {"Bearer abc"}, "X-Satchel-Actor": {"root"}}}}
-	mc := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "0"}, nil)
-	cs, err := mc.Connect(context.Background(), &sdk.StreamableClientTransport{Endpoint: h.tcpURL + mcp.Path, HTTPClient: client}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cs.Close()
-	for _, call := range []*sdk.CallToolParams{
-		{Name: "satchel_run", Arguments: map[string]any{"args": []string{"whoami"}}},
-		{Name: "satchel_run", Arguments: map[string]any{"args": []string{"explain", "Task"}}},
-		{Name: "satchel_explain", Arguments: map[string]any{"target": "Task"}},
+	for _, header := range []http.Header{
+		{"X-Satchel-Actor": {"root"}},
+		{"Authorization": {"Bearer abc"}, "X-Satchel-Actor": {"root"}},
 	} {
-		res, err := cs.CallTool(context.Background(), call)
+		client := &http.Client{Transport: headerTransport{header: header}}
+		mc := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "0"}, nil)
+		cs, err := mc.Connect(context.Background(), &sdk.StreamableClientTransport{Endpoint: h.tcpURL + mcp.Path, HTTPClient: client}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		text := res.Content[0].(*sdk.TextContent).Text
-		var e v1.Error
-		if !res.IsError || json.Unmarshal([]byte(text), &e) != nil || e.Code != v1.CodeUnauthenticated {
-			t.Errorf("%s %v 经 TCP 应当 unauthenticated：%v %s", call.Name, call.Arguments, res.IsError, text)
+		for _, call := range []*sdk.CallToolParams{
+			{Name: "satchel_run", Arguments: map[string]any{"args": []string{"whoami"}}},
+			{Name: "satchel_run", Arguments: map[string]any{"args": []string{"explain", "Task"}}},
+			{Name: "satchel_explain", Arguments: map[string]any{"target": "Task"}},
+		} {
+			res, err := cs.CallTool(context.Background(), call)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := res.Content[0].(*sdk.TextContent).Text
+			var e v1.Error
+			if !res.IsError || json.Unmarshal([]byte(text), &e) != nil || e.Code != v1.CodeUnauthenticated {
+				t.Errorf("%v：%s %v 经 TCP 应当 unauthenticated：%v %s", header, call.Name, call.Arguments, res.IsError, text)
+			}
 		}
+		cs.Close()
 	}
 	if n := h.auditCount(); n != 0 {
-		t.Fatalf("无身份的调用不该记审计，得到 %d 条", n)
+		t.Fatalf("无身份与无效凭据的调用都不该记审计，得到 %d 条", n)
 	}
 }
 

@@ -44,6 +44,12 @@ func registerBuiltins(opts *Options) {
 	}
 	opts.Renderers["explain"] = renderExplain
 	opts.Renderers["whoami"] = renderWhoami
+	opts.Local["login"] = loginCommand
+	opts.Renderers["login"] = renderLogin
+	opts.Local["logout"] = logoutCommand
+	opts.Renderers["logout"] = renderLogout
+	opts.Local["mcp init"] = mcpInit
+	opts.Renderers["mcp init"] = renderMCPInit
 	opts.Local["admin reset-password"] = adminResetPassword
 	opts.Renderers["admin reset-password"] = func(w io.Writer, result any) error {
 		out := result.(resetPasswordOutput)

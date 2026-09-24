@@ -16,7 +16,7 @@ import (
 
 // whoamiHandler 把 ctx 里的身份写成 JSON。
 func whoamiHandler() http.Handler {
-	return Middleware(nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return Middleware(nil, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(v1.IdentityFrom(r.Context()))
 	}))
 }

@@ -14,6 +14,8 @@ var GroupSummaries = map[string]string{
 	"settings":               "系统设置：一个单例对象，整单一个 resourceVersion（主控设置类）",
 	"settings snapshots":     "系统设置的写前快照",
 	"settings master-url":    "主控地址与订阅域名（七组人类专属：改的时候当场验证）",
+	"token":                  "API 令牌：签发、列出、改权限、吊销（签发、改权限、吊销要当场验证）",
+	"mcp":                    "MCP 接入：stdio 垫片、把 AI runtime 接上主控、看谁在连",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -27,31 +29,64 @@ func catalogCommands() []*Command {
 	all = append(all, baseCommands()...)
 	all = append(all, identityCommands()...)
 	all = append(all, settingsCommands()...)
+	all = append(all, tokenCommands()...)
 	return all
+}
+
+// tokenCommands 是 m1-04 的令牌与 MCP 接入命令（master-api-tokens、master-mcp）。签发、改权限、吊销属第 05 章七组：
+// 人类专属，要当场验证，令牌与 MCP 一律拒绝。mcp status 是读命令，但在 mcp 分组下，MCP 解析器按首段拒绝。
+func tokenCommands() []*Command {
+	scopeFlags := []Flag{
+		{Name: "preset", Type: TypeString, Description: "预设：readonly（只读）、ops（日常运维：可操作、危险类全关）、full（全权：可操作、六类危险全开）"},
+		{Name: "danger", Type: TypeStrings, Description: "恰好打开这几个危险类（隐含可操作）：delete、restart、permission、batch、exec、master；要全关用 --preset ops"},
+		{Name: "secrets", Type: TypeBool, Description: "密钥读取：输出里的打码字段给原文"},
+		{Name: "expires-in", Type: TypeDuration, Description: "多久之后过期，如 720h；0 表示不过期"},
+	}
+	create := append([]Flag{
+		{Name: "name", Type: TypeString, Description: "令牌的名字（1 到 64 个字符，可以重复）"},
+	}, scopeFlags...)
+	create = append(create, Flag{Name: "runtime", Type: TypeString, Description: "绑定的接入实例标签，如 claude-code@laptop（mcp init 会填）"})
+	update := append([]Flag{
+		{Name: "name", Type: TypeString, Description: "新名字（1 到 64 个字符）"},
+	}, scopeFlags...)
+	return []*Command{
+		{Path: []string{"token", "create"}, Summary: "签发一把 API 令牌（默认只读、不过期；明文只在这次输出里出现一次）", Class: ClassAction, HumanOnly: true,
+			Flags: create},
+		{Path: []string{"token", "list"}, Summary: "列出 API 令牌（普通用户只看得到自己的）", Class: ClassRead, List: true,
+			Flags:   []Flag{{Name: "owner", Type: TypeString, Description: "只看这个签发者的（管理员可用）"}},
+			Columns: []string{"id", "name", "owner", "preset", "state", "runtime", "last_used_at", "expires_at"}},
+		{Path: []string{"token", "update"}, Summary: "改一把令牌的名字、权限范围或过期时间（令牌字符串不变，改完立刻生效）", Class: ClassAction, HumanOnly: true,
+			Args:  []Arg{{Name: "id", Description: "令牌 id（token list 里的 id）"}},
+			Flags: update},
+		{Path: []string{"token", "revoke"}, Summary: "吊销一把令牌（立刻失效，不能恢复）", Class: ClassAction, HumanOnly: true,
+			Args: []Arg{{Name: "id", Description: "令牌 id（token list 里的 id）"}}},
+		{Path: []string{"mcp", "status"}, Summary: "看谁在连：列出绑了 runtime 的令牌与它们的最后使用时间", Class: ClassRead, List: true,
+			Columns: []string{"id", "name", "owner", "runtime", "preset", "last_used_at", "state"}},
+	}
 }
 
 // settingsCommands 是 m1-03 的系统设置命令（master-settings）：读合并后的整个对象、写日常运维档、快照与回滚、
 // 七组的主控地址。写命令都要带 --resource-version（整单一个版本，任何一档的写都比对并抬版本）。
 func settingsCommands() []*Command {
+	// 没有 --force：设置单例冲突了就重新读一遍再改（第 07 章）；force 归危险操作的权限类，随 M2 的 apply 一起做门。
 	version := Flag{Name: "resource-version", Type: TypeInt, Description: "当前的 metadata.resourceVersion（settings show 里的值）；不匹配整单拒绝"}
-	force := Flag{Name: "force", Type: TypeBool, Description: "跳过 resourceVersion 比对（其它校验照做，版本仍加 1）"}
 	return []*Command{
 		{Path: []string{"settings", "show"}, Summary: "显示系统设置：spec 是日常运维档，status 是人类专属、主控自身类、只读与运行态", Class: ClassRead},
 		{Path: []string{"settings", "set"}, Summary: "改日常运维档的设置字段（列与 key 混着给，整体校验，同一个事务写入并存写前快照）", Class: ClassMasterSettings,
 			Flags: []Flag{
 				{Name: "set", Type: TypeObject, Kind: v1.Kind("SystemSettings"), Description: "要改的字段与值（字段名见 satchel explain SystemSettings 的 spec 字段）"},
-				version, force,
+				version,
 			}},
 		{Path: []string{"settings", "snapshots", "list"}, Summary: "按时间倒序列出系统设置的写前快照（不含内容）", Class: ClassRead, List: true,
 			Columns: []string{"id", "object_version", "created_at", "source", "content_hash"}},
 		{Path: []string{"settings", "rollback"}, Summary: "把一份快照的内容当成一次 settings set 写回（重过字段分档与规则，先存写前快照）", Class: ClassMasterSettings,
 			Args:  []Arg{{Name: "snapshot", Description: "快照 id（settings snapshots list 里的 id）"}},
-			Flags: []Flag{version, force}},
+			Flags: []Flag{version}},
 		{Path: []string{"settings", "master-url", "set"}, Summary: "改主控地址与订阅域名（人类专属：当场验证；干净的 HTTP(S) origin，空串清掉）", Class: ClassMasterSettings, HumanOnly: true,
 			Flags: []Flag{
 				{Name: "url", Type: TypeString, Description: "主控地址，如 https://panel.example.com"},
 				{Name: "subscription-url", Type: TypeString, Description: "订阅域名，如 https://sub.example.com"},
-				version, force,
+				version,
 			}},
 	}
 }
@@ -68,6 +103,23 @@ func localCommands() []*Command {
 			Args: []Arg{{Name: "file", Description: "要验的文件"}, {Name: "sig", Description: "分离签名文件"}}},
 		{Path: []string{"serve"}, Summary: "启动主控（只在 Linux 上）", Class: ClassLocal,
 			Flags: []Flag{{Name: "config", Type: TypeString, Description: "配置文件路径（默认数据目录下的 config.yaml，或环境变量 SATCHEL_CONFIG）"}}},
+		// 远程 CLI 的登录文件（master-cli「login 与 logout」）：login 用根 flag --server / --token，logout 只删文件。
+		{Path: []string{"login"}, Summary: "验过一把令牌后，把主控地址与它存进登录文件，之后的命令默认连那个主控", Class: ClassLocal},
+		{Path: []string{"logout"}, Summary: "删掉登录文件（令牌在服务端仍然有效，吊销用 token revoke）", Class: ClassLocal},
+		// MCP 接入（master-mcp）：垫片与接入管理都在 CLI 进程里跑。mcp init 要替 token create 带当场验证，
+		// 所以自己登记 --verify-user / --verify-code（本地命令不会被自动加这组保留 flag；密码仍只从终端读）。
+		{Path: []string{"mcp", "stdio"}, Summary: "stdio 方式的 MCP 垫片：连上主控的 /mcp，把它的两个工具转给本地 runtime", Class: ClassLocal},
+		{Path: []string{"mcp", "init"}, Summary: "把一个 AI runtime 接上主控：签一把令牌（或用已有的），写进它的 MCP 配置与环境变量", Class: ClassLocal,
+			Flags: []Flag{
+				{Name: "runtime", Type: TypeString, Description: "要接入的 runtime：claude-code、codex 或 hermes"},
+				{Name: "url", Type: TypeString, Description: "写进 runtime 配置的主控地址（默认用 CLI 连的地址；在主控本机则按监听地址推出本机地址）"},
+				{Name: "preset", Type: TypeString, Default: "ops", Description: "新令牌的预设：readonly、ops、full"},
+				{Name: "name", Type: TypeString, Description: "新令牌的名字与 runtime 标签（默认 <runtime>@<主机名>）"},
+				{Name: "use-token", Type: TypeBool, Description: "不签新令牌：从终端读一把已有的令牌"},
+				{Name: "print", Type: TypeBool, Description: "只打印要加的配置与命令，不写任何文件"},
+				{Name: VerifyUserFlag, Type: TypeString, Description: "签发时当场验证的管理员账号（本机管理员必填）"},
+				{Name: VerifyCodeFlag, Type: TypeString, Description: "签发时当场验证的第二因素：验证器当前的码或一枚恢复码（不给会在终端里问）"},
+			}},
 		// 应急改密：直接开数据目录里的库，主控在不在跑都行；只对管理员账号；新密码从终端读两遍（master-accounts）。
 		// 本地命令不许带危险类，--confirm 是它自己登记的普通 flag，处理函数自己比对。
 		{Path: []string{"admin", "reset-password"}, Summary: "在主控本机重置一个管理员账号的密码（不经主控、不进审计）", Class: ClassLocal,

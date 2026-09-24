@@ -1,6 +1,7 @@
 // Package cli 是投影层的命令行：子命令树由命令表构造（master-command-table「三个投影从表构造」），
-// 每条命令的 RunE 只做解析 → Invocation → Runner → 渲染。本地命令（version、db、__verify、serve）在本进程里跑；
-// 经主控的命令默认经数据目录的 unix socket 发 REST 请求（master-cli「经主控的命令走本机连接」）。
+// 每条命令的 RunE 只做解析 → Invocation → Runner → 渲染。本地命令（version、db、__verify、serve 等）在本进程里跑；
+// 经主控的命令发 REST 请求：配了远程主控就经 HTTP(S) 连它，否则连数据目录的 unix socket，有令牌就带上
+// （master-cli「经主控的命令连本机 socket 或远程主控」）。
 //
 // MCP 的 satchel_run 用同一棵树解析命令数组（换一个进程内的 Runner），CLI 与 MCP 因此共用解析器。
 package cli
@@ -71,6 +72,7 @@ func DefaultOptions() Options {
 type options struct {
 	json      bool
 	dataDir   string
+	conn      connFlags
 	preRunRan bool
 }
 
@@ -105,11 +107,14 @@ func newRoot(opts Options) (*cobra.Command, *options) {
 				o.json = true
 			}
 			o.dataDir = db.DataDir(o.dataDir)
-			cmd.SetContext(context.WithValue(cmd.Context(), dataDirKey{}, o.dataDir))
+			o.conn.serverSet, o.conn.tokenSet = cmd.Flags().Changed("server"), cmd.Flags().Changed("token")
+			cmd.SetContext(withConnFlags(context.WithValue(cmd.Context(), dataDirKey{}, o.dataDir), o.conn))
 		},
 	}
 	root.PersistentFlags().BoolVar(&o.json, "json", false, "以 JSON 输出（等价于环境变量 SATCHEL_OUTPUT=json）")
 	root.PersistentFlags().StringVar(&o.dataDir, "data-dir", "", "数据目录（默认取环境变量 "+db.EnvDataDir+"，再默认 "+db.DefaultDataDir+"）")
+	root.PersistentFlags().StringVar(&o.conn.server, "server", "", "远程主控的地址，如 https://panel.example.com（默认取环境变量 "+EnvServer+"，再取登录文件；都没有就连本机 socket）")
+	root.PersistentFlags().StringVar(&o.conn.token, "token", "", "API 令牌（会留在进程列表与 shell 历史里；脚本用环境变量 "+EnvToken+"，常用的机器用 satchel login）")
 	// 树里只能有命令表里的命令：cobra 自带的 completion 命令关掉；help 命令换成一个不叫 help 的隐藏桩
 	// （cobra 的帮助模板会把名字叫 help 的命令硬列出来），这样 satchel help 就是普通的未知子命令，帮助用 --help 或 explain。
 	root.CompletionOptions.DisableDefaultCmd = true
@@ -137,7 +142,7 @@ func ExecuteContext(ctx context.Context, opts Options, args []string, stdout, st
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	ctx = withPrompt(withStderr(ctx, stderr), opts.Prompt)
+	ctx = withTable(withPrompt(withStderr(ctx, stderr), opts.Prompt), opts.Table)
 	var err error
 	if len(args) > 0 && shellCompletionCommands[args[0]] {
 		err = usageError("没有子命令 %s", args[0])

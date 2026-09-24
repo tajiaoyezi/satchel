@@ -13,6 +13,7 @@ import (
 
 	"github.com/satchel/satchel/internal/base/buildinfo"
 	"github.com/satchel/satchel/internal/command"
+	"github.com/satchel/satchel/internal/middleware/authz"
 	"github.com/satchel/satchel/internal/projection/cli"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
@@ -73,6 +74,9 @@ func runTool(opts cli.Options) sdk.ToolHandlerFor[runInput, any] {
 // explainTool 与 REST 的 explain 同一条口径：要有身份（TCP 上的 MCP 除协议握手外没有无身份的内容）。
 func explainTool(t *command.Table) sdk.ToolHandlerFor[explainInput, any] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in explainInput) (*sdk.CallToolResult, any, error) {
+		if v1.CredentialSourceFrom(ctx) == v1.SourceInvalid {
+			return errorResult(authz.InvalidCredential()), nil, nil
+		}
 		if v1.IdentityFrom(ctx).IsAnonymous() {
 			return errorResult(v1.New(v1.CodeUnauthenticated, "没有身份：请经主控本机的 unix socket 连接，或带上令牌")), nil, nil
 		}

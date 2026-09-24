@@ -20,11 +20,12 @@ func TestCatalog(t *testing.T) {
 	table := Catalog()
 	want := map[string]Class{
 		"version": ClassLocal, "db migrate": ClassLocal, "db status": ClassLocal, "db unlock": ClassLocal, "__verify": ClassLocal, "serve": ClassLocal,
-		"admin reset-password": ClassLocal,
-		"whoami":               ClassRead, "audit list": ClassRead, "explain": ClassRead, "setup status": ClassRead, "account show": ClassRead,
-		"settings show": ClassRead, "settings snapshots list": ClassRead,
+		"admin reset-password": ClassLocal, "login": ClassLocal, "logout": ClassLocal, "mcp stdio": ClassLocal, "mcp init": ClassLocal,
+		"whoami": ClassRead, "audit list": ClassRead, "explain": ClassRead, "setup status": ClassRead, "account show": ClassRead,
+		"settings show": ClassRead, "settings snapshots list": ClassRead, "token list": ClassRead, "mcp status": ClassRead,
 		"setup init": ClassAction, "account set-password": ClassAction, "account totp setup": ClassAction, "account totp confirm": ClassAction,
 		"account totp disable": ClassAction, "account recovery-codes regenerate": ClassAction,
+		"token create": ClassAction, "token update": ClassAction, "token revoke": ClassAction,
 		"settings set": ClassMasterSettings, "settings rollback": ClassMasterSettings, "settings master-url set": ClassMasterSettings,
 	}
 	if len(table.All()) != len(want) {
@@ -39,7 +40,7 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 的类别应当是 %s，得到 %s", name, class, c.Class)
 		}
 	}
-	for _, name := range []string{"audit list", "settings snapshots list"} {
+	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status"} {
 		if c, _ := table.Lookup(name); !c.List {
 			t.Errorf("%s 应当是列表命令", name)
 		}
@@ -52,6 +53,18 @@ func TestCatalog(t *testing.T) {
 	}
 	if c, _ := table.Lookup("settings set"); func() bool { scope, ok := c.Scope(); return ok && scope == v1.ScopeOperate }() != true {
 		t.Error("settings set 的 scope 应当是 operate")
+	}
+	for _, c := range table.All() {
+		if _, ok := c.FlagByName("force"); ok {
+			t.Errorf("%s 不该登记 --force（force 归权限类，随 M2 的 apply 做门）", c.Name())
+		}
+	}
+	if c, _ := table.Lookup("mcp init"); func() bool {
+		_, u := c.FlagByName(VerifyUserFlag)
+		_, v := c.FlagByName(VerifyCodeFlag)
+		return u && v
+	}() != true {
+		t.Error("mcp init 要自己登记 --verify-user 与 --verify-code")
 	}
 	if c, _ := table.Lookup("explain"); !c.Offline || c.RequiredArgs() != 0 {
 		t.Error("explain 应当是离线命令、target 可选")
@@ -68,7 +81,7 @@ func TestCatalog(t *testing.T) {
 	if c, _ := table.Lookup("version"); func() bool { _, ok := c.Scope(); return ok }() {
 		t.Error("version 是本地命令，不该有 scope")
 	}
-	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup,settings master-url set" {
+	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup,settings master-url set,token create,token revoke,token update" {
 		t.Errorf("人类专属命令清单不对：%v", table.HumanOnly())
 	}
 	for _, name := range []string{"setup status", "setup init"} {
@@ -123,6 +136,10 @@ func TestTableRules(t *testing.T) {
 		{"object 没有 kind", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Flags: []Flag{{Name: "set", Type: TypeObject}}}}, "kind"},
 		{"非 object 带 kind", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Flags: []Flag{{Name: "n", Type: TypeString, Kind: "Task"}}}}, "不是 object"},
 		{"verify-* 撞保留名", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Flags: []Flag{{Name: "verify-password", Type: TypePassword}}}}, "保留"},
+		{"非本地命令自己登记 verify-user", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Flags: []Flag{{Name: VerifyUserFlag, Type: TypeString}}}}, "保留"},
+		{"本地命令也不能登记 verify-password", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassLocal, Flags: []Flag{{Name: VerifyPasswordFlag, Type: TypeString}}}}, "保留"},
+		{"不许登记 force", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassMasterSettings, Flags: []Flag{{Name: "force", Type: TypeBool}}}}, "权限类"},
+		{"本地命令也不许登记 force", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassLocal, Flags: []Flag{{Name: "force", Type: TypeBool}}}}, "force"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,6 +154,11 @@ func TestTableRules(t *testing.T) {
 	}
 	if _, err := New(read("audit", "list"), read("audit", "show"), action("demo", "remove")); err != nil {
 		t.Fatalf("合法的表不该报错：%v", err)
+	}
+	// 本地命令可以自己登记 --confirm、--verify-user、--verify-code（admin reset-password、mcp init）。
+	if _, err := New(&Command{Path: []string{"x"}, Summary: "s", Class: ClassLocal, Flags: []Flag{
+		{Name: "confirm", Type: TypeString}, {Name: VerifyUserFlag, Type: TypeString}, {Name: VerifyCodeFlag, Type: TypeString}}}); err != nil {
+		t.Fatalf("本地命令自己登记这三个保留名应当通过：%v", err)
 	}
 	defer func() {
 		if recover() == nil {

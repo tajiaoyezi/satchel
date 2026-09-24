@@ -1,5 +1,5 @@
 // Package audit 是横切层的留痕：每条经主控执行的命令在返回后写一条审计记录（master-audit-log「每条命令一条记录」）。
-// 它套在执行链最外层，记的是身份检查之后的一切结果——被权限或 confirm 拒绝的也记；anonymous 与离线命令不记。
+// 它套在执行链最外层，记的是身份检查之后的一切结果——被权限或 confirm 拒绝的也记；anonymous、无效凭据与离线命令不记。
 package audit
 
 import (
@@ -32,7 +32,9 @@ func Wrap(rec Recorder, t *command.Table, logger *slog.Logger, next command.Runn
 		id := v1.IdentityFrom(ctx)
 		cmd, known := t.Lookup(inv.Name())
 		// anonymous 被拒的请求不记（扫描器会刷满）；但标了不要身份的命令（setup *）执行了就要记。
-		if (id.IsAnonymous() && !(known && cmd.Anonymous)) || (known && (cmd.Offline || cmd.Class == command.ClassLocal)) {
+		// 带无效凭据的请求与 anonymous 一样不记（authz 已经全部拒掉，连 setup * 也是）。
+		if v1.CredentialSourceFrom(ctx) == v1.SourceInvalid ||
+			(id.IsAnonymous() && !(known && cmd.Anonymous)) || (known && (cmd.Offline || cmd.Class == command.ClassLocal)) {
 			return result, err
 		}
 		if id.IsAnonymous() {

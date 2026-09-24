@@ -18,12 +18,11 @@ import (
 )
 
 // WriteRequest 是一次设置写。Values 是已归一成固定 Go 类型的字段值（哪些档允许写由调用方按命令限定，这里按每个字段的档选写入原语）；
-// ExpectedVersion 是调用方读到的 resourceVersion，Force 只跳过比对；Snapshot 为真时先存一份写前快照（内容是日常运维档的全部字段），
-// Source 写进快照的 source。
+// ExpectedVersion 是调用方读到的 resourceVersion，总要比对（没有跳过比对的写法：force 归危险操作的权限类，随 M2 的 apply 一起做门）；
+// Snapshot 为真时先存一份写前快照（内容是日常运维档的全部字段），Source 写进快照的 source。
 type WriteRequest struct {
 	Values          map[string]any
 	ExpectedVersion int64
-	Force           bool
 	Snapshot        bool
 	Source          string
 }
@@ -65,9 +64,7 @@ func (r *Repo) Write(ctx context.Context, req WriteRequest) (*State, error) {
 		if err != nil {
 			return err
 		}
-		if !req.Force {
-			row.ResourceVersion = req.ExpectedVersion
-		}
+		row.ResourceVersion = req.ExpectedVersion
 		rv := reflect.ValueOf(row).Elem()
 		for _, names := range cols {
 			for _, name := range names {
@@ -88,10 +85,10 @@ func (r *Repo) Write(ctx context.Context, req WriteRequest) (*State, error) {
 			}
 		}
 		if spec := cols[schema.ClassSpec]; len(spec) > 0 {
-			if err := ts.UpdateSpec(ctx, row, req.Force, spec...); err != nil {
+			if err := ts.UpdateSpec(ctx, row, false, spec...); err != nil {
 				return err
 			}
-		} else if err := ts.Bump(ctx, row, req.Force); err != nil {
+		} else if err := ts.Bump(ctx, row, false); err != nil {
 			return err
 		}
 		if names := cols[schema.ClassHuman]; len(names) > 0 {

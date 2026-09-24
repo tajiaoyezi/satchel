@@ -142,3 +142,19 @@ func TestMarshalOutput(t *testing.T) {
 		t.Fatalf("nil map 应当编成只带 apiVersion 的对象：%s %v", out, err)
 	}
 }
+
+// master-identity-and-authz「身份的判定顺序」：无效凭据是单独的一种来源，不是任何一种有效来源。
+func TestCredentialSourceInvalid(t *testing.T) {
+	ctx := WithCredentialSource(context.Background(), SourceInvalid)
+	if CredentialSourceFrom(ctx) != SourceInvalid {
+		t.Fatal("无效凭据的来源应当取得回来")
+	}
+	for _, s := range []CredentialSource{SourceNone, SourceSocket, SourceSession, SourceToken} {
+		if s == SourceInvalid {
+			t.Fatalf("SourceInvalid 不能与 %q 相同", s)
+		}
+	}
+	if CredentialSourceFrom(context.Background()) != SourceNone {
+		t.Fatal("没放来源时应当是 SourceNone")
+	}
+}

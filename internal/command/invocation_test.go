@@ -162,3 +162,20 @@ func TestInvocationAccessors(t *testing.T) {
 		t.Fatal("缺省值不对")
 	}
 }
+
+func TestOffsetCursor(t *testing.T) {
+	for _, off := range []int{1, 50, 12345} {
+		got, err := DecodeOffsetCursor(EncodeOffsetCursor(off))
+		if err != nil || got != off {
+			t.Fatalf("偏移 %d 往返：%d %v", off, got, err)
+		}
+	}
+	if got, err := DecodeOffsetCursor(""); err != nil || got != 0 {
+		t.Fatalf("空串是第一页：%d %v", got, err)
+	}
+	for _, bad := range []string{"x", EncodeIDCursor(5), EncodeOffsetCursor(0), EncodeOffsetCursor(-3)} {
+		if _, err := DecodeOffsetCursor(bad); err == nil || v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("%q 应当 bad_request：%v", bad, err)
+		}
+	}
+}

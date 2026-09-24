@@ -23,7 +23,7 @@ func testTable(t *testing.T) *command.Table {
 		&command.Command{Path: []string{"explain"}, Summary: "s", Class: command.ClassRead, Args: []command.Arg{{Name: "target", Optional: true}}},
 		&command.Command{Path: []string{"demo", "remove"}, Summary: "s", Class: command.ClassAction, Danger: v1.DangerDelete,
 			Confirm: &command.Confirm{Kind: command.ConfirmObject, Arg: "name"}, Args: []command.Arg{{Name: "name"}},
-			Flags: []command.Flag{{Name: "force", Type: command.TypeBool}, {Name: "spec", Type: command.TypeFile}}},
+			Flags: []command.Flag{{Name: "purge", Type: command.TypeBool}, {Name: "spec", Type: command.TypeFile}}},
 		&command.Command{Path: []string{"custom"}, Summary: "s", Class: command.ClassRead, REST: &command.REST{Method: "GET", Path: "/api/v1/my/custom"}},
 		&command.Command{Path: []string{"version"}, Summary: "s", Class: command.ClassLocal},
 	)
@@ -155,10 +155,10 @@ func TestDecodeBody(t *testing.T) {
 	e := &echo{}
 	h := NewHandler(testTable(t), e, nil)
 	js := map[string]string{"Content-Type": "application/json; charset=utf-8"}
-	if code, _ := do(t, h, "POST", "/api/v1/demo/remove/alice", `{"force":true,"confirm":"alice"}`, js); code != 200 {
+	if code, _ := do(t, h, "POST", "/api/v1/demo/remove/alice", `{"purge":true,"confirm":"alice"}`, js); code != 200 {
 		t.Fatal(code)
 	}
-	if e.last.Args[0] != "alice" || e.last.Flags["force"] != true || e.last.Confirm != "alice" {
+	if e.last.Args[0] != "alice" || e.last.Flags["purge"] != true || e.last.Confirm != "alice" {
 		t.Fatalf("请求体解码不对：%+v", e.last)
 	}
 	// 非字符串的 confirm 视为缺失，交给 authz 报 confirm_required；这里的假执行器只回显。
@@ -169,12 +169,12 @@ func TestDecodeBody(t *testing.T) {
 		body, ct, want string
 	}{
 		{`{"bogus":1}`, "application/json", "bogus"},
-		{`{"force":"yes"}`, "application/json", "force"},
+		{`{"purge":"yes"}`, "application/json", "purge"},
 		{`{"spec":"/tmp/x.yaml"}`, "application/json", "文件"},
 		{`{"file":"/tmp/x.yaml"}`, "application/json", "文件"},
 		{`[1,2]`, "application/json", "JSON 对象"},
-		{`{"force":true}`, "text/plain", "application/json"},
-		{`{"force":true} {"x":1}`, "application/json", "一个 JSON 对象"},
+		{`{"purge":true}`, "text/plain", "application/json"},
+		{`{"purge":true} {"x":1}`, "application/json", "一个 JSON 对象"},
 	}
 	for _, tc := range cases {
 		code, fields := do(t, h, "POST", "/api/v1/demo/remove/alice", tc.body, map[string]string{"Content-Type": tc.ct})
@@ -186,7 +186,7 @@ func TestDecodeBody(t *testing.T) {
 			t.Errorf("%s 的错误应当含 %q：%+v", tc.body, tc.want, err)
 		}
 	}
-	big := `{"force":true,"pad":"` + strings.Repeat("x", 2<<20) + `"}`
+	big := `{"purge":true,"pad":"` + strings.Repeat("x", 2<<20) + `"}`
 	code, fields := do(t, h, "POST", "/api/v1/demo/remove/alice", big, js)
 	if code != 400 || !strings.Contains(errorOf(t, fields).Reason, "超过") {
 		t.Fatalf("2 MiB 请求体应当 bad_request：%d %v", code, fields)

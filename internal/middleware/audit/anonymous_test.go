@@ -45,3 +45,33 @@ func TestAnonymousAllowedCommandsAreRecorded(t *testing.T) {
 		t.Fatalf("当场验证的值不该进摘要：%s", d)
 	}
 }
+
+// master-audit-log：带无效凭据的请求不记（连不要身份的命令也不记）；令牌身份的记录带 token_id 与签发者。
+func TestInvalidCredentialAndTokenRecords(t *testing.T) {
+	tbl, err := command.New(
+		&command.Command{Path: []string{"setup", "status"}, Summary: "s", Class: command.ClassRead, Anonymous: true},
+		&command.Command{Path: []string{"whoami"}, Summary: "s", Class: command.ClassRead},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &memRecorder{}
+	r := Wrap(rec, tbl, nil, next(nil, v1.New(v1.CodeUnauthenticated, "invalid")))
+	invalid := v1.WithCredentialSource(v1.WithIdentity(context.Background(), v1.Anonymous()), v1.SourceInvalid)
+	for _, path := range [][]string{{"setup", "status"}, {"whoami"}} {
+		_, _ = r.Run(invalid, &command.Invocation{Path: path})
+	}
+	if len(rec.entries) != 0 {
+		t.Fatalf("无效凭据不该记，得到 %+v", rec.entries)
+	}
+	tokenID := int64(12)
+	tok := v1.WithCredentialSource(v1.WithIdentity(context.Background(),
+		v1.Identity{Actor: "admin", ActorKind: v1.ActorToken, Role: v1.RoleAdmin, TokenID: &tokenID, Scopes: []v1.Scope{v1.ScopeRead}}), v1.SourceToken)
+	ok := Wrap(rec, tbl, nil, next(map[string]any{"ok": true}, nil))
+	if _, err := ok.Run(tok, &command.Invocation{Path: []string{"whoami"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.entries) != 1 || rec.entries[0].TokenID == nil || *rec.entries[0].TokenID != 12 || rec.entries[0].Actor != "admin" || rec.entries[0].ActorKind != v1.ActorToken {
+		t.Fatalf("令牌身份的记录：%+v", rec.entries)
+	}
+}

@@ -385,10 +385,10 @@ func TestWrite(t *testing.T) {
 		if st, _ := r.Load(ctx); st.Values["heartbeat_interval"] != int64(45) {
 			t.Error("失败的写不该改值")
 		}
-		// force 只跳过比对。
-		st, err = r.Write(ctx, WriteRequest{Values: map[string]any{"heartbeat_interval": int64(50)}, ExpectedVersion: 1, Force: true, Snapshot: true, Source: SourceSettings})
+		// 带上当前版本再写就成功（没有跳过比对的写法）。
+		st, err = r.Write(ctx, WriteRequest{Values: map[string]any{"heartbeat_interval": int64(50)}, ExpectedVersion: 2, Snapshot: true, Source: SourceSettings})
 		if err != nil || st.Version != 3 || st.Values["heartbeat_interval"] != int64(50) || snapshotCount(t, bdb) != 2 {
-			t.Fatalf("force：%v %+v %d", err, st, snapshotCount(t, bdb))
+			t.Fatalf("带当前版本重写：%v %+v %d", err, st, snapshotCount(t, bdb))
 		}
 		// 只改 key 也抬版本（Bump 路径）。
 		st, err = r.Write(ctx, WriteRequest{Values: map[string]any{"branding_brand_title": "B"}, ExpectedVersion: 3, Snapshot: true, Source: SourceRollback})

@@ -30,7 +30,7 @@ func (f fakeResolver) Resolve(_ context.Context, token string) (v1.Identity, str
 }
 
 func echoHandler(resolver SessionResolver) http.Handler {
-	return Middleware(resolver, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return Middleware(resolver, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"identity": v1.IdentityFrom(r.Context()),
 			"source":   v1.CredentialSourceFrom(r.Context()),

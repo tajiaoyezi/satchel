@@ -37,6 +37,11 @@ func TestGenerateDocsShape(t *testing.T) {
 		"| `settings set` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/set` |",
 		"| `settings snapshots list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/settings/snapshots` |",
 		"| `settings master-url set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/master-url/set` |",
+		"| `token create` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/create` |",
+		"| `token list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/token` |",
+		"| `token revoke` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/revoke/{id}` |",
+		"| `mcp status` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/mcp/status` |",
+		"`login`", "`logout`", "`mcp stdio`", "`mcp init`",
 		"`__verify`（隐藏）", "`serve`", "`admin reset-password`"} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("对照表缺 %q：\n%s", want, doc)

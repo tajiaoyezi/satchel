@@ -361,9 +361,13 @@ func (c *Command) validate() error {
 		if !validFlagTypes[f.Type] {
 			return fmt.Errorf("命令 %q 的 flag %s 类型 %q 不认识", name, f.Name, f.Type)
 		}
-		// 本地命令没有危险类，投影层不会给它自动加 confirm；它可以自己登记一个 --confirm 做确认（admin reset-password）。
-		if reservedFlags[f.Name] && !(c.Class == ClassLocal && f.Name == "confirm") {
+		// 本地命令没有危险类与人类专属，投影层不会给它自动加 confirm 与 verify-*；需要时它自己登记
+		// （admin reset-password 的 --confirm，mcp init 替 token create 带的 --verify-user / --verify-code）。
+		if reservedFlags[f.Name] && !(c.Class == ClassLocal && localSelfRegistered[f.Name]) {
 			return fmt.Errorf("命令 %q 的 flag %s 与投影层保留的 flag 撞名", name, f.Name)
+		}
+		if f.Name == "force" {
+			return fmt.Errorf("命令 %q 不能登记 --force：force 覆盖版本校验归危险操作的权限类，要 confirm 并进审计（第 05 章、第 07 章），这道门随 M2 的 apply 一起做", name)
 		}
 	}
 	if c.Danger != "" && !validDanger(c.Danger) {
@@ -445,6 +449,9 @@ func (c *Command) argByName(name string) (Arg, bool) {
 var reservedFlags = map[string]bool{"json": true, "data-dir": true, "confirm": true, "limit": true, "cursor": true, "server": true, "token": true, "help": true,
 	VerifyPasswordFlag: true, VerifyCodeFlag: true, VerifyUserFlag: true}
 
+// localSelfRegistered 是本地命令可以自己登记的保留 flag 名。
+var localSelfRegistered = map[string]bool{"confirm": true, VerifyUserFlag: true, VerifyCodeFlag: true}
+
 // 人类专属命令自动带的当场验证保留 flag（master-human-verification）：值不进 Invocation.Flags，进 Invocation.Verify，永不进审计摘要。
 const (
 	VerifyPasswordFlag = "verify-password"
@@ -459,9 +466,9 @@ var VerifyFlags = []string{VerifyPasswordFlag, VerifyCodeFlag, VerifyUserFlag}
 // 主控端（REST、MCP）见到它们一律拒绝——身份只来自连接，数据目录是主控自己的。CLI 投影登记根 flag 时用同一份。
 var ClientOnlyFlags = []string{"server", "token", "data-dir"}
 
-// ClientOnlyCommands 是只在 CLI 里有意义的命令路径的首段（第 05 章：login、mcp init 在 satchel_run 的拒绝清单里）；
-// m1-04 把它们登记成本地命令之前，MCP 已经按名拒绝。
-var ClientOnlyCommands = []string{"login", "mcp"}
+// ClientOnlyCommands 是只在 CLI 里有意义的命令路径的首段（第 05 章：login、mcp init 在 satchel_run 的拒绝清单里）：
+// MCP 按首段拒绝。login、logout、mcp stdio、mcp init 是本地命令；mcp status 是读命令，同样按首段拒绝（token list 在 MCP 上可得）。
+var ClientOnlyCommands = []string{"login", "logout", "mcp"}
 
 // FilePathFlags 是 CLI 惯用的文件路径 flag 名（含短名 -f），REST 与 MCP 上一律拒绝、不打开任何路径。
 var FilePathFlags = []string{"f", "filename", "file"}

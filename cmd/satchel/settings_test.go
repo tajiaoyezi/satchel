@@ -56,7 +56,7 @@ func (h *harness) settingsCLI(args ...string) (env envelope, e *v1.Error, code i
 	return envelope{}, &err, code
 }
 
-// 系统设置的端到端（双库）：单例行 → 读 → 写与校验 → 版本与 force → 快照与回滚 → 会话带当场验证改主控地址 → 普通用户 → 审计。
+// 系统设置的端到端（双库）：单例行 → 读 → 写与校验 → 版本（没有 force）→ 快照与回滚 → 会话带当场验证改主控地址 → 普通用户 → 审计。
 func TestSettingsEndToEnd(t *testing.T) {
 	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
 		h := start(t, bdb)
@@ -104,13 +104,17 @@ func TestSettingsEndToEnd(t *testing.T) {
 		if env, _, _ := h.settingsCLI("settings", "show"); env.Metadata.ResourceVersion != 2 || string(env.Spec["heartbeat_interval"]) != "45" || h.snapshotCount() != 1 {
 			t.Fatalf("被拒的写不该改任何东西：%+v %d", env.Metadata, h.snapshotCount())
 		}
-		// 过期版本 → version_conflict（退出码 6）；--force 跳过比对。
+		// 过期版本 → version_conflict（退出码 6）；没有跳过比对的写法：--force 是用法错误（退出码 2），什么都没写。
 		if _, e, code := h.settingsCLI("settings", "set", "--set", "heartbeat_interval=50", "--resource-version", "1"); e == nil || e.Code != v1.CodeVersionConflict || code != v1.ExitVersionConflict {
 			t.Fatalf("过期版本：%v %d", e, code)
 		}
-		env, e, _ = h.settingsCLI("settings", "set", "--set", "heartbeat_interval=50", "--resource-version", "1", "--force")
+		if _, stderr, code := h.cli("settings", "set", "--set", "heartbeat_interval=50", "--resource-version", "1", "--force"); code != v1.ExitUsage || !strings.Contains(stderr, "force") {
+			t.Fatalf("--force 应当是用法错误：%d %s", code, stderr)
+		}
+		// 重新读一遍版本再改。
+		env, e, _ = h.settingsCLI("settings", "set", "--set", "heartbeat_interval=50", "--resource-version", "2")
 		if e != nil || env.Metadata.ResourceVersion != 3 || string(env.Spec["heartbeat_interval"]) != "50" || h.snapshotCount() != 2 {
-			t.Fatalf("force：%v %+v %d", e, env.Metadata, h.snapshotCount())
+			t.Fatalf("带当前版本再写：%v %+v %d", e, env.Metadata, h.snapshotCount())
 		}
 
 		// 快照列表：两条、倒序、不带内容；文本形式是表。
@@ -171,14 +175,18 @@ func TestSettingsEndToEnd(t *testing.T) {
 		if env, _, _ := h.settingsCLI("settings", "show"); env.Metadata.ResourceVersion != 5 || string(env.Status["master_url"]) != `"https://panel.example.com"` {
 			t.Fatalf("被拒的都没写：%+v", env.Metadata)
 		}
-		// 会话经 REST 用原生类型改设置；MCP 读得到；三处同一个对象。
+		// REST 带 force 是 bad_request，点名 force。
+		if status, fields, _ := alice.call("POST", base+"/api/v1/settings/set", `{"set":{"heartbeat_interval":50},"resource-version":1,"force":true}`, nil); status != 400 || str(fields["code"]) != "bad_request" || !strings.Contains(str(fields["reason"]), "force") {
+			t.Fatalf("REST 带 force：%d %v", status, fields)
+		}
+		// 会话经 REST 用原生类型改设置；MCP 读得到；三处同一个对象。本机管理员带 secrets scope，看得到打码字段的原文。
 		token := strings.Repeat("ab", 32)
 		status, fields, _ = alice.call("POST", base+"/api/v1/settings/set", `{"set":{"heartbeat_interval":45,"agent_log_enabled":true,"probe_external_token_sha256":"`+token+`"},"resource-version":5}`, nil)
 		if status != 200 {
 			t.Fatalf("REST settings set：%d %v", status, fields)
 		}
 		text, isErr := h.mcpRun("settings", "show")
-		if isErr || !strings.Contains(text, `"kind":"SystemSettings"`) || !strings.Contains(text, `"heartbeat_interval":45`) || !strings.Contains(text, `"probe_external_token_sha256":"***"`) || strings.Contains(text, token) {
+		if isErr || !strings.Contains(text, `"kind":"SystemSettings"`) || !strings.Contains(text, `"heartbeat_interval":45`) || !strings.Contains(text, `"probe_external_token_sha256":"`+token+`"`) {
 			t.Fatalf("MCP settings show：%v %s", isErr, text)
 		}
 		if text, isErr := h.mcpRun("settings", "set", "--set", "heartbeat_interval=46", "--resource-version", "6"); isErr || !strings.Contains(text, `"resourceVersion":7`) {

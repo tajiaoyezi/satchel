@@ -13,8 +13,11 @@ import (
 )
 
 // render 输出一条命令的结果：--json 时是带 apiVersion 的 JSON 对象（与 REST、MCP 同一份），
-// 否则按命令名找文本渲染，没登记的用通用渲染。
+// 否则按命令名找文本渲染，没登记的用通用渲染。没有结果（nil）就什么都不输出：mcp stdio 的 stdout 只走协议。
 func render(w io.Writer, c *command.Command, result any, opts Options, o *options) error {
+	if result == nil {
+		return nil
+	}
 	if o.json {
 		return writeJSON(w, result)
 	}

@@ -15,6 +15,7 @@
 | `account totp setup` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/totp/setup` |
 | `audit list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/audit` |
 | `explain` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/explain/{target}` |
+| `mcp status` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/mcp/status` |
 | `settings master-url set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/master-url/set` |
 | `settings rollback` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/rollback/{snapshot}` |
 | `settings set` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/set` |
@@ -22,6 +23,10 @@
 | `settings snapshots list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/settings/snapshots` |
 | `setup init` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/init` |
 | `setup status` | read | read | — | — | 否 | 是 | 否 | `GET /api/v1/setup/status` |
+| `token create` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/create` |
+| `token list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/token` |
+| `token revoke` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/revoke/{id}` |
+| `token update` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/update/{id}` |
 | `whoami` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/whoami` |
 
 ## 本地命令（不经主控，只在 CLI 里）
@@ -33,5 +38,9 @@
 | `db migrate` | 执行全部未应用的迁移，然后比对库结构与注册表 |
 | `db status` | 列出已应用与待应用的迁移，并比对库结构（不写盘） |
 | `db unlock` | 清除上一次迁移被中断后残留的迁移锁 |
+| `login` | 验过一把令牌后，把主控地址与它存进登录文件，之后的命令默认连那个主控 |
+| `logout` | 删掉登录文件（令牌在服务端仍然有效，吊销用 token revoke） |
+| `mcp init` | 把一个 AI runtime 接上主控：签一把令牌（或用已有的），写进它的 MCP 配置与环境变量 |
+| `mcp stdio` | stdio 方式的 MCP 垫片：连上主控的 /mcp，把它的两个工具转给本地 runtime |
 | `serve` | 启动主控（只在 Linux 上） |
 | `version` | 打印版本号、commit 与构建时间 |

@@ -51,20 +51,32 @@ func (f *fixture) run(ctx context.Context, name string, args []string, flags map
 	return h(ctx, &command.Invocation{Path: strings.Fields(name), Args: args, Flags: flags})
 }
 
-// set 以管理员身份执行 settings set；values 里的值按调用方给的类型原样传（CLI 是字符串，REST 是原生 JSON 类型）。
-func (f *fixture) set(values map[string]any, version int, extra ...string) (*Object, error) {
-	f.t.Helper()
-	flags := map[string]any{"set": values, "resource-version": version}
-	for _, e := range extra {
-		if e == "force" {
-			flags["force"] = true
-		}
+// typed 把输出解成带类型的对象：本机管理员带 secrets scope，拿到的是按分档编的原文对象（RevealedObject），
+// 经 JSON 往返进生成的结构体后，打码字段里是原文。
+func typed(t *testing.T, res any) *Object {
+	t.Helper()
+	if obj, ok := res.(*Object); ok {
+		return obj
 	}
-	res, err := f.run(f.admin, "settings set", nil, flags)
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var obj Object
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatalf("输出解不成 SystemSettings：%v", err)
+	}
+	return &obj
+}
+
+// set 以管理员身份执行 settings set；values 里的值按调用方给的类型原样传（CLI 是字符串，REST 是原生 JSON 类型）。
+func (f *fixture) set(values map[string]any, version int) (*Object, error) {
+	f.t.Helper()
+	res, err := f.run(f.admin, "settings set", nil, map[string]any{"set": values, "resource-version": version})
 	if err != nil {
 		return nil, err
 	}
-	return res.(*Object), nil
+	return typed(f.t, res), nil
 }
 
 func (f *fixture) mustSet(values map[string]any, version int) *Object {
@@ -82,7 +94,7 @@ func (f *fixture) show() *Object {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	return res.(*Object)
+	return typed(f.t, res)
 }
 
 func (f *fixture) snapshots() int {
@@ -237,26 +249,59 @@ func TestSet(t *testing.T) {
 		if _, err := f.run(f.admin, "settings set", nil, map[string]any{"set": map[string]any{"heartbeat_interval": "45"}, "resource-version": "1"}); v1.AsError(err).Code != v1.CodeBadRequest {
 			t.Errorf("版本不是整数：%v", err)
 		}
-		// 过期版本与 force。
+		// 过期版本：没有跳过比对的写法，force 不是这条命令的参数（CLI 与 REST 在投影层就拒，见 cmd/satchel 的端到端）。
 		e = wantCode(t, func() error { _, err := f.set(map[string]any{"heartbeat_interval": "60"}, 1); return err }(), v1.CodeVersionConflict)
 		if e.State["resourceVersion"] != int64(version) || f.snapshots() != 4 {
 			t.Errorf("version_conflict 的 state 与快照数：%v %d", e.State, f.snapshots())
 		}
-		obj, err = f.set(map[string]any{"heartbeat_interval": "60"}, 1, "force")
+		obj, err = f.set(map[string]any{"heartbeat_interval": "60"}, version)
 		if err != nil || int(obj.Metadata.ResourceVersion) != version+1 || obj.Spec.HeartbeatInterval != 60 || f.snapshots() != 5 {
-			t.Fatalf("force：%v %+v %d", err, obj.Metadata, f.snapshots())
+			t.Fatalf("重新读版本后再写：%v %+v %d", err, obj.Metadata, f.snapshots())
 		}
 		version++
-		// 打码字段：写进去、读出来是 ***、*** 交回表示不变、空串清掉；形状是 64 位小写十六进制。
+		// 打码字段：写进去、*** 交回表示不变、空串清掉；形状是 64 位小写十六进制。
+		// 输出按身份的 secrets scope 决定原文或 ***（master-api-tokens「密钥读取开关」）：本机管理员与带 secrets 的令牌看原文，
+		// 不带的令牌看 ***；空值输出空串。
 		token := strings.Repeat("ab", 32)
 		if _, err := f.set(map[string]any{"probe_external_token_sha256": "abc123"}, version); v1.AsError(err).Code != v1.CodeBadRequest {
 			t.Errorf("不是 SHA-256 形状的 token 应当拒绝：%v", err)
 		}
 		f.mustSet(map[string]any{"probe_external_token_sha256": token}, version)
 		version++
-		_, _, all := jsonFields(t, f.show())
-		if strings.Contains(all, token) || !strings.Contains(all, `"probe_external_token_sha256":"***"`) {
-			t.Errorf("打码字段应当输出 ***：%s", all)
+		tokenID := int64(9)
+		opsToken := v1.WithIdentity(context.Background(), v1.Identity{Actor: "admin", ActorKind: v1.ActorToken, Role: v1.RoleAdmin, TokenID: &tokenID,
+			Scopes: []v1.Scope{v1.ScopeRead, v1.ScopeOperate}, Danger: []v1.Danger{}})
+		secretsToken := v1.WithIdentity(context.Background(), v1.Identity{Actor: "admin", ActorKind: v1.ActorToken, Role: v1.RoleAdmin, TokenID: &tokenID,
+			Scopes: []v1.Scope{v1.ScopeRead, v1.ScopeOperate, v1.ScopeSecrets}, Danger: []v1.Danger{}})
+		masked, err := f.run(opsToken, "settings show", nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		maskedSpec, maskedStatus, all := jsonFields(t, masked)
+		if strings.Contains(all, token) || !strings.Contains(all, `"probe_external_token_sha256":"***"`) || string(maskedStatus["telegram_bot_token"]) != `""` {
+			t.Errorf("不带 secrets 的令牌应当看到 ***、空值是空串：%s", all)
+		}
+		for name, ctx := range map[string]context.Context{"本机管理员": f.admin, "带 secrets 的令牌": secretsToken} {
+			res, err := f.run(ctx, "settings show", nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec, status, all := jsonFields(t, res)
+			if string(spec["probe_external_token_sha256"]) != `"`+token+`"` || string(status["telegram_bot_token"]) != `""` {
+				t.Errorf("%s应当看到原文、空值是空串：%s", name, all)
+			}
+			// 原文输出与打码输出同一套字段：键一样，打码字段以外的值也一样。
+			if len(spec) != len(maskedSpec) || len(status) != len(maskedStatus) {
+				t.Fatalf("%s的原文输出字段数不对：%d/%d，打码输出 %d/%d", name, len(spec), len(status), len(maskedSpec), len(maskedStatus))
+			}
+			for _, pair := range []struct{ got, want map[string]json.RawMessage }{{spec, maskedSpec}, {status, maskedStatus}} {
+				for k, v := range pair.want {
+					got, ok := pair.got[k]
+					if field, _ := f.svc.repo.Field(k); !ok || (!field.Masked && string(got) != string(v)) {
+						t.Errorf("%s的字段 %s：原文输出 %s，打码输出 %s", name, k, got, v)
+					}
+				}
+			}
 		}
 		f.mustSet(map[string]any{"probe_external_token_sha256": "***", "heartbeat_interval": "45"}, version)
 		version++
@@ -352,7 +397,7 @@ func TestSnapshotsAndRollback(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		obj := res.(*Object)
+		obj := typed(t, res)
 		if obj.Metadata.ResourceVersion != 4 || obj.Spec.HeartbeatInterval != 30 || obj.Spec.BrandingSiteTitle != "" || f.snapshots() != 3 {
 			t.Fatalf("回滚后：%+v %+v %d", obj.Metadata, obj.Spec, f.snapshots())
 		}
@@ -412,7 +457,7 @@ func TestSnapshotsAndRollback(t *testing.T) {
 		if err != nil {
 			t.Fatalf("回滚含 JSON 字符串与大整数的快照：%v", err)
 		}
-		obj = res.(*Object)
+		obj = typed(t, res)
 		if string(obj.Spec.RealityDomains) != `"abc"` || obj.Spec.UserQuotaOverride != 9007199254740993 || obj.Spec.HeartbeatInterval != 30 {
 			t.Fatalf("回滚应当原样恢复：%s %d %d", obj.Spec.RealityDomains, obj.Spec.UserQuotaOverride, obj.Spec.HeartbeatInterval)
 		}
@@ -468,12 +513,12 @@ func TestMasterURL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		obj := res.(*Object)
+		obj := typed(t, res)
 		if obj.Metadata.ResourceVersion != 3 || obj.Status.MasterURL != "https://panel.example.com" || obj.Status.SubscriptionURL != "" || f.snapshots() != 1 {
 			t.Fatalf("改主控地址：%+v %+v %d", obj.Metadata, obj.Status, f.snapshots())
 		}
 		res, err = f.run(f.admin, "settings master-url set", nil, map[string]any{"subscription-url": "http://Sub.example.com:8080", "resource-version": 3})
-		if err != nil || res.(*Object).Status.SubscriptionURL != "http://Sub.example.com:8080" || res.(*Object).Metadata.ResourceVersion != 4 {
+		if err != nil || typed(t, res).Status.SubscriptionURL != "http://Sub.example.com:8080" || typed(t, res).Metadata.ResourceVersion != 4 {
 			t.Fatalf("订阅域名带端口：%v %+v", err, res)
 		}
 		for _, bad := range []string{"https://panel.example.com/admin", "panel.example.com", "https://user@panel.example.com", "https://panel.example.com/?x=1", "https://panel.example.com/#a", "ftp://panel.example.com", "https://", "https://panel.example.com:"} {
@@ -497,7 +542,7 @@ func TestMasterURL(t *testing.T) {
 		}
 		// 空串清掉。
 		res, err = f.run(f.admin, "settings master-url set", nil, map[string]any{"url": "", "resource-version": 4})
-		if err != nil || res.(*Object).Status.MasterURL != "" || res.(*Object).Metadata.ResourceVersion != 5 || f.snapshots() != 1 {
+		if err != nil || typed(t, res).Status.MasterURL != "" || typed(t, res).Metadata.ResourceVersion != 5 || f.snapshots() != 1 {
 			t.Fatalf("清掉：%v %+v %d", err, res, f.snapshots())
 		}
 		if _, err := f.run(f.user, "settings master-url set", nil, map[string]any{"url": "https://a.example", "resource-version": 5}); v1.AsError(err).Code != v1.CodeForbidden {

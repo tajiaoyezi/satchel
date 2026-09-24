@@ -146,6 +146,27 @@ func EncodeIDCursor(id int64) string {
 	return base64.RawURLEncoding.EncodeToString([]byte("id:" + strconv.FormatInt(id, 10)))
 }
 
+// EncodeOffsetCursor 把偏移量翻页的位置编成不透明字符串：排序键一直在变的列表（按最后使用时间排的 mcp status）用不了 keyset，用它。
+func EncodeOffsetCursor(offset int) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("off:" + strconv.Itoa(offset)))
+}
+
+// DecodeOffsetCursor 解 EncodeOffsetCursor 的输出；空串表示第一页，返回 0。解不出报 bad_request。
+func DecodeOffsetCursor(cursor string) (int, error) {
+	if cursor == "" {
+		return 0, nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err == nil {
+		if n, ok := strings.CutPrefix(string(raw), "off:"); ok {
+			if off, err := strconv.Atoi(n); err == nil && off > 0 {
+				return off, nil
+			}
+		}
+	}
+	return 0, v1.Newf(v1.CodeBadRequest, "cursor 不合法，请用上一页返回的 nextCursor")
+}
+
 // DecodeIDCursor 解 EncodeIDCursor 的输出；空串表示第一页，返回 0。解不出报 bad_request。
 func DecodeIDCursor(cursor string) (int64, error) {
 	if cursor == "" {

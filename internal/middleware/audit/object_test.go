@@ -17,12 +17,13 @@ func TestDigestMasksObjectByKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd, _ := tbl.Lookup("settings set")
+	token := strings.Repeat("ab", 32)
 	inv := &command.Invocation{Path: []string{"settings", "set"}, Flags: map[string]any{
-		"set":              map[string]any{"probe_external_token_sha256": "abc123", "heartbeat_interval": "45", "turnstile_secret_key": "s3cret"},
+		"set":              map[string]any{"probe_external_token_sha256": token, "heartbeat_interval": "45", "turnstile_secret_key": "s3cret"},
 		"resource-version": 1,
 	}}
 	d := Digest(cmd, inv)
-	if strings.Contains(d, "abc123") || strings.Contains(d, "s3cret") {
+	if strings.Contains(d, token) || strings.Contains(d, "s3cret") {
 		t.Fatalf("打码字段的值不该出现：%s", d)
 	}
 	var got struct {
@@ -38,11 +39,11 @@ func TestDigestMasksObjectByKind(t *testing.T) {
 		t.Fatalf("摘要应当逐键打码、其余照记：%s", d)
 	}
 	// 原来的对象不被改动。
-	if inv.Flags["set"].(map[string]any)["probe_external_token_sha256"] != "abc123" {
+	if inv.Flags["set"].(map[string]any)["probe_external_token_sha256"] != token {
 		t.Fatal("Digest 不该改调用对象")
 	}
 	// kind 不认识时不打码但也不崩。
-	if d := Digest(&command.Command{Path: []string{"x"}, Flags: []command.Flag{{Name: "set", Type: command.TypeObject, Kind: "NoSuch"}}}, inv); !strings.Contains(d, "abc123") {
+	if d := Digest(&command.Command{Path: []string{"x"}, Flags: []command.Flag{{Name: "set", Type: command.TypeObject, Kind: "NoSuch"}}}, inv); !strings.Contains(d, token) {
 		t.Fatalf("kind 不认识时原样记录：%s", d)
 	}
 }

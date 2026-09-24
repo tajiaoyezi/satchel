@@ -67,14 +67,15 @@ func SessionHashFrom(ctx context.Context) string {
 	return h
 }
 
-// currentAccount 取调用者自己的账号：身份必须是 user；local_admin 不是账号，给指引。
+// currentAccount 取调用者自己的账号：身份是 user 时是该用户，是 token 时是令牌的签发者（actor 就是签发者用户名）；
+// local_admin 不是账号，给指引。
 func (s *Service) currentAccount(ctx context.Context) (*users.Account, error) {
 	id := v1.IdentityFrom(ctx)
 	switch id.ActorKind {
-	case v1.ActorUser:
+	case v1.ActorUser, v1.ActorToken:
 		a, err := s.users.GetByUsername(ctx, id.Actor)
 		if err != nil {
-			return nil, v1.Wrap(v1.CodeUnauthenticated, "会话对应的账号已不存在", err)
+			return nil, v1.Wrap(v1.CodeUnauthenticated, "调用者对应的账号已不存在", err)
 		}
 		return a, nil
 	case v1.ActorLocalAdmin:

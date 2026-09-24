@@ -18,6 +18,9 @@ import (
 // Object 是 settings show / set / rollback / master-url set 的输出：SystemSettings 的资源信封。
 type Object = v1.Object[v1.SystemSettingsSpec, v1.SystemSettingsStatus]
 
+// RevealedObject 是带 secrets scope 的身份拿到的输出：形状与 Object 相同，打码字段是原文（master-api-tokens「密钥读取开关」）。
+type RevealedObject = v1.Object[map[string]any, map[string]any]
+
 // Service 持有仓储。
 type Service struct {
 	repo *core.Repo
@@ -58,6 +61,33 @@ func requireAdmin(ctx context.Context) error {
 	return nil
 }
 
+// output 按身份决定打码：带 secrets scope 的身份（本机管理员、管理员账号的会话、打开了密钥读取的令牌）拿原文，
+// spec / status 按字段分档直接从字段值表编；其余身份经生成的结构体，打码字段输出 ***。
+func (s *Service) output(ctx context.Context, st *core.State) (any, error) {
+	if v1.IdentityFrom(ctx).HasScope(v1.ScopeSecrets) {
+		return s.revealed(st), nil
+	}
+	return s.object(st)
+}
+
+// revealed 按分档把字段值表分成 spec（日常运维）与 status（人类专属、主控自身类、只读、运行态），与生成的结构体同一套字段。
+func (s *Service) revealed(st *core.State) *RevealedObject {
+	spec, status := map[string]any{}, map[string]any{}
+	for _, f := range s.repo.Fields() {
+		switch f.Class {
+		case schema.ClassSpec:
+			spec[f.Name] = st.Values[f.Name]
+		case schema.ClassHuman, schema.ClassMasterSelf, schema.ClassReadOnly, schema.ClassStatus:
+			status[f.Name] = st.Values[f.Name]
+		}
+	}
+	return &RevealedObject{
+		APIVersion: v1.APIVersion, Kind: v1.Kind(core.KindName),
+		Metadata: v1.Metadata{ID: core.SingletonID, ResourceVersion: st.Version, CreatedAt: st.CreatedAt, UpdatedAt: st.UpdatedAt},
+		Spec:     spec, Status: status,
+	}
+}
+
 // object 把字段值表套成资源信封：经 JSON 往返进生成的 Spec / Status 结构体，打码由 Secret 类型完成，
 // 各自只认自己那一档的字段（多余的键被忽略）。
 func (s *Service) object(st *core.State) (*Object, error) {
@@ -88,34 +118,30 @@ func (s *Service) show(ctx context.Context, _ *command.Invocation) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	return s.object(st)
+	return s.output(ctx, st)
 }
 
-// versionArgs 取 --resource-version 与 --force：两个都没给是 bad_request（整单一个版本，改任何一档都要带）。
-func versionArgs(inv *command.Invocation) (expected int64, force bool, err error) {
-	force = inv.Bool("force")
+// versionArgs 取 --resource-version：没给是 bad_request（整单一个版本，改任何一档都要带）。没有跳过比对的写法：
+// 冲突了就重新读一遍再改（第 07 章），force 归危险操作的权限类，随 M2 的 apply 一起做门。
+func versionArgs(inv *command.Invocation) (int64, error) {
 	raw, given := inv.Flags["resource-version"]
-	if !given && !force {
-		return 0, false, v1.New(v1.CodeBadRequest, "要带 --resource-version（settings show 里 metadata.resourceVersion 的值），或加 --force 跳过比对").
+	if !given {
+		return 0, v1.New(v1.CodeBadRequest, "要带 --resource-version（settings show 里 metadata.resourceVersion 的值）").
 			WithNext("先运行 satchel settings show --json 看当前版本")
 	}
-	if given {
-		switch n := raw.(type) {
-		case int:
-			expected = int64(n)
-		case int64:
-			expected = n
-		case json.Number:
-			i, err := n.Int64()
-			if err != nil {
-				return 0, false, v1.Newf(v1.CodeBadRequest, "参数 resource-version 的值 %s 不是整数", n)
-			}
-			expected = i
-		default:
-			return 0, false, v1.Newf(v1.CodeBadRequest, "参数 resource-version 必须是整数，得到 %T", raw)
+	switch n := raw.(type) {
+	case int:
+		return int64(n), nil
+	case int64:
+		return n, nil
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil {
+			return 0, v1.Newf(v1.CodeBadRequest, "参数 resource-version 的值 %s 不是整数", n)
 		}
+		return i, nil
 	}
-	return expected, force, nil
+	return 0, v1.Newf(v1.CodeBadRequest, "参数 resource-version 必须是整数，得到 %T", raw)
 }
 
 // prepare 对一次写的字段做整体校验（任一字段不过整单拒绝、不部分写入）：字段存在、分档在允许集合里、值按类型归一、过字段规则；
@@ -165,7 +191,7 @@ func (s *Service) set(ctx context.Context, inv *command.Invocation) (any, error)
 	if err := requireAdmin(ctx); err != nil {
 		return nil, err
 	}
-	expected, force, err := versionArgs(inv)
+	expected, err := versionArgs(inv)
 	if err != nil {
 		return nil, err
 	}
@@ -174,11 +200,11 @@ func (s *Service) set(ctx context.Context, inv *command.Invocation) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected, Force: force, Snapshot: true, Source: core.SourceSettings})
+	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected, Snapshot: true, Source: core.SourceSettings})
 	if err != nil {
 		return nil, err
 	}
-	return s.object(st)
+	return s.output(ctx, st)
 }
 
 func (s *Service) snapshotsList(ctx context.Context, inv *command.Invocation) (any, error) {
@@ -223,7 +249,7 @@ func (s *Service) rollback(ctx context.Context, inv *command.Invocation) (any, e
 	if err != nil || id <= 0 {
 		return nil, v1.Newf(v1.CodeBadRequest, "快照 id 必须是正整数，得到 %q", inv.Arg(0)).WithNext("用 settings snapshots list 查看可用的快照")
 	}
-	expected, force, err := versionArgs(inv)
+	expected, err := versionArgs(inv)
 	if err != nil {
 		return nil, err
 	}
@@ -240,11 +266,11 @@ func (s *Service) rollback(ctx context.Context, inv *command.Invocation) (any, e
 	if err != nil {
 		return nil, err
 	}
-	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected, Force: force, Snapshot: true, Source: core.SourceRollback})
+	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected, Snapshot: true, Source: core.SourceRollback})
 	if err != nil {
 		return nil, err
 	}
-	return s.object(st)
+	return s.output(ctx, st)
 }
 
 // valuesFromSnapshot 把快照内容解成 prepare 能收的值：json 类型的字段直接给原始 JSON（值本身可能是一个 JSON 字符串，
@@ -277,7 +303,7 @@ func (s *Service) masterURLSet(ctx context.Context, inv *command.Invocation) (an
 	if err := requireAdmin(ctx); err != nil {
 		return nil, err
 	}
-	expected, force, err := versionArgs(inv)
+	expected, err := versionArgs(inv)
 	if err != nil {
 		return nil, err
 	}
@@ -301,9 +327,9 @@ func (s *Service) masterURLSet(ctx context.Context, inv *command.Invocation) (an
 	if err != nil {
 		return nil, err
 	}
-	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected, Force: force})
+	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected})
 	if err != nil {
 		return nil, err
 	}
-	return s.object(st)
+	return s.output(ctx, st)
 }

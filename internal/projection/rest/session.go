@@ -113,13 +113,13 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 }
 
 // SameOrigin 是防 CSRF 的同源检查，套在 authn 之内、整棵路由之外（REST、/mcp、会话入口都在里面）：
-// 身份来自会话 cookie、或没有身份（登录入口、向导）的写请求，带 Origin 时其 host 必须等于请求的 Host；
+// 身份来自会话 cookie、没有身份（登录入口、向导）或带了无效凭据的写请求，带 Origin 时其 host 必须等于请求的 Host；
 // 没 Origin 但 Sec-Fetch-Site 不是 same-origin / none 也拒；两个头都没有的是非浏览器客户端，放行。
-// 经 unix socket 与令牌来的请求不受影响。
+// 经 unix socket 与有效令牌来的请求不受影响。
 func SameOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		src := v1.CredentialSourceFrom(r.Context())
-		if (src == v1.SourceSession || src == v1.SourceNone) && !safeMethod(r.Method) {
+		if (src == v1.SourceSession || src == v1.SourceNone || src == v1.SourceInvalid) && !safeMethod(r.Method) {
 			if origin := r.Header.Get("Origin"); origin != "" {
 				u, err := url.Parse(origin)
 				if err != nil || u.Host != r.Host {
