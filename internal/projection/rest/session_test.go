@@ -19,15 +19,20 @@ import (
 
 // fakeSessions 是会话入口的假业务：一个账号 admin / pw，两步验证按开关。
 type fakeSessions struct {
-	twoFactor  bool
-	loggedOut  []string
-	issuedFor  []string
-	rememberMe bool
+	twoFactor       bool
+	loggedOut       []string
+	issuedFor       []string
+	rememberMe      bool
+	turnstileTokens []string
+	captcha         auth.CaptchaConfig
 }
+
+func (f *fakeSessions) CaptchaConfig(context.Context) auth.CaptchaConfig { return f.captcha }
 
 var expires = time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 
-func (f *fakeSessions) Login(_ context.Context, username, password string, rememberMe bool) (*auth.LoginResult, error) {
+func (f *fakeSessions) Login(_ context.Context, username, password string, rememberMe bool, turnstileToken string) (*auth.LoginResult, error) {
+	f.turnstileTokens = append(f.turnstileTokens, turnstileToken)
 	if username != "admin" || password != "pw" {
 		return nil, v1.New(v1.CodeUnauthenticated, "用户名或密码不对")
 	}

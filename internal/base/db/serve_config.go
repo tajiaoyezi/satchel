@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,15 +24,22 @@ const (
 	EnvConfigPath = "SATCHEL_CONFIG"
 	EnvListen     = "SATCHEL_LISTEN"
 	EnvLogLevel   = "SATCHEL_LOG_LEVEL"
+	// 两个只认环境变量、不进 config.yaml 的开关（master-access-gates），只在启动时读。
+	EnvForcePublicAccess = "SATCHEL_FORCE_PUBLIC_ACCESS"
+	EnvAllowedOrigins    = "SATCHEL_ALLOWED_ORIGINS"
 
 	DefaultListen   = "0.0.0.0:12889"
 	DefaultLogLevel = "info"
 )
 
-// ServeConfig 是 config.yaml 的内容。
+// ServeConfig 是 config.yaml 的内容，加两个只认环境变量的开关（yaml:"-"，写进文件是未知键）。
 type ServeConfig struct {
 	Listen   string `yaml:"listen"`
 	LogLevel string `yaml:"log_level"`
+	// ForcePublicAccess 是关闭公网访问的自救开关：为真时本进程跳过这一道门，不改设置（master-access-gates）。
+	ForcePublicAccess bool `yaml:"-"`
+	// AllowedOrigins 是允许跨域调用的来源：归一后的 origin 列表，或单独一个 *；空表示只允许同源。
+	AllowedOrigins []string `yaml:"-"`
 }
 
 var logLevels = map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
@@ -84,7 +92,95 @@ func LoadServeConfig(dataDir, override string) (ServeConfig, error) {
 	if err := cfg.validate(); err != nil {
 		return cfg, err
 	}
+	force, err := parseSwitch(EnvForcePublicAccess, os.Getenv(EnvForcePublicAccess))
+	if err != nil {
+		return cfg, err
+	}
+	cfg.ForcePublicAccess = force
+	origins, err := parseOrigins(os.Getenv(EnvAllowedOrigins))
+	if err != nil {
+		return cfg, err
+	}
+	cfg.AllowedOrigins = origins
 	return cfg, nil
+}
+
+// parseSwitch 解析开关类环境变量：1 / true / yes / on 为真，0 / false / no / off 与空为假，不分大小写；别的值是 config。
+func parseSwitch(name, raw string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "", "0", "false", "no", "off":
+		return false, nil
+	}
+	return false, v1.Newf(v1.CodeConfig, "环境变量 %s 的值 %q 不认识，只认 1 / true / yes / on 与 0 / false / no / off", name, raw)
+}
+
+// parseOrigins 解析 SATCHEL_ALLOWED_ORIGINS：逗号分隔的 http / https origin（归一成小写、去掉默认端口、去重），
+// 或单独一个 *。缺 scheme、带路径（单个 / 除外）、查询、片段或用户信息，端口不对，* 与别的项混写，都是 config。
+func parseOrigins(raw string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		origin := "*"
+		if item != "*" {
+			o, err := normalizeOrigin(item)
+			if err != nil {
+				return nil, v1.Newf(v1.CodeConfig, "环境变量 %s 里的 %q 不是 origin：%s", EnvAllowedOrigins, item, err.Error()).
+					WithNext("写成 https://dash.example.com 这样的形状，多个用逗号分开；要允许任何来源就只写 *")
+			}
+			origin = o
+		}
+		if !seen[origin] {
+			seen[origin] = true
+			out = append(out, origin)
+		}
+	}
+	if seen["*"] && len(out) > 1 {
+		return nil, v1.Newf(v1.CodeConfig, "环境变量 %s 里的 * 只能单独出现，不能与具体的来源混写", EnvAllowedOrigins)
+	}
+	return out, nil
+}
+
+func normalizeOrigin(item string) (string, error) {
+	u, err := url.Parse(item)
+	if err != nil {
+		return "", errors.New("解析不了")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", errors.New("scheme 必须是 http 或 https")
+	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(item, "#") || (u.Path != "" && u.Path != "/") || u.Opaque != "" {
+		return "", errors.New("origin 只有 scheme、主机与端口，不能带路径、查询、片段或用户信息")
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", errors.New("没有主机")
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	port := u.Port()
+	if strings.HasSuffix(u.Host, ":") {
+		return "", errors.New("端口是空的")
+	}
+	if port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return "", errors.New("端口不在 1 到 65535 之间")
+		}
+		if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+			port = ""
+		}
+	}
+	if port == "" {
+		return scheme + "://" + host, nil
+	}
+	return scheme + "://" + host + ":" + port, nil
 }
 
 func (c ServeConfig) validate() error {

@@ -29,9 +29,9 @@ func TestSystemSettingsKeysInCatalog(t *testing.T) {
 			t.Errorf("%s 应当按 %s 拒收，得到 %q", f, class, got)
 		}
 	}
-	// 列 42 + 日常运维 key 58 = 100；列 4 + 其余 key 34 = 38。
-	if len(info.SpecFields) != 100 || len(info.StatusFields) != 38 {
-		t.Errorf("SystemSettings 应当有 100 个 spec 字段、38 个 status 字段，得到 %d / %d", len(info.SpecFields), len(info.StatusFields))
+	// 列 42 + 日常运维 key 58 = 100；列 4 + 其余 key 35 = 39。
+	if len(info.SpecFields) != 100 || len(info.StatusFields) != 39 {
+		t.Errorf("SystemSettings 应当有 100 个 spec 字段、39 个 status 字段，得到 %d / %d", len(info.SpecFields), len(info.StatusFields))
 	}
 
 	// 四个非 spec 档各拒一次：人类专属、主控自身类、只读、运行态。

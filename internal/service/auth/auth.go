@@ -4,9 +4,11 @@ package auth
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
+	coresecurity "github.com/satchel/satchel/internal/core/security"
 	"github.com/satchel/satchel/internal/core/sessions"
 	"github.com/satchel/satchel/internal/core/users"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
@@ -22,11 +24,16 @@ const (
 	Issuer = "Satchel"
 )
 
-// Service 持有用户与会话两个仓储，加两张只在本进程里有意义的内存表：登录第二步的 pending 票据与 TOTP 防重放。
+// Service 持有用户与会话两个仓储，加几张只在本进程里有意义的内存表：登录第二步的 pending 票据、TOTP 防重放、
+// 登录限流的计数（master-login-protection）。安全事件的仓储与 Turnstile 由装配根另外接上。
 type Service struct {
-	users    *users.Repo
-	sessions *sessions.Repo
-	now      func() time.Time
+	users     *users.Repo
+	sessions  *sessions.Repo
+	now       func() time.Time
+	limiter   *limiter
+	turnstile *turnstile
+	events    *coresecurity.Repo
+	logger    *slog.Logger
 
 	mu       sync.Mutex
 	pending  map[string]pendingEntry
@@ -41,7 +48,8 @@ type pendingEntry struct {
 
 // New 建服务。
 func New(u *users.Repo, s *sessions.Repo) *Service {
-	return &Service{users: u, sessions: s, now: func() time.Time { return time.Now().UTC() }, pending: map[string]pendingEntry{}, usedTOTP: map[string]time.Time{}}
+	return &Service{users: u, sessions: s, now: func() time.Time { return time.Now().UTC() }, limiter: newLimiter(), turnstile: &turnstile{}, logger: slog.Default(),
+		pending: map[string]pendingEntry{}, usedTOTP: map[string]time.Time{}}
 }
 
 // identityFor 把账号变成身份对象：管理员全部 scope 与六个危险类，普通用户 read + operate、不带危险类。

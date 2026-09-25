@@ -22,6 +22,7 @@ func TestHTTPStatusOf(t *testing.T) {
 		CodeVersionConflict:     http.StatusConflict,
 		CodeNameTaken:           http.StatusConflict,
 		CodeConfirmRequired:     http.StatusPreconditionRequired,
+		CodeRateLimited:         http.StatusTooManyRequests,
 		CodeUnavailable:         http.StatusServiceUnavailable,
 		CodeInternal:            http.StatusInternalServerError,
 		CodePartialFailure:      http.StatusInternalServerError,
@@ -156,5 +157,16 @@ func TestCredentialSourceInvalid(t *testing.T) {
 	}
 	if CredentialSourceFrom(context.Background()) != SourceNone {
 		t.Fatal("没放来源时应当是 SourceNone")
+	}
+}
+
+// master-access-gates：请求的来源由门放进 ctx，取不到时是零值。
+func TestRemoteContext(t *testing.T) {
+	if got := RemoteFrom(context.Background()); got != (Remote{}) {
+		t.Fatalf("没放过来源时应当是零值，得到 %+v", got)
+	}
+	want := Remote{IP: "198.51.100.7", HTTPS: true}
+	if got := RemoteFrom(WithRemote(context.Background(), want)); got != want {
+		t.Fatalf("取回的来源不一致：%+v", got)
 	}
 }

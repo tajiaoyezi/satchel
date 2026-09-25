@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/satchel/satchel/internal/command"
+	coresecurity "github.com/satchel/satchel/internal/core/security"
 	"github.com/satchel/satchel/internal/core/users"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
@@ -23,7 +24,8 @@ func humanRequired(reason, next string) *v1.Error {
 	return v1.New(v1.CodeHumanRequired, reason).WithNext(next)
 }
 
-// Verify 按身份决定验谁，再验密码与（开了两步验证时）第二因素。
+// Verify 按身份决定验谁，再验密码与（开了两步验证时）第二因素。经 TCP 的验证受登录限流约束：比对之前查锁定
+// （锁定期内是 rate_limited、不比对），密码或验证码比对不上计一次失败（只缺第二因素不计），通过清零（master-login-protection）。
 func (v *Verifier) Verify(ctx context.Context, inv *command.Invocation) error {
 	id := v1.IdentityFrom(ctx)
 	ver := inv.Verify
@@ -60,20 +62,28 @@ func (v *Verifier) Verify(ctx context.Context, inv *command.Invocation) error {
 	default:
 		return humanRequired("这个身份不能做只有人能做的操作", "在网页或 CLI 上由管理员本人执行")
 	}
+	if err := v.s.reserve(ctx, account.Username); err != nil {
+		return err
+	}
 	if ver.Password == "" || !CheckPassword(account.PasswordHash, ver.Password) {
+		v.s.failed(ctx, account.Username, inv.Name(), coresecurity.KindVerifyFail, coresecurity.KindVerifyLocked)
 		return humanRequired("当场验证的密码不对", "重新输入密码")
 	}
 	if account.TOTPEnabled {
 		if strings.TrimSpace(ver.Code) == "" {
+			v.s.released(ctx, account.Username)
 			return humanRequired("账号开了两步验证，当场验证还要第二因素", "加上验证器当前的码或一枚恢复码")
 		}
 		ok, err := v.s.checkSecondFactor(ctx, account, ver.Code)
 		if err != nil {
+			v.s.released(ctx, account.Username)
 			return err
 		}
 		if !ok {
+			v.s.failed(ctx, account.Username, inv.Name(), coresecurity.KindVerifyFail, coresecurity.KindVerifyLocked)
 			return humanRequired("当场验证的验证码不对，或这枚恢复码已经用过", "输入验证器当前的码，或一枚没用过的恢复码")
 		}
 	}
+	v.s.succeeded(ctx, account.Username)
 	return nil
 }

@@ -64,7 +64,7 @@ func TestTOTPSetupAfterEnabledAndPendingConsumed(t *testing.T) {
 			t.Fatalf("被拒的 setup 不该动密钥或恢复码：%+v", a)
 		}
 		// 第二步验错：票据作废，同一票据再给真码也不认。
-		first, err := s.Login(ctx, "admin", password, false)
+		first, err := s.Login(ctx, "admin", password, false, "")
 		if err != nil || !first.TwoFactorRequired {
 			t.Fatalf("登录第一步：%+v %v", first, err)
 		}
@@ -75,7 +75,7 @@ func TestTOTPSetupAfterEnabledAndPendingConsumed(t *testing.T) {
 			t.Fatalf("验错后票据应当已作废：%v", err)
 		}
 		// 重新登录拿新票据就能过。
-		again, _ := s.Login(ctx, "admin", password, false)
+		again, _ := s.Login(ctx, "admin", password, false, "")
 		if _, err := s.CompleteTwoFactor(ctx, again.Pending, code(t, s, secret)); err != nil {
 			t.Fatalf("新票据应当能完成：%v", err)
 		}

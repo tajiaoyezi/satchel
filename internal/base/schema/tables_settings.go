@@ -4,7 +4,7 @@ package schema
 // 每个 key 是一个没有数据库表示的「逻辑列」：只用名字、类型、分档、打码四项，进 kind 清单与 Spec / Status 结构体，
 // 不进 DDL 与 bun 模型。归类依据是第 05 章七组与功能②的打码清单、第 07 章主控设置类那一行、第 10 章系统设置段。
 // 来源是 mmwx 主控源码里全部 GetSystemSetting / SetSystemSetting / 直接 SQL 的调用点（114 个 key），
-// 其中 22 个不搬，见 tables_settings_test.go 的 golden 清单。值的编码：布尔读时接受 1 / 0 / true / false / 空，写时统一 true / false；
+// 其中 22 个不搬，见 tables_settings_test.go 的 golden 清单；另有 Satchel 新增的 trusted_proxies（mmwx 没有）。值的编码：布尔读时接受 1 / 0 / true / false / 空，写时统一 true / false；
 // 整数十进制；json 原文。默认值不在这里，随 M1 的设置服务。
 
 func settingsKeys() []Column {
@@ -27,6 +27,9 @@ func settingsKeys() []Column {
 		col("skip_local_ip", TypeBool).cls(ClassHuman),
 		col("turnstile_site_key", TypeText).cls(ClassHuman),
 		col("turnstile_secret_key", TypeText).cls(ClassHuman).masked(),
+		// 反向代理的登记（Satchel 新增）：第 06 章「只有在系统设置里登记了反向代理时才信任对应的请求头」。
+		// 它决定主控相信谁报来的来源 IP，登记错了等于能绕过封禁与「仅本机」，所以归门这一组（master-access-gates）。
+		col("trusted_proxies", TypeJSON).cls(ClassHuman),
 
 		// 七组人类专属·Telegram（第 05 章：改机器人 token，与 system_config.telegram_bot_token（通知推送用）是两把不同的 token；管理员 TG id 名单决定谁能当 TG 管理员，改它等于给人加权——第 10 章字面上归「其它设置」，按第 05 章七组的目的归这里）
 		col("tgbot_token", TypeText).cls(ClassHuman).masked(),

@@ -16,6 +16,11 @@
 | `audit list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/audit` |
 | `explain` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/explain/{target}` |
 | `mcp status` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/mcp/status` |
+| `security ban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/ban/{ip}` |
+| `security bans list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/security/bans` |
+| `security events list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/security/events` |
+| `security unban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/unban/{ip}` |
+| `settings gates set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/gates/set` |
 | `settings master-url set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/master-url/set` |
 | `settings rollback` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/rollback/{snapshot}` |
 | `settings set` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/set` |

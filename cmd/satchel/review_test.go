@@ -75,7 +75,7 @@ func TestSecondInstanceRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := start(t, bdb)
-	second, err := newApp(h.dataDir, bdb, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	second, err := newApp(h.dataDir, bdb, slog.New(slog.NewTextHandler(io.Discard, nil)), db.ServeConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestGracefulStopWaitsForSlowRequest(t *testing.T) {
 	if err := db.EnsureDataDir(dataDir); err != nil {
 		t.Fatal(err)
 	}
-	a, err := newApp(dataDir, bdb, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a, err := newApp(dataDir, bdb, slog.New(slog.NewTextHandler(io.Discard, nil)), db.ServeConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

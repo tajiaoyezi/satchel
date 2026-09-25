@@ -37,6 +37,8 @@ const (
 	// unsupported_platform：在只保证客户端的平台上要求起主控（第 09 章）；unavailable：CLI 连不上主控。两者退出码 1。
 	CodeUnsupportedPlatform Code = "unsupported_platform"
 	CodeUnavailable         Code = "unavailable"
+	// rate_limited：尝试次数过多被暂时锁定（登录限流，master-login-protection），state 带解锁时间 until；退出码 1。
+	CodeRateLimited Code = "rate_limited"
 )
 
 // allCodes 是全部错误码，新加错误码要同时加进来：测试用它保证每个码都有 HTTP 状态码。
@@ -45,6 +47,7 @@ var allCodes = []Code{
 	CodeUnauthenticated, CodeForbidden, CodeNotFound, CodeVersionConflict, CodeConfirmRequired,
 	CodePartialFailure, CodeHumanRequired, CodeNameTaken, CodeConflict, CodeAppendOnly,
 	CodeSchemaMismatch, CodeDatabase, CodeConfig, CodeInternal, CodeUnsupportedPlatform, CodeUnavailable,
+	CodeRateLimited,
 }
 
 // Codes 返回全部错误码，按声明顺序。
@@ -171,6 +174,7 @@ var httpStatuses = map[Code]int{
 	CodeNameTaken:             http.StatusConflict,
 	CodeAppendOnly:            http.StatusConflict,
 	CodeConfirmRequired:       http.StatusPreconditionRequired,
+	CodeRateLimited:           http.StatusTooManyRequests,
 	CodeUnavailable:           http.StatusServiceUnavailable,
 }
 

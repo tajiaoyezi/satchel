@@ -2,7 +2,7 @@ package settings
 
 import "encoding/json"
 
-// defaults 是键值表里 92 个 key 的读侧默认值（master-settings「settings show 返回合并后的整个对象」）：键值表里没有这个 key 时用它。
+// defaults 是键值表里 93 个 key 的读侧默认值（master-settings「settings show 返回合并后的整个对象」）：键值表里没有这个 key 时用它。
 // 值照 mmwx 各端点读侧的 fallback 抄，每项注释 mmwx 主控源码位置（详见本 change 的 notes/mmwx-settings-defaults.md）；
 // 与 mmwx 不同的几处写在行内注释里。列的默认值在 DDL 里（tables_ops.go），读行即得，不在这里。
 // 类型固定：bool → bool、int → int64、text → string、json → json.RawMessage；tables_settings_test 之外还有一份测试断言每个 key 都有、类型与目录一致。
@@ -26,6 +26,7 @@ var defaults = map[string]any{
 	"skip_local_ip":              true,
 	"turnstile_site_key":         "",
 	"turnstile_secret_key":       "",
+	"trusted_proxies":            json.RawMessage(`[]`), // Satchel 新增：没有登记任何反向代理，请求头一律不信（第 06 章）
 
 	// 七组人类专属·Telegram（tgbot/manager.go:62-70）。
 	"tgbot_token":     "",

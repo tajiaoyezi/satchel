@@ -38,7 +38,7 @@ func serveCommand(ctx context.Context, inv *command.Invocation) (any, error) {
 	} else if len(applied) > 0 {
 		logger.Info("已应用迁移", "migrations", applied)
 	}
-	a, err := newApp(dataDir, bdb, logger)
+	a, err := newApp(dataDir, bdb, logger, cfg)
 	if err != nil {
 		bdb.Close()
 		return nil, err

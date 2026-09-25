@@ -15,29 +15,38 @@ import (
 // 有效时身份的 actor 是签发者、role 是签发者当下的角色、scopes 与 danger 是权限范围与角色上限的交集；
 // 最后使用时间按 touchInterval 节流写入。
 func (s *Service) Resolve(ctx context.Context, token string) (v1.Identity, bool) {
+	id, ok, _ := s.ResolveToken(ctx, token)
+	return id, ok
+}
+
+// ResolveToken 同 Resolve，但把「查库出错」作为 error 单独交出来（ok 仍为假）：authn 据此只对真正无效的令牌计一次
+// 令牌校验失败，库出问题时的正常重试不会被当成猜令牌而封掉来源 IP（master-login-protection）。
+func (s *Service) ResolveToken(ctx context.Context, token string) (v1.Identity, bool, error) {
 	if !strings.HasPrefix(token, Prefix) {
-		return v1.Identity{}, false
+		return v1.Identity{}, false, nil
 	}
 	t, err := s.repo.GetByHash(ctx, Hash(token))
 	if err != nil {
 		if !errors.Is(err, core.ErrNotFound) {
 			s.logger.Error("解析令牌时查库出错，按无效处理", "error", err)
+			return v1.Identity{}, false, err
 		}
-		return v1.Identity{}, false
+		return v1.Identity{}, false, nil
 	}
 	now := s.now()
 	if t.Revoked || (t.ExpiresAt != nil && !now.Before(*t.ExpiresAt)) {
-		return v1.Identity{}, false
+		return v1.Identity{}, false, nil
 	}
 	a, err := s.users.GetByUsername(ctx, t.Owner)
 	if err != nil {
 		if !errors.Is(err, users.ErrNotFound) {
 			s.logger.Error("解析令牌时查签发者出错，按无效处理", "error", err, "token_id", t.ID)
+			return v1.Identity{}, false, err
 		}
-		return v1.Identity{}, false
+		return v1.Identity{}, false, nil
 	}
 	if a.Deleted || !a.IsActive {
-		return v1.Identity{}, false
+		return v1.Identity{}, false, nil
 	}
 	scopes, danger := intersect(t.Grant, a.Role)
 	id := t.ID
@@ -47,5 +56,5 @@ func (s *Service) Resolve(ctx context.Context, token string) (v1.Identity, bool)
 			s.logger.Warn("写令牌的最后使用时间失败", "error", err, "token_id", t.ID)
 		}
 	}
-	return v1.Identity{Actor: t.Owner, ActorKind: v1.ActorToken, Role: a.Role, TokenID: &id, Scopes: scopes, Danger: danger}, true
+	return v1.Identity{Actor: t.Owner, ActorKind: v1.ActorToken, Role: a.Role, TokenID: &id, Scopes: scopes, Danger: danger}, true, nil
 }

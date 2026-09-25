@@ -21,9 +21,9 @@ import (
 // tokenTable 是假的令牌解析器：表里有的令牌解析成对应身份，其余无效。
 type tokenTable map[string]v1.Identity
 
-func (t tokenTable) Resolve(_ context.Context, token string) (v1.Identity, bool) {
+func (t tokenTable) ResolveToken(_ context.Context, token string) (v1.Identity, bool, error) {
 	id, ok := t[token]
-	return id, ok
+	return id, ok, nil
 }
 
 func tokenID(n int64, scopes ...v1.Scope) v1.Identity {
@@ -37,7 +37,7 @@ func upstream(t *testing.T) *httptest.Server {
 		"sat_ops": tokenID(1, v1.ScopeRead, v1.ScopeOperate),
 		"sat_ro":  tokenID(2, v1.ScopeRead),
 	}
-	srv := httptest.NewServer(authn.Middleware(nil, tokens, NewHandler(testOptions(t))))
+	srv := httptest.NewServer(authn.Middleware(nil, tokens, nil, NewHandler(testOptions(t))))
 	t.Cleanup(srv.Close)
 	return srv
 }

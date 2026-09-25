@@ -3,6 +3,7 @@ package authn
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,12 +19,15 @@ type fakeTokens struct {
 	asked *[]string
 }
 
-func (f fakeTokens) Resolve(_ context.Context, token string) (v1.Identity, bool) {
+func (f fakeTokens) ResolveToken(_ context.Context, token string) (v1.Identity, bool, error) {
 	*f.asked = append(*f.asked, token)
 	if token == f.token {
-		return f.id, true
+		return f.id, true, nil
 	}
-	return v1.Identity{}, false
+	if token == "sat_dberror" {
+		return v1.Identity{}, false, errors.New("数据库不可用")
+	}
+	return v1.Identity{}, false, nil
 }
 
 type request struct {
@@ -62,7 +66,7 @@ func TestTokenPrecedence(t *testing.T) {
 	tokID := int64(7)
 	tokenIdentity := v1.Identity{Actor: "admin", ActorKind: v1.ActorToken, Role: v1.RoleAdmin, TokenID: &tokID, Scopes: []v1.Scope{v1.ScopeRead}, Danger: []v1.Danger{}}
 	user := v1.Identity{Actor: "alice", ActorKind: v1.ActorUser, Role: v1.RoleUser, Scopes: []v1.Scope{v1.ScopeRead, v1.ScopeOperate}, Danger: []v1.Danger{}}
-	h := Middleware(fakeResolver{token: "session", id: user}, fakeTokens{token: "sat_good", id: tokenIdentity, asked: &asked}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Middleware(fakeResolver{token: "session", id: user}, fakeTokens{token: "sat_good", id: tokenIdentity, asked: &asked}, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"identity": v1.IdentityFrom(r.Context()), "source": v1.CredentialSourceFrom(r.Context())})
 	}))
 
@@ -120,7 +124,7 @@ func TestTokenPrecedence(t *testing.T) {
 	}
 
 	// 没有令牌解析器时，带 Authorization 头一律是无效凭据。
-	noTokens := Middleware(nil, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	noTokens := Middleware(nil, nil, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"identity": v1.IdentityFrom(r.Context()), "source": v1.CredentialSourceFrom(r.Context())})
 	}))
 	if id, src := callWith(t, noTokens, request{auth: []string{"Bearer sat_good"}, socket: true}); !id.IsAnonymous() || src != v1.SourceInvalid {

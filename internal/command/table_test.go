@@ -23,10 +23,13 @@ func TestCatalog(t *testing.T) {
 		"admin reset-password": ClassLocal, "login": ClassLocal, "logout": ClassLocal, "mcp stdio": ClassLocal, "mcp init": ClassLocal,
 		"whoami": ClassRead, "audit list": ClassRead, "explain": ClassRead, "setup status": ClassRead, "account show": ClassRead,
 		"settings show": ClassRead, "settings snapshots list": ClassRead, "token list": ClassRead, "mcp status": ClassRead,
+		"security events list": ClassRead, "security bans list": ClassRead,
 		"setup init": ClassAction, "account set-password": ClassAction, "account totp setup": ClassAction, "account totp confirm": ClassAction,
 		"account totp disable": ClassAction, "account recovery-codes regenerate": ClassAction,
 		"token create": ClassAction, "token update": ClassAction, "token revoke": ClassAction,
+		"security ban": ClassAction, "security unban": ClassAction,
 		"settings set": ClassMasterSettings, "settings rollback": ClassMasterSettings, "settings master-url set": ClassMasterSettings,
+		"settings gates set": ClassMasterSettings,
 	}
 	if len(table.All()) != len(want) {
 		t.Fatalf("目录里应当恰好 %d 条命令，得到 %v", len(want), table.Names())
@@ -40,16 +43,18 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 的类别应当是 %s，得到 %s", name, class, c.Class)
 		}
 	}
-	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status"} {
+	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list"} {
 		if c, _ := table.Lookup(name); !c.List {
 			t.Errorf("%s 应当是列表命令", name)
 		}
 	}
-	if c, _ := table.Lookup("settings set"); func() bool {
-		f, ok := c.FlagByName("set")
-		return ok && f.Type == TypeObject && f.Kind == "SystemSettings"
-	}() != true {
-		t.Error("settings set 的 set 应当是 object 类型、kind 为 SystemSettings")
+	for _, name := range []string{"settings set", "settings gates set"} {
+		if c, _ := table.Lookup(name); func() bool {
+			f, ok := c.FlagByName("set")
+			return ok && f.Type == TypeObject && f.Kind == "SystemSettings"
+		}() != true {
+			t.Errorf("%s 的 set 应当是 object 类型、kind 为 SystemSettings", name)
+		}
 	}
 	if c, _ := table.Lookup("settings set"); func() bool { scope, ok := c.Scope(); return ok && scope == v1.ScopeOperate }() != true {
 		t.Error("settings set 的 scope 应当是 operate")
@@ -81,7 +86,7 @@ func TestCatalog(t *testing.T) {
 	if c, _ := table.Lookup("version"); func() bool { _, ok := c.Scope(); return ok }() {
 		t.Error("version 是本地命令，不该有 scope")
 	}
-	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup,settings master-url set,token create,token revoke,token update" {
+	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup,security ban,security unban,settings gates set,settings master-url set,token create,token revoke,token update" {
 		t.Errorf("人类专属命令清单不对：%v", table.HumanOnly())
 	}
 	for _, name := range []string{"setup status", "setup init"} {

@@ -52,6 +52,11 @@ func pathWithArgs(path string, c *command.Command, n int) string {
 	return path
 }
 
+// NotFound 回应一个 /api/v1/ 下不存在的接口：门在静默模式的锁定期里原样用它藏起面板的接口，与真的不存在的路径看不出差别。
+func NotFound(w http.ResponseWriter, r *http.Request) {
+	WriteError(w, notFound(r))
+}
+
 func notFound(r *http.Request) *v1.Error {
 	return v1.Newf(v1.CodeNotFound, "没有这个接口：%s %s", r.Method, r.URL.Path).
 		WithNext("接口清单见 satchel explain 或 docs/commands.md")

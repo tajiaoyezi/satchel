@@ -37,7 +37,25 @@ type harness struct {
 	tcpURL  string
 	cancel  context.CancelFunc
 	done    chan error
-	logs    *bytes.Buffer
+	logs    *syncBuffer
+}
+
+// syncBuffer 是主控的日志缓冲：主控在别的 goroutine 里写，测试同时读，所以加一把锁。
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // shortTempDir：macOS 上 socket 路径不能超过 104 字节，t.TempDir() 太长。
@@ -53,13 +71,19 @@ func shortTempDir(t *testing.T) string {
 
 func start(t *testing.T, bdb *bun.DB) *harness {
 	t.Helper()
+	return startWith(t, bdb, db.ServeConfig{})
+}
+
+// startWith 同 start，但带着 serve 的配置装配（自救开关、允许跨域的来源）。
+func startWith(t *testing.T, bdb *bun.DB, cfg db.ServeConfig) *harness {
+	t.Helper()
 	dataDir := shortTempDir(t)
 	if err := db.EnsureDataDir(dataDir); err != nil {
 		t.Fatal(err)
 	}
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	a, err := newApp(dataDir, bdb, logger)
+	logs := &syncBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	a, err := newApp(dataDir, bdb, logger, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +92,7 @@ func start(t *testing.T, bdb *bun.DB) *harness {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	h := &harness{t: t, dataDir: dataDir, db: bdb, app: a, tcpURL: listenAddrOf(tcp), cancel: cancel, done: make(chan error, 1), logs: &logs}
+	h := &harness{t: t, dataDir: dataDir, db: bdb, app: a, tcpURL: listenAddrOf(tcp), cancel: cancel, done: make(chan error, 1), logs: logs}
 	go func() { h.done <- a.serve(ctx, tcp, unix) }()
 	t.Cleanup(func() {
 		cancel()
@@ -248,7 +272,7 @@ func TestStaleSocketAndGracefulStop(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("junk"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a, err := newApp(dataDir, bdb, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a, err := newApp(dataDir, bdb, slog.New(slog.NewTextHandler(io.Discard, nil)), db.ServeConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

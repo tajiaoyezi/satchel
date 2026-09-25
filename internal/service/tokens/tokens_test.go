@@ -414,6 +414,13 @@ func TestResolve(t *testing.T) {
 		if _, ok := f.s.Resolve(cancelled, ops.Token); ok {
 			t.Fatal("查库出错应当当无效")
 		}
+		// 查库出错要单独交出 error（authn 据此不计成猜令牌）；真正无效的令牌不带 error。
+		if _, ok, err := f.s.ResolveToken(cancelled, ops.Token); ok || err == nil {
+			t.Fatalf("查库出错应当交回 error：%v %v", ok, err)
+		}
+		if _, ok, err := f.s.ResolveToken(ctx, Prefix+"nosuch"); ok || err != nil {
+			t.Fatalf("不存在的令牌无效但不是错误：%v %v", ok, err)
+		}
 
 		// 签发者停用后无效，重新启用又能用；软删除后无效。
 		f.setUser("admin", "is_active", false)

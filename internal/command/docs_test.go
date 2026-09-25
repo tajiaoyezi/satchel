@@ -41,6 +41,11 @@ func TestGenerateDocsShape(t *testing.T) {
 		"| `token list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/token` |",
 		"| `token revoke` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/revoke/{id}` |",
 		"| `mcp status` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/mcp/status` |",
+		"| `settings gates set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/gates/set` |",
+		"| `security events list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/security/events` |",
+		"| `security bans list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/security/bans` |",
+		"| `security ban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/ban/{ip}` |",
+		"| `security unban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/unban/{ip}` |",
 		"`login`", "`logout`", "`mcp stdio`", "`mcp init`",
 		"`__verify`（隐藏）", "`serve`", "`admin reset-password`"} {
 		if !strings.Contains(doc, want) {

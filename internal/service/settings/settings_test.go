@@ -163,8 +163,8 @@ func TestShow(t *testing.T) {
 		if _, ok := status["heartbeat_interval"]; ok {
 			t.Error("status 里不该有 heartbeat_interval")
 		}
-		if len(spec) != 100 || len(status) != 38 {
-			t.Errorf("spec 应当 100 个字段、status 38 个，得到 %d / %d", len(spec), len(status))
+		if len(spec) != 100 || len(status) != 39 {
+			t.Errorf("spec 应当 100 个字段、status 39 个，得到 %d / %d", len(spec), len(status))
 		}
 		if string(status["telegram_bot_token"]) != `""` || string(spec["probe_external_token_sha256"]) != `""` {
 			t.Errorf("空的打码字段输出空串：%s %s", status["telegram_bot_token"], spec["probe_external_token_sha256"])

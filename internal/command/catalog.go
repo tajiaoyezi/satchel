@@ -14,6 +14,8 @@ var GroupSummaries = map[string]string{
 	"settings":               "系统设置：一个单例对象，整单一个 resourceVersion（主控设置类）",
 	"settings snapshots":     "系统设置的写前快照",
 	"settings master-url":    "主控地址与订阅域名（七组人类专属：改的时候当场验证）",
+	"settings gates":         "门：关闭公网访问、静默模式、登录限流与封禁的参数、Turnstile、反代登记（七组人类专属：改的时候当场验证）",
+	"security":               "安全：安全事件与 IP 封禁（封禁与解封要当场验证）",
 	"token":                  "API 令牌：签发、列出、改权限、吊销（签发、改权限、吊销要当场验证）",
 	"mcp":                    "MCP 接入：stdio 垫片、把 AI runtime 接上主控、看谁在连",
 }
@@ -30,7 +32,29 @@ func catalogCommands() []*Command {
 	all = append(all, identityCommands()...)
 	all = append(all, settingsCommands()...)
 	all = append(all, tokenCommands()...)
+	all = append(all, securityCommands()...)
 	return all
+}
+
+// securityCommands 是 m1-05 的安全事件与 IP 封禁命令（master-login-protection）。封禁的创建与解除属第 05 章七组的「门」：
+// 人类专属，要当场验证，令牌与 MCP 一律拒绝。两条列表命令只对管理员开放（处理函数里判）。
+func securityCommands() []*Command {
+	ip := Arg{Name: "ip", Description: "单个 IP 地址，如 198.51.100.7 或 2001:db8::1"}
+	return []*Command{
+		{Path: []string{"security", "events", "list"}, Summary: "按时间倒序列出安全事件：登录与当场验证的失败、令牌校验失败、封禁与解封", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "kind", Type: TypeString, Description: "只看这一种：login_fail、login_locked、verify_fail、verify_locked、probe、ban、ban_manual、unban"},
+				{Name: "ip", Type: TypeString, Description: "只看这个来源 IP 的"},
+			},
+			Columns: []string{"id", "at", "kind", "ip", "username", "path", "detail", "actor"}},
+		{Path: []string{"security", "bans", "list"}, Summary: "列出生效中的 IP 封禁（被封的 IP 带令牌的请求一律拒绝）", Class: ClassRead, List: true,
+			Columns: []string{"ip", "reason", "banned_at", "expires_at", "permanent", "fail_count", "actor"}},
+		{Path: []string{"security", "ban"}, Summary: "封禁一个 IP：它带令牌的请求一律拒绝（人类专属：当场验证；默认按 brute_force_block_minutes 到期）", Class: ClassAction, HumanOnly: true,
+			Args:  []Arg{ip},
+			Flags: []Flag{{Name: "permanent", Type: TypeBool, Description: "永久封禁，直到解封"}}},
+		{Path: []string{"security", "unban"}, Summary: "解除一个 IP 的封禁（人类专属：当场验证）", Class: ClassAction, HumanOnly: true,
+			Args: []Arg{ip}},
+	}
 }
 
 // tokenCommands 是 m1-04 的令牌与 MCP 接入命令（master-api-tokens、master-mcp）。签发、改权限、吊销属第 05 章七组：
@@ -86,6 +110,11 @@ func settingsCommands() []*Command {
 			Flags: []Flag{
 				{Name: "url", Type: TypeString, Description: "主控地址，如 https://panel.example.com"},
 				{Name: "subscription-url", Type: TypeString, Description: "订阅域名，如 https://sub.example.com"},
+				version,
+			}},
+		{Path: []string{"settings", "gates", "set"}, Summary: "改门这一组的设置：关闭公网访问、静默模式、登录限流与封禁的参数、Turnstile、反代登记（人类专属：当场验证；不存快照）", Class: ClassMasterSettings, HumanOnly: true,
+			Flags: []Flag{
+				{Name: "set", Type: TypeObject, Kind: v1.Kind("SystemSettings"), Description: "要改的字段与值，只收门这一组：master_local_only、silent_mode、silent_mode_timeout、probe_disguise_block_login、brute_force_enabled、brute_force_max_failures、brute_force_window_minutes、brute_force_block_minutes、login_rate_max_attempts、login_rate_window_minutes、login_rate_lock_minutes、skip_local_ip、turnstile_site_key、turnstile_secret_key、trusted_proxies"},
 				version,
 			}},
 	}

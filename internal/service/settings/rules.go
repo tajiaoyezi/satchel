@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	core "github.com/satchel/satchel/internal/core/settings"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -40,6 +41,8 @@ var rules = map[string]func(v any) error{
 	"notify_server_tolerance_seconds": atLeast(0),
 	// handler/user_config.go:358-373。
 	"proxy_groups_source_url": httpURLOrEmpty,
+	// Satchel 新增的反向代理登记（第 06 章）：JSON 数组、至多 64 项，每项恰好含 cidr 与 header（master-settings）。
+	"trusted_proxies": trustedProxies,
 	// handler/system_settings.go:1384-1390 只限 2000 字节、不看形状；Satchel 加一条与探针 logo 相同的形状规则，
 	// 免得 javascript: 之类进了库、m1-10 登录页当 URL 用时变成存储型 XSS。
 	"login_wallpaper": imageRef(2000),
@@ -153,6 +156,11 @@ func themeName(v any) error {
 		return fmt.Errorf("只能是 1 到 64 个字母、数字、下划线或连字符（空表示 follow），得到 %q", s)
 	}
 	return nil
+}
+
+func trustedProxies(v any) error {
+	_, err := core.ParseTrustedProxies(v.(json.RawMessage))
+	return err
 }
 
 func httpURLOrEmpty(v any) error {

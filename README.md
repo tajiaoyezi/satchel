@@ -31,26 +31,29 @@ go build ./cmd/satchel
 | `SATCHEL_OUTPUT` | 设为 `json` 时 CLI 默认 JSON 输出（等价于 `--json`） | 文本 |
 | `SATCHEL_SERVER` | CLI 要连的远程主控地址（等价于 `--server`），见「令牌与远程接入」 | 本机 socket |
 | `SATCHEL_TOKEN` | CLI 带的 API 令牌（等价于 `--token`） | 不带 |
+| `SATCHEL_FORCE_PUBLIC_ACCESS` | 「关闭公网访问」的自救开关：`1` / `true` / `yes` / `on` 时本进程跳过这一道门（只在 `serve` 启动时读，不改设置），见「门与登录防护」 | 关 |
+| `SATCHEL_ALLOWED_ORIGINS` | 允许跨域调用的网页来源，逗号分隔的 `http(s)://` origin 或单独一个 `*`；只给带令牌的调用用，不带 cookie | 只允许同源 |
 
-主控同时监听 TCP 与数据目录下的 unix socket `satchel.sock`（0600）。**身份只从连接判定**，按顺序取第一个：请求带了 `Authorization` 头就只看令牌——`Bearer <有效令牌>` 是令牌身份，别的一律是无效凭据、`unauthenticated`，不再往下看（见「令牌与远程接入」）；经 socket 进来、对端是 root 或运行主控的那个 OS 用户 → 本机管理员（全部权限，socket 上带的 cookie 不看）；TCP 上带有效会话 cookie → 登录的用户（管理员全部权限，普通用户只有 `read` + `operate`、没有危险类）；其余一律没有身份。没有身份能到的只有：`GET /api/v1/healthz`、`/public/<file>`（数据目录 `public/` 里的文件，目录不列、`..` 出不去）、初始化向导的 `setup status` / `setup init`，以及下面的三个会话入口。收到 SIGINT / SIGTERM 后停止接受新连接、等进行中的请求最多 10 秒、关库、删 socket、退出码 0。
+主控同时监听 TCP 与数据目录下的 unix socket `satchel.sock`（0600）。**身份只从连接判定**，按顺序取第一个：请求带了 `Authorization` 头就只看令牌——`Bearer <有效令牌>` 是令牌身份，别的一律是无效凭据、`unauthenticated`，不再往下看（见「令牌与远程接入」）；经 socket 进来、对端是 root 或运行主控的那个 OS 用户 → 本机管理员（全部权限，socket 上带的 cookie 不看）；TCP 上带有效会话 cookie → 登录的用户（管理员全部权限，普通用户只有 `read` + `operate`、没有危险类）；其余一律没有身份。没有身份能到的只有：`GET /api/v1/healthz`、`/public/<file>`（数据目录 `public/` 里的文件，目录不列、`..` 出不去）、初始化向导的 `setup status` / `setup init`，以及下面的四个会话入口。经 TCP 的请求在判定身份之前先过三道门（见「门与登录防护」），经 socket 的不受影响。收到 SIGINT / SIGTERM 后停止接受新连接、等进行中的请求最多 10 秒、关库、删 socket、退出码 0。
 
 ### 初始化、登录与账号
 
-- **初始化向导**：空库时先建第一个管理员。`satchel setup status` 报告是否已初始化与可走的路（本版本只有「建管理员」；恢复备份随 m1-07、导入 mmwx 随 M9）；`satchel setup init --username <名>`（可选 `--email`）在终端里读两遍密码，或在网页 / REST 上 `POST /api/v1/setup/init`，成功顺手下发会话 cookie。用户名 3 到 32 个字符、小写字母 / 数字 / `_` / `-`、以字母或数字开头；密码至少 8 个字符（bcrypt 存哈希）。库里已有用户后 `setup init` 是 `conflict`；两个并发的 init 只有一个成功。**初始化之前谁都能建这个管理员**（向导本来就不要身份），所以先在本机或内网完成 `setup init`，再把主控暴露到公网；来源 IP、Turnstile 与封禁随 m1-05 交付。
-- **登录与会话**：`POST /api/v1/session`（`username` / `password` / 可选 `remember_me`）成功后下发 cookie `satchel_session`（HttpOnly、SameSite=Strict、Path=/，经 TLS 到达时带 Secure）：默认 24 小时，记住我 30 天。令牌是随机串，库里只存它的 SHA-256；`DELETE /api/v1/session` 登出。浏览器发来的写请求（身份来自会话 cookie 的，以及没有身份的登录入口与向导；`/api/v1/…` 与 `/mcp` 都算）要过同源检查：`Origin` 的 host 等于主控地址；没 `Origin` 时 `Sec-Fetch-Site` 不能是跨站；两个头都没有的非浏览器客户端放行。经 socket 与有效令牌来的请求不受影响。账号停用是 `forbidden`；用户名或密码不对都是同一条 `unauthenticated`。
+- **初始化向导**：空库时先建第一个管理员。`satchel setup status` 报告是否已初始化与可走的路（本版本只有「建管理员」；恢复备份随 m1-07、导入 mmwx 随 M9）；`satchel setup init --username <名>`（可选 `--email`）在终端里读两遍密码，或在网页 / REST 上 `POST /api/v1/setup/init`，成功顺手下发会话 cookie。用户名 3 到 32 个字符、小写字母 / 数字 / `_` / `-`、以字母或数字开头；密码至少 8 个字符（bcrypt 存哈希）。库里已有用户后 `setup init` 是 `conflict`；两个并发的 init 只有一个成功。**初始化之前谁都能建这个管理员**（向导本来就不要身份），所以先在本机或内网完成 `setup init`，再把主控暴露到公网。
+- **登录与会话**：`POST /api/v1/session`（`username` / `password` / 可选 `remember_me`；Turnstile 启用时还要 `turnstile_token`）成功后下发 cookie `satchel_session`（HttpOnly、SameSite=Strict、Path=/，经 HTTPS 到达时带 Secure：TLS 直连，或经登记的反代且标了 `X-Forwarded-Proto: https`）：默认 24 小时，记住我 30 天。令牌是随机串，库里只存它的 SHA-256；`DELETE /api/v1/session` 登出。浏览器发来的写请求（身份来自会话 cookie 的，以及没有身份的登录入口与向导；`/api/v1/…` 与 `/mcp` 都算）要过同源检查：`Origin` 的 host 等于主控地址；没 `Origin` 时 `Sec-Fetch-Site` 不能是跨站；两个头都没有的非浏览器客户端放行。经 socket 与有效令牌来的请求不受影响。账号停用是 `forbidden`；用户名或密码不对都是同一条 `unauthenticated`；猜错太多次被登录限流锁住时是 `rate_limited`（见「门与登录防护」）。
 - **两步验证与恢复码**：`satchel account totp setup` 给出密钥与 otpauth URL（扫进验证器），`account totp confirm --code <6 位>` 启用并一次性给出 8 枚恢复码（每枚 8 个十六进制字符，库里只存哈希）。开了两步验证后登录分两步：密码正确得到 5 分钟有效、只能用一次的 `pending` 票据，`POST /api/v1/session/two-factor`（`pending` + `code`）用验证器的码或一枚恢复码完成。同一个 TOTP 码 90 秒内只认一次；每枚恢复码只能成功一次（校验与作废在同一个数据库事务里，并发也只成功一次），用恢复码登录不会关掉两步验证；剩余不足两枚时登录结果与 `account show` 都有 `recovery_codes_low` 提示，`account recovery-codes regenerate` 重新生成 8 枚并作废旧的。`account totp disable` 关掉；已启用时再 `setup` 是 `conflict`，要换密钥先 disable。登录第二步验错一次，那张 5 分钟的 `pending` 票据就作废，要重新用密码登录。
 - **当场验证**：`account set-password` / `account totp setup` / `account totp confirm` / `account totp disable` / `account recovery-codes regenerate` 是人类专属命令：每次执行都要在同一个请求里带上自己的密码（`verify-password`）与——账号开了两步验证时——第二因素（`verify-code`），验一次用一次，不签发任何提升票据。CLI 上密码只从终端读（`--verify-password` 不是命令行参数，给了就是用法错误），`--verify-code` 可以作参数也可以终端输入（恢复码建议终端输入，写在命令行上会留在 shell 历史与进程列表里）；stdin 不是终端时直接以 `human_required` 拒绝、不等待。本机管理员不是账号，要用 `--verify-user <管理员用户名>` 指明验谁；登录的用户只能验自己。REST 上这三个值放在 JSON 体里，它们永不进审计摘要。`account set-password --new-password`（终端读两遍）改完作废该账号其它全部会话、保留当前这一个。
 - **忘了管理员密码**：在主控本机执行 `satchel admin reset-password <用户名> --confirm <用户名>`（本地命令，直接开数据目录里的库，主控在不在跑都行；只对管理员账号；新密码在终端里读两遍）。它作废该账号全部会话、不动两步验证，且因为不经主控而**不进审计**（stderr 会提示这一点）。
 
 ### 系统设置
 
-系统设置是**一个单例对象**（kind `SystemSettings`，第 07 章「主控设置类」）：`system_config` 的列与 `system_settings` 键值表的 92 个 key 合在一起，整单一个 `resourceVersion`。`serve` 启动时（迁移之后、监听之前）确保那一行存在，空库起来就是版本 1。`settings *` 只对管理员开放（本机管理员与管理员账号），普通用户 `forbidden`。
+系统设置是**一个单例对象**（kind `SystemSettings`，第 07 章「主控设置类」）：`system_config` 的列与 `system_settings` 键值表的 93 个 key 合在一起，整单一个 `resourceVersion`。`serve` 启动时（迁移之后、监听之前）确保那一行存在，空库起来就是版本 1。`settings *` 只对管理员开放（本机管理员与管理员账号），普通用户 `forbidden`。
 
 - **读**：`satchel settings show`（`--json` 是资源信封）。`spec` 是日常运维档的 100 个字段（既有列如 `heartbeat_interval`，也有 key 如 `branding_site_title`），`status` 是其余四档（七组人类专属如 `master_url`、主控自身类如 `update_cdn_enabled`、只读的 `require_encryption` 恒为 true、运行态如 `master_https_recovery_pending`）。键值表里没有的 key 按默认值表补（照 mmwx 读侧的 fallback，`default_theme` 默认 `flat`）；打码字段（`telegram_bot_token`、`turnstile_secret_key`、`tgbot_token`、`probe_external_token_sha256`）只对带 `secrets` scope 的身份给原文（本机管理员、管理员账号的会话、打开了密钥读取的令牌），其余身份非空时输出 `***`；审计摘要里一律打码。字段清单与分档看 `satchel explain SystemSettings`。
 - **写日常运维档**：`satchel settings set --set <字段>=<值> [--set …] --resource-version <N>`，REST 是 `POST /api/v1/settings/set`，体 `{"set":{"heartbeat_interval":45,"branding_site_title":"Satchel"},"resource-version":3}`。一次可以改任意多个字段，列与 key 混着给；服务端先整体校验——字段必须是 `spec` 里的（别的档一律 `field_not_applyable` 并点名分档，不认识的 `unknown_field`），值是字符串时按键值表的编码规则解析（布尔 `true` / `false` / `1` / `0` / 空，整数规范十进制，json 必须是合法 JSON 文本），JSON 原生类型直接收，再过照 mmwx 抄来的字段规则（如 `subscription_output_format` 只收 `yaml` / `json`、`default_theme` 四个主题名、`heartbeat_interval` 至少 5、`dashboard_refresh_interval_ms` 在 1000 到 60000 之间；mmwx 静默改写的地方这里一律拒绝并说明范围；Satchel 另加了两条 mmwx 没有的形状规则：`probe_external_token_sha256` 要是 64 位小写十六进制，`login_wallpaper` 与探针 logo 一样只收 `/`、`http(s)://`、`data:image/` 开头的引用）——任一字段不过整单拒绝、不部分写入。然后在**一个事务**里：比对 `resourceVersion`（不匹配 `version_conflict`，退出码 6；没有跳过比对的写法，冲突了重新读一遍再改，`--force` 不是参数）→ 存一份写前快照 → 写两张表 → 版本加 1。打码字段交回 `***` 表示保持不变，空串表示清掉。成功返回写后的整个对象，新版本在 `metadata.resourceVersion` 里。
 - **快照与回滚**：每次成功的 `settings set` / `settings rollback` 在 `config_snapshots` 里追加一行写前的日常运维档（七组字段不进快照；主控自身类字段随 m1-08 的第一条写命令再进）。`satchel settings snapshots list` 按时间倒序列出（id、object_version、created_at、source、content_hash；不给内容，里面有原文密钥）；`satchel settings rollback <id> --resource-version <N>` 把那份快照的内容当成一次 `settings set` 写回：重过字段分档与规则、同样比对版本、同样先存写前快照——回滚本身也能被回滚。它不走 apply、不把版本号倒回去。
 - **主控地址（七组）**：`satchel settings master-url set --url <主控地址> --subscription-url <订阅域名> --resource-version <N>` 是人类专属命令：要当场验证（见上一节），MCP 与令牌一律 `human_required`。两个至少给一个；值必须是干净的 HTTP(S) origin（只有 scheme 与 host，可带端口；末尾斜杠去掉），空串表示清掉。它同样比对并抬版本，但不存快照。改完不推送到节点、不做主控迁移（随 M2 的节点通道）。
-- **哪些 key 什么时候生效**：本 change 交付的是存储与写路径；三道门与静默模式的写命令随 m1-05，更新 CDN 开关随 m1-08，通知参数随 M4，TG 机器人随 M5，HTTPS 自愈与 `external_https` 随 M6，采集间隔与 agent 日志开关下发到节点随 M2。
+- **门（七组）**：关闭公网访问、静默模式、隐藏登录入口、登录限流与封禁的参数、Turnstile 的两个 key、反代登记这 15 个字段只能用 `satchel settings gates set --set <字段>=<值> … --resource-version <N>` 写：人类专属（当场验证），别的字段一律 `field_not_applyable`，同样比对并抬版本、不存快照，写完下一个请求就按新值判定，不用重启。见「门与登录防护」。
+- **哪些 key 什么时候生效**：本 change 交付的是存储与写路径；更新 CDN 开关随 m1-08，通知参数随 M4，TG 机器人随 M5，HTTPS 自愈与 `external_https` 随 M6，采集间隔与 agent 日志开关下发到节点随 M2。
 
 ### 令牌与远程接入
 
@@ -71,15 +74,46 @@ go build ./cmd/satchel
   只动 Satchel 自己的键（你在 satchel 条目里写的 `enabled: false` 之类不改，输出会提示接入后仍是停用的）；改已有文件前先备份成 `<文件>.satchel-bak-<时间戳>`（0600），先写临时文件再改名、保留原权限，但写进令牌的 `settings.json`、`config.toml`、`.env` 会去掉组与其他用户的权限（输出里注明）；新文件 0600、新目录 0700。原来配置里的另一把令牌不会被吊销，输出会提示你用 `mcp status` 找到后 `token revoke`；任何一个文件解析不了或写法不在支持范围内，在签发令牌之前就停下（`config`）并打印要手工加的片段。`--print` 只打印片段与命令、不写文件（这时输出里有令牌明文）。令牌签出来之后写文件失败是 `partial_failure`（退出码 8），输出里带令牌明文与片段。改完重启 runtime，验证命令分别是 `claude mcp get satchel`、`codex mcp get satchel --json`、`hermes mcp test satchel`；skills 随 m1-09 交付。
 - **谁在连**：`satchel mcp status` 列出绑了 runtime 标签的令牌，按最后使用时间倒序，从没用过的排最后；可见范围与 `token list` 相同。
 
+### 门与登录防护
+
+主控门口的防护照搬 mmwx，有几处不照抄（技术方案第 10 章）。改这些设置都是 `settings gates set`（七组，当场验证）；经数据目录下 unix socket 的请求不受这一节的任何门、限流与封禁影响：能连上那个 0600 socket 的只有 root 与运行主控的用户。
+
+- **来源 IP 与反代登记**：来源 IP 只认 TCP 连接的对端地址，请求头一律不看；只有对端落在 `trusted_proxies` 登记的某一项里时，才按那一项的头取客户端地址（`X-Real-IP`、`CF-Connecting-IP` 取整个值；`X-Forwarded-For` 从右往左跳过登记过的地址，取第一个不在登记里的——最左边是客户端自己能随便写的），取不到合法地址就用对端地址。经登记的反代进来的请求**不算本机**；登记的反代标了 `X-Forwarded-Proto: https` 时这个请求算经 HTTPS 到达（会话 cookie 带 Secure）。常见写法：
+  - Cloudflare Tunnel（`cloudflared` 与主控同机）：`--set 'trusted_proxies=[{"cidr":"127.0.0.1/32","header":"CF-Connecting-IP"}]'`。不登记的话，封禁与限流看到的都是回环地址。
+  - 同机 nginx 反代：`[{"cidr":"127.0.0.1/32","header":"X-Forwarded-For"}]`，nginx 里 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` 与 `proxy_set_header X-Forwarded-Proto $scheme;`。
+  - 反代在另一个 Docker 容器里：登记那个 Docker 网络的网段（如 `172.18.0.0/16`）。
+  - 登记的范围越宽，能伪造来源 IP 的人越多；登记成 `0.0.0.0/0` 等于谁都能冒充任何地址。至多 64 项。
+  - 登记的范围里不能有真实的客户端：落在登记里的地址会被当成反代跳过，这时它自己在头里写的地址会被当成来源 IP，可以冒充别人；写一个内网地址的话，`skip_local_ip` 开着时它的 IP 维度就不计了。例如 VPN 或内网用户会直接连主控时，不要登记整个 `10.0.0.0/8`，只登记反代自己的地址。
+  - 登记回环地址等于相信本机上每一个能连 TCP 的进程：它们都可以在头里写任意地址（冒充别的 IP，让它被封，或留下误导的安全事件）。TCP 上分辨不出对端是 cloudflared 还是别的进程；本机上跑着你不信任的程序时，把反代放到单独的地址上（例如 Docker 网络），只登记那个地址。
+  - 把回环地址登记成反代之后，从回环进来的请求都不算本机：打开「关闭公网访问」时，同机经回环打 `/api/v1/healthz` 的健康检查（例如 host 网络下 Docker 的 HEALTHCHECK）也会被拦下。
+- **三道门**（第 10 章那张表；按「关闭公网访问 → 静默模式 → IP 封禁」的次序，在判定身份之前）：
+
+  | 入口 | 关闭公网访问 | 静默模式（锁定期） | 隐藏登录入口 |
+  |---|---|---|---|
+  | 面板：网页、登录与验证码入口、`/api/v1/` 下的接口 | 只放本机或主控域名 | 一律 404，有会话也一样 | 只作用在探针伪装页上（随 M7） |
+  | MCP：`/mcp` | 同面板接口 | 放行 | 无关 |
+  | 机器入口：本版本是 `/api/v1/healthz` 与 `/public/`（节点通道、订阅、探针、TG webhook 等随后续里程碑加入） | 同上 | 放行 | 无关 |
+  | 本机 unix socket 的 CLI | 不受影响 | 不受影响 | 不受影响 |
+
+  - **关闭公网访问**（`master_local_only`）：只放行本机来的请求，以及主控地址是 `https://` 时 `Host` 等于它的域名的请求（主控地址不是 https 时只放本机）。被拦下的网页请求 307 跳到主控地址，其余是 `forbidden`。它不改监听地址（监听地址只看 `config.yaml` 与 `SATCHEL_LISTEN`）。`Host` 头可以伪造，这道门挡的是 IP 扫描与明文直连，更严的限制在防火墙。
+  - **静默模式**（`silent_mode`、`silent_mode_timeout`，默认 15 分钟）：面板那一行在锁定期内回与不存在的路径一模一样的 404，不带任何表明静默模式的头；主控启动后的 `silent_mode_timeout` 分钟内不锁（重启主控可以临时进面板）。「有效用户拉到订阅就对所有来源开放若干分钟」随 M3 的订阅入口。在网页上打开它，自己也会立刻进不去。
+  - **隐藏登录入口**（`probe_disguise_block_login`，mmwx 的「阻止登录」）：只作用在探针伪装页上，伪装页随 M7；本版本里它只存不生效，登录照常。
+- **登录限流**（`login_rate_max_attempts` / `login_rate_window_minutes` / `login_rate_lock_minutes`，默认 1 小时内 5 次、锁 1 小时）：猜密码按来源 IP 与账号名两个维度分别计数，达到上限的那一次之后锁定，锁定期内登录与当场验证直接 `rate_limited`（HTTP 429，退出码 1，`state.until` 是解锁时间），不再比对密码。与 mmwx 不同：两步登录时密码对了不清零，第二步错了照计，整个登录成功才清零；当场验证的密码或验证码比对不上也计入（只缺第二因素不计）；账号已停用时密码对了也算一次失败。同时发来的一批尝试最多只有上限那么多次会去比对密码，其余直接 `rate_limited`。`skip_local_ip`（默认开）时本地与内网地址不计 IP 维度，账号维度照计。有人故意猜错你的用户名会把你的网页登录锁一阵子，这时在主控本机用 CLI 不受影响。
+- **令牌猜测的封禁**（`brute_force_enabled` / `brute_force_max_failures` / `brute_force_window_minutes` / `brute_force_block_minutes`，默认 24 小时内 5 次、封 24 小时）：经 TCP 的请求带了无效的 `Authorization` 头，按来源 IP 计一次，达到上限自动封禁这个 IP，写进 `ip_bans`，重启后恢复。被封的 IP **只有带 `Authorization` 头的请求**被拒（`forbidden`），网页会话与登录照常（猜密码由登录限流管）——所以一个配着已吊销令牌、不停重试的 AI 客户端不会把你的网页也封掉。`skip_local_ip` 开着时本地与内网地址不计也不封。关掉 `brute_force_enabled` 只停自动封禁，已有的封禁照常生效（mmwx 关掉会让全部封禁失效）。手动：`satchel security ban <ip> [--permanent]` 与 `security unban <ip>` 是人类专属命令，`security bans list` 列出生效中的封禁（都只对管理员开放）。
+- **安全事件**：登录与当场验证比对不上（`login_fail` / `login_locked`、`verify_fail` / `verify_locked`）、令牌校验失败（`probe`）、自动封禁（`ban`）、手动封禁（`ban_manual`）、解封（`unban`）各记一条，含来源 IP、路径或命令名、账号名与「第几次 / 上限」。`satchel security events list [--kind …] [--ip …]` 按时间倒序看（只对管理员开放）。保留期与清理随 m1-06。
+- **Turnstile 登录验证码**：`turnstile_site_key`（非空时至少 20 个字符）与 `turnstile_secret_key` 两个都填才启用。启用后网页登录要带 `turnstile_token`，主控先向 Cloudflare 核对：没带或没过是 `bad_request`（不算一次猜密码），连不上 Cloudflare 是 `unavailable`。登录页用不要身份的 `GET /api/v1/session/captcha` 取 `enabled` 与 `site_key`（不含 secret key）。第二步、当场验证与经 socket 的登录不要验证码。「测试配置」随 m1-10 的设置页。
+- **跨域（CORS）**：默认只允许同源（mmwx 默认对所有来源放开）。`SATCHEL_ALLOWED_ORIGINS` 列出的来源拿到 `Access-Control-Allow-Origin` 等头、预检直接 204；永远不发 `Access-Control-Allow-Credentials`，所以跨域只给自己拿着令牌的网页用，会话 cookie 不跨域。
+- **被挡在门外时**：在主控本机经 socket 用 CLI 改回来，例如 `satchel settings gates set --set master_local_only=false --set silent_mode=false --resource-version <N> --verify-user <管理员>`，或 `satchel security unban <ip> --verify-user <管理员>`；静默模式也可以重启主控后在开放期里进去；连本机 shell 都不方便时，以 `SATCHEL_FORCE_PUBLIC_ACCESS=1` 重启主控只跳过「关闭公网访问」这一道门（进来之后关掉设置、再去掉这个变量）。
+
 ## REST 与 MCP
 
 三个投影都从 `internal/command` 的命令表构造，一条命令登记进表就同时有 CLI 子命令、REST 路由与 MCP 可达；`docs/commands.md` 是由表生成的「命令 × scope 对照表」（`go generate ./internal/command/`，CI 守着一致）。
 
-- **REST**：`/api/v1/…`，远程调用带 `Authorization: Bearer <令牌>`；路径由命令路径推出（`read` 用 GET、flag 作查询参数；其余用 POST、flag 与 `confirm` 在 JSON 体里；`password` 类型的 flag 与当场验证的 `verify-*` 也在 JSON 体里；`object` 类型的 flag（如 `settings set` 的 `set`）在 JSON 体里是一个对象、CLI 上写成可重复的 `--set 字段=值`；列表命令去掉末尾的 `list`，`limit` 默认 50、上限 500、`cursor` 翻页）。成功 200，body 与 CLI `--json` 是同一个对象；失败 body 是四字段错误，状态码按错误码折算（400 / 401 / 403 / 404 / 409 / 428 / 503 / 500）。未登记的键、类型不对、文件路径类参数（`-f` / `--filename` / `--file`）都是 `bad_request`；不兼容 mmwx 的 `/api/admin/*`。命令表之外只有四条路由：`GET /api/v1/healthz`、`POST /api/v1/session`（登录）、`POST /api/v1/session/two-factor`（第二步）、`DELETE /api/v1/session`（登出）。
+- **REST**：`/api/v1/…`，远程调用带 `Authorization: Bearer <令牌>`；路径由命令路径推出（`read` 用 GET、flag 作查询参数；其余用 POST、flag 与 `confirm` 在 JSON 体里；`password` 类型的 flag 与当场验证的 `verify-*` 也在 JSON 体里；`object` 类型的 flag（如 `settings set` 的 `set`）在 JSON 体里是一个对象、CLI 上写成可重复的 `--set 字段=值`；列表命令去掉末尾的 `list`，`limit` 默认 50、上限 500、`cursor` 翻页）。成功 200，body 与 CLI `--json` 是同一个对象；失败 body 是四字段错误，状态码按错误码折算（400 / 401 / 403 / 404 / 409 / 428 / 429 / 503 / 500）。未登记的键、类型不对、文件路径类参数（`-f` / `--filename` / `--file`）都是 `bad_request`；不兼容 mmwx 的 `/api/admin/*`。命令表之外只有五条路由：`GET /api/v1/healthz`、`POST /api/v1/session`（登录）、`POST /api/v1/session/two-factor`（第二步）、`DELETE /api/v1/session`（登出）、`GET /api/v1/session/captcha`（登录页取验证码配置）。
 - **MCP**：`/mcp`（Streamable HTTP，无状态），只有两个工具：`satchel_run`（`args` 命令数组 + 可选 `confirm`，输出恒为 JSON）与 `satchel_explain`（`target`）。命令数组交给与 CLI 相同的解析器、不经 shell；身份只来自这次连接（本机 socket，或经 TCP 带 `Authorization: Bearer <令牌>`），`args` 里的 `--token` / `--server` / `--data-dir`、本地命令（`version`、`db`、`serve`、`admin reset-password`）、只在 CLI 里有的 `login` / `logout` / `mcp *`、人类专属命令（含 `token create` / `update` / `revoke`）、初始化向导的 `setup *`、文件路径参数一律拒绝。只支持本地进程方式的 runtime 用 `satchel mcp stdio` 垫片（见「令牌与远程接入」）。
-- **审计**：每条经主控执行的命令（含被权限、confirm 或当场验证拒绝的）写一条 `audit_logs`，`satchel audit list` 看（只对管理员开放）；`password` 类型的 flag 在摘要里打码，`object` 类型的 flag 按所属 kind 的打码字段逐键打码，当场验证的值不进摘要。令牌身份的记录带 `token_id`，`actor` 是签发者。无身份与带无效凭据的请求被拒时不记，但不要身份的 `setup status` / `setup init` 执行了就记（`actor_kind` 为 `anonymous`）；`explain`、`healthz`、`/public/`、登录 / 登出入口不记。
+- **审计**：每条经主控执行的命令（含被权限、confirm 或当场验证拒绝的）写一条 `audit_logs`，`satchel audit list` 看（只对管理员开放）；`password` 类型的 flag 在摘要里打码，`object` 类型的 flag 按所属 kind 的打码字段逐键打码，当场验证的值不进摘要。令牌身份的记录带 `token_id`，`actor` 是签发者。无身份与带无效凭据的请求被拒时不记，但不要身份的 `setup status` / `setup init` 执行了就记（`actor_kind` 为 `anonymous`）；`explain`、`healthz`、`/public/`、会话入口不记；被三道门拦下的请求到不了命令执行链，也不记（猜密码与猜令牌另记在安全事件里）。
 
-现有经主控的命令：`whoami`（身份对象）、`audit list`（`--actor` / `--command` / `--since` / `--limit` / `--cursor`）、`explain [target]`、`setup *`、`account *`、`settings show` / `set` / `snapshots list` / `rollback` / `master-url set`、`token create` / `list` / `update` / `revoke`、`mcp status`。
+现有经主控的命令：`whoami`（身份对象）、`audit list`（`--actor` / `--command` / `--since` / `--limit` / `--cursor`）、`explain [target]`、`setup *`、`account *`、`settings show` / `set` / `snapshots list` / `rollback` / `master-url set` / `gates set`、`token create` / `list` / `update` / `revoke`、`mcp status`、`security events list` / `bans list` / `ban` / `unban`。
 
 ## 安装
 

@@ -15,33 +15,44 @@ import (
 
 // SessionAPI 是会话入口要的业务（service/auth 实现）。
 type SessionAPI interface {
-	Login(ctx context.Context, username, password string, rememberMe bool) (*auth.LoginResult, error)
+	Login(ctx context.Context, username, password string, rememberMe bool, turnstileToken string) (*auth.LoginResult, error)
 	CompleteTwoFactor(ctx context.Context, pending, code string) (*auth.LoginResult, error)
 	Logout(ctx context.Context, token string) error
 	IssueSession(ctx context.Context, username string, rememberMe bool) (string, time.Time, error)
+	CaptchaConfig(ctx context.Context) auth.CaptchaConfig
 }
 
-// 会话入口的路径：命令表之外仅有的三条路由（另一个是 healthz）。
+// 会话入口的路径：命令表之外仅有的四条路由（另一个是 healthz）。
 const (
 	SessionPath          = command.APIPrefix + "session"
 	SessionTwoFactorPath = command.APIPrefix + "session/two-factor"
+	SessionCaptchaPath   = command.APIPrefix + "session/captcha"
 )
 
-// mountSessionEndpoints 挂三个会话入口：登录、两步验证第二步、登出（master-web-session）。
+// mountSessionEndpoints 挂四个会话入口：登录、两步验证第二步、登出（master-web-session），以及登录页在登录前取验证码配置的
+// GET /api/v1/session/captcha（master-login-protection：不看身份、不进审计，只有 enabled 与 site_key）。
 func mountSessionEndpoints(mux *http.ServeMux, sessions SessionAPI) {
+	mux.HandleFunc(SessionCaptchaPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			WriteError(w, notFound(r))
+			return
+		}
+		WriteResult(w, sessions.CaptchaConfig(r.Context()))
+	})
 	mux.HandleFunc(SessionPath, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
 			var body struct {
-				Username   string `json:"username"`
-				Password   string `json:"password"`
-				RememberMe bool   `json:"remember_me"`
+				Username       string `json:"username"`
+				Password       string `json:"password"`
+				RememberMe     bool   `json:"remember_me"`
+				TurnstileToken string `json:"turnstile_token"`
 			}
 			if err := readJSON(r, &body); err != nil {
 				WriteError(w, err)
 				return
 			}
-			res, err := sessions.Login(r.Context(), body.Username, body.Password, body.RememberMe)
+			res, err := sessions.Login(r.Context(), body.Username, body.Password, body.RememberMe, body.TurnstileToken)
 			if err != nil {
 				WriteError(w, err)
 				return
@@ -97,19 +108,24 @@ func readJSON(r *http.Request, into any) error {
 	return nil
 }
 
-// setSessionCookie 下发会话 cookie：HttpOnly、SameSite=Strict、Path=/，请求经 TLS 到达时带 Secure。
+// setSessionCookie 下发会话 cookie：HttpOnly、SameSite=Strict、Path=/，请求经 HTTPS 到达时带 Secure——TLS 直连，
+// 或经登记的反向代理且标了 X-Forwarded-Proto: https（门算好放在 ctx 里，master-access-gates「本机与经 HTTPS 到达」）。
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name: authn.SessionCookie, Value: token, Path: "/", Expires: expires,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: overHTTPS(r),
 	})
 }
 
 func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: authn.SessionCookie, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: overHTTPS(r),
 	})
+}
+
+func overHTTPS(r *http.Request) bool {
+	return r.TLS != nil || v1.RemoteFrom(r.Context()).HTTPS
 }
 
 // SameOrigin 是防 CSRF 的同源检查，套在 authn 之内、整棵路由之外（REST、/mcp、会话入口都在里面）：

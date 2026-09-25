@@ -21,9 +21,10 @@ type Object = v1.Object[v1.SystemSettingsSpec, v1.SystemSettingsStatus]
 // RevealedObject 是带 secrets scope 的身份拿到的输出：形状与 Object 相同，打码字段是原文（master-api-tokens「密钥读取开关」）。
 type RevealedObject = v1.Object[map[string]any, map[string]any]
 
-// Service 持有仓储。
+// Service 持有仓储，以及设置写成功之后要通知的回调（装配根登记：门、登录限流、封禁与 Turnstile 按新值生效）。
 type Service struct {
-	repo *core.Repo
+	repo    *core.Repo
+	onWrite []func(*core.State)
 }
 
 // New 建服务。
@@ -39,14 +40,63 @@ func (s *Service) Bindings() command.Bindings {
 		"settings snapshots list": s.snapshotsList,
 		"settings rollback":       s.rollback,
 		"settings master-url set": s.masterURLSet,
+		"settings gates set":      s.gatesSet,
 	}
 }
 
-// 各命令允许写的分档（design 第 1 条：命令按分档拆，别的档一律 field_not_applyable）。
+// OnWrite 登记一个回调：四条写命令（set、rollback、master-url set、gates set）每次写成功之后，
+// 把写后的整份设置交给它。装配根在启动时登记，之后不再改。
+func (s *Service) OnWrite(fn func(*core.State)) {
+	s.onWrite = append(s.onWrite, fn)
+}
+
+func (s *Service) written(st *core.State) {
+	for _, fn := range s.onWrite {
+		fn(st)
+	}
+}
+
+// admits 决定一条写命令能写哪些字段：不能写时返回 field_not_applyable（design 第 1 条：命令按分档拆，别的档一律拒绝）。
+type admits func(f core.Field, what string) error
+
+// byClass 按分档放行。
+func byClass(allowed map[schema.Class]bool) admits {
+	return func(f core.Field, what string) error {
+		if !allowed[f.Class] {
+			return v1.Newf(v1.CodeFieldNotApplyable, "字段 %s 是系统设置的%s字段，不能经 %s 写入", f.Name, classLabels[f.Class], what)
+		}
+		return nil
+	}
+}
+
 var (
-	specOnly  = map[schema.Class]bool{schema.ClassSpec: true}
-	humanOnly = map[schema.Class]bool{schema.ClassHuman: true}
+	specOnly  = byClass(map[schema.Class]bool{schema.ClassSpec: true})
+	humanOnly = byClass(map[schema.Class]bool{schema.ClassHuman: true})
 )
+
+// gateFields 是第 05 章七组「门」这一组的 15 个字段，只有 settings gates set 能写（master-settings「门的设置是人类专属的设置写」）：
+// 三道门的 4 个、登录限流与令牌猜测封禁的 8 个参数、Turnstile 的两个 key、反代登记。
+var gateFields = map[string]bool{
+	"master_local_only": true, "silent_mode": true, "silent_mode_timeout": true, "probe_disguise_block_login": true,
+	"brute_force_enabled": true, "brute_force_max_failures": true, "brute_force_window_minutes": true, "brute_force_block_minutes": true,
+	"login_rate_max_attempts": true, "login_rate_window_minutes": true, "login_rate_lock_minutes": true, "skip_local_ip": true,
+	"turnstile_site_key": true, "turnstile_secret_key": true, "trusted_proxies": true,
+}
+
+// humanWriters 是七组别的组已有的专门写命令（还没有写命令的组不在这里）：门的写命令拒绝它们时指个路。
+var humanWriters = map[string]string{"master_url": "settings master-url set", "subscription_url": "settings master-url set"}
+
+// gatesOnly 只放行门这一组的字段。
+func gatesOnly(f core.Field, what string) error {
+	if gateFields[f.Name] {
+		return nil
+	}
+	e := v1.Newf(v1.CodeFieldNotApplyable, "字段 %s 是系统设置的%s字段，不属于门这一组，不能经 %s 写入", f.Name, classLabels[f.Class], what)
+	if cmd, ok := humanWriters[f.Name]; ok {
+		e = e.WithNext("改它用 satchel " + cmd)
+	}
+	return e
+}
 
 var classLabels = map[schema.Class]string{
 	schema.ClassSpec: "日常运维", schema.ClassHuman: "人类专属", schema.ClassMasterSelf: "主控自身类",
@@ -146,7 +196,7 @@ func versionArgs(inv *command.Invocation) (int64, error) {
 
 // prepare 对一次写的字段做整体校验（任一字段不过整单拒绝、不部分写入）：字段存在、分档在允许集合里、值按类型归一、过字段规则；
 // 打码字段收到 *** 表示保持不变、从本次写里剔除。what 是命令名，进错误文案。
-func (s *Service) prepare(values map[string]any, allowed map[schema.Class]bool, what string) (map[string]any, error) {
+func (s *Service) prepare(values map[string]any, admit admits, what string) (map[string]any, error) {
 	if len(values) == 0 {
 		return nil, v1.Newf(v1.CodeBadRequest, "%s 没有要改的字段", what).WithNext("用 --set 字段=值 给出要改的字段，字段清单见 satchel explain SystemSettings")
 	}
@@ -161,8 +211,8 @@ func (s *Service) prepare(values map[string]any, allowed map[schema.Class]bool, 
 		if !ok {
 			return nil, v1.Newf(v1.CodeUnknownField, "系统设置没有字段 %s", name).WithNext("字段清单见 satchel explain SystemSettings")
 		}
-		if !allowed[f.Class] {
-			return nil, v1.Newf(v1.CodeFieldNotApplyable, "字段 %s 是系统设置的%s字段，不能经 %s 写入", name, classLabels[f.Class], what)
+		if err := admit(f, what); err != nil {
+			return nil, err
 		}
 		v := values[name]
 		if f.Masked {
@@ -204,6 +254,7 @@ func (s *Service) set(ctx context.Context, inv *command.Invocation) (any, error)
 	if err != nil {
 		return nil, err
 	}
+	s.written(st)
 	return s.output(ctx, st)
 }
 
@@ -270,6 +321,7 @@ func (s *Service) rollback(ctx context.Context, inv *command.Invocation) (any, e
 	if err != nil {
 		return nil, err
 	}
+	s.written(st)
 	return s.output(ctx, st)
 }
 
@@ -331,5 +383,29 @@ func (s *Service) masterURLSet(ctx context.Context, inv *command.Invocation) (an
 	if err != nil {
 		return nil, err
 	}
+	s.written(st)
+	return s.output(ctx, st)
+}
+
+// gatesSet 改七组「门」这一组的字段：人类专属（当场验证由 authz 在这之前做），整体校验、同一事务、只抬版本、不存快照
+// （七组字段不进快照）。写完经回调通知门、登录限流、封禁与 Turnstile，下一个请求就按新值判定。
+func (s *Service) gatesSet(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	expected, err := versionArgs(inv)
+	if err != nil {
+		return nil, err
+	}
+	values, _ := inv.Flags["set"].(map[string]any)
+	prepared, err := s.prepare(values, gatesOnly, inv.Name())
+	if err != nil {
+		return nil, err
+	}
+	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected})
+	if err != nil {
+		return nil, err
+	}
+	s.written(st)
 	return s.output(ctx, st)
 }

@@ -16,7 +16,7 @@ import (
 
 // whoamiHandler 把 ctx 里的身份写成 JSON。
 func whoamiHandler() http.Handler {
-	return Middleware(nil, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return Middleware(nil, nil, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(v1.IdentityFrom(r.Context()))
 	}))
 }
@@ -96,5 +96,29 @@ func TestTCPIsAnonymous(t *testing.T) {
 func TestActorNameFallsBackToUID(t *testing.T) {
 	if got := actorName(4000000000); got != "uid:4000000000" {
 		t.Fatalf("查不到的 uid 应当写成 uid:<n>，得到 %s", got)
+	}
+}
+
+// master-access-gates：经 unix socket 的连接一律打上 socket 标记，经 TCP 的没有。
+func TestConnContextMarksSocket(t *testing.T) {
+	marks := make(chan bool, 2)
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { marks <- OverSocket(r.Context()) })
+	c := startUnix(t, h)
+	resp, err := c.Get("http://unix/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	srv := httptest.NewUnstartedServer(h)
+	srv.Config.ConnContext = ConnContext
+	srv.Start()
+	defer srv.Close()
+	resp, err = srv.Client().Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if viaSocket, viaTCP := <-marks, <-marks; !viaSocket || viaTCP {
+		t.Fatalf("socket 连接应当有标记、TCP 连接没有：%v %v", viaSocket, viaTCP)
 	}
 }

@@ -31,6 +31,7 @@ func TestExitCodeOf(t *testing.T) {
 		{New(CodeConflict, "x"), ExitFailure},
 		{New(CodeSchemaMismatch, "x"), ExitFailure},
 		{New(CodeConfig, "x"), ExitFailure},
+		{New(CodeRateLimited, "x"), ExitFailure},
 		{errors.Join(errors.New("outer"), New(CodeNotFound, "x")), ExitNotFound},
 	}
 	for _, tc := range cases {

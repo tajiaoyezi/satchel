@@ -11,15 +11,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
 
+	"github.com/satchel/satchel/internal/base/captcha"
 	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/base/store"
 	"github.com/satchel/satchel/internal/command"
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
+	coresecurity "github.com/satchel/satchel/internal/core/security"
 	"github.com/satchel/satchel/internal/core/sessions"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
 	coretokens "github.com/satchel/satchel/internal/core/tokens"
@@ -27,12 +30,14 @@ import (
 	mwaudit "github.com/satchel/satchel/internal/middleware/audit"
 	"github.com/satchel/satchel/internal/middleware/authn"
 	"github.com/satchel/satchel/internal/middleware/authz"
+	"github.com/satchel/satchel/internal/middleware/gate"
 	"github.com/satchel/satchel/internal/projection/cli"
 	"github.com/satchel/satchel/internal/projection/mcp"
 	"github.com/satchel/satchel/internal/projection/rest"
 	"github.com/satchel/satchel/internal/projection/web"
 	svcaudit "github.com/satchel/satchel/internal/service/audit"
 	"github.com/satchel/satchel/internal/service/auth"
+	svcsecurity "github.com/satchel/satchel/internal/service/security"
 	svcsettings "github.com/satchel/satchel/internal/service/settings"
 	svctokens "github.com/satchel/satchel/internal/service/tokens"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
@@ -41,24 +46,47 @@ import (
 // shutdownTimeout 是优雅停止等进行中请求的上限（master-serve「优雅停止」）。
 const shutdownTimeout = 10 * time.Second
 
-// app 是装配好的主控：执行链、HTTP 处理器与要关的资源。
-type app struct {
-	table   *command.Table
-	runner  command.Runner
-	handler http.Handler
-	db      *bun.DB
-	dataDir string
-	logger  *slog.Logger
+// entryRoutes 是入口归属表（master-access-gates「每个入口在三道门表里的归属」）：顶层 mux 的每个挂载点在这里都有一行
+// （测试守着），healthz 在 REST 里面、单独一行。M2 的节点通道、M3 的订阅入口加进来时各加一行；没有匹配的路径算面板。
+var entryRoutes = []gate.Route{
+	{Pattern: command.APIPrefix + "healthz", Entry: gate.EntryMachine},
+	{Pattern: web.PublicPrefix, Entry: gate.EntryMachine},
+	{Pattern: mcp.Path, Entry: gate.EntryMCP},
+	{Pattern: command.APIPrefix, Entry: gate.EntryPanel},
+	{Pattern: "/", Entry: gate.EntryPanel},
 }
 
-// newApp 装配各层。bdb 已打开且已迁移；数据目录已存在。
-func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
+// app 是装配好的主控：执行链、HTTP 处理器与要关的资源。gate、guard、identity 留着给端到端测试换时钟与验证服务。
+type app struct {
+	table    *command.Table
+	runner   command.Runner
+	handler  http.Handler
+	mounts   []string
+	db       *bun.DB
+	dataDir  string
+	logger   *slog.Logger
+	gate     *gate.Gate
+	guard    *svcsecurity.Service
+	identity *auth.Service
+}
+
+// newApp 装配各层。bdb 已打开且已迁移；数据目录已存在；cfg 是 serve 的配置（这里用自救开关与允许跨域的来源）。
+func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig) (*app, error) {
 	table := command.Catalog()
 	st := store.New(bdb, schema.Default())
 	audits := svcaudit.New(coreaudit.New(bdb, st))
-	// 身份：用户与会话两个仓储归 service/auth 持有；它同时是 authn 的会话解析器、authz 的当场验证器、REST 会话入口的业务。
+	// 安全事件与封禁：service/security 管令牌猜测的计数与封禁（authn 计数、门查封禁），service/auth 直接写登录的安全事件。
+	events := coresecurity.New(bdb)
+	guard := svcsecurity.New(events, logger)
+	if err := guard.Restore(context.Background()); err != nil {
+		return nil, err
+	}
+	// 身份：用户与会话两个仓储归 service/auth 持有；它同时是 authn 的会话解析器、authz 的当场验证器、REST 会话入口的业务，
+	// 也管登录限流与 Turnstile（master-login-protection）。
 	accounts := users.New(bdb, st)
 	identity := auth.New(accounts, sessions.New(bdb))
+	identity.SetEvents(events, logger)
+	identity.SetCaptcha(captcha.New())
 	// API 令牌：service/tokens 同时是 authn 的令牌解析器（按签发者当下的角色取交集，要读用户仓储）。
 	tokens := svctokens.New(coretokens.New(bdb, st), accounts, logger)
 	// 系统设置：迁移之后、监听之前确保单例行存在（master-settings「单例行的建立」），读命令不建行。
@@ -84,6 +112,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 	for name, h := range tokens.Bindings() {
 		bindings[name] = h
 	}
+	for name, h := range guard.Bindings() {
+		bindings[name] = h
+	}
 	if err := table.CheckBindings(bindings); err != nil {
 		return nil, v1.Wrap(v1.CodeInternal, "命令表与处理函数的绑定不一致", err)
 	}
@@ -97,15 +128,62 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger) (*app, error) {
 	opts.ServerSide = true
 
 	mux := http.NewServeMux()
-	mux.Handle(command.APIPrefix, rest.NewHandler(table, runner, identity))
-	mux.Handle(mcp.Path, mcp.NewHandler(opts))
-	mux.Handle(web.PublicPrefix, web.PublicHandler(filepath.Join(dataDir, db.PublicDir)))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		rest.WriteError(w, v1.Newf(v1.CodeNotFound, "没有这个路径：%s", r.URL.Path))
-	})
+	mounts := []struct {
+		pattern string
+		handler http.Handler
+	}{
+		{command.APIPrefix, rest.NewHandler(table, runner, identity)},
+		{mcp.Path, mcp.NewHandler(opts)},
+		{web.PublicPrefix, web.PublicHandler(filepath.Join(dataDir, db.PublicDir))},
+		{"/", http.HandlerFunc(notFoundPath)},
+	}
+	var patterns []string
+	for _, m := range mounts {
+		mux.Handle(m.pattern, m.handler)
+		patterns = append(patterns, m.pattern)
+	}
 
-	// 顺序：authn 先判身份（同源检查要看身份来源），SameOrigin 管住所有浏览器发来的写请求（REST、/mcp、会话入口）。
-	return &app{table: table, runner: runner, handler: authn.Middleware(identity, tokens, rest.SameOrigin(mux)), db: bdb, dataDir: dataDir, logger: logger}, nil
+	// 门：入口归属表、封禁查询、静默模式锁定时用的「不存在的路径」回应、启动时读到的自救开关。
+	gates := gate.New(entryRoutes, guard, http.HandlerFunc(hiddenPath), cfg.ForcePublicAccess)
+	if cfg.ForcePublicAccess {
+		logger.Warn("环境变量 " + db.EnvForcePublicAccess + " 已打开：本进程跳过「关闭公网访问」这一道门（静默模式与封禁照常）；" +
+			"进来之后用 satchel settings gates set --set master_local_only=false 关掉，再去掉这个环境变量")
+	}
+	// 门这一组的设置：启动时加载一次，之后每次设置写成功就推给门、登录限流、令牌猜测的封禁与 Turnstile，不用重启。
+	apply := func(s *coresettings.State) {
+		g := s.Gates()
+		gates.Configure(gate.ConfigFrom(g))
+		identity.SetLoginLimits(auth.LoginLimits{MaxAttempts: g.LoginRateMaxAttempts, Window: g.LoginRateWindow, Lock: g.LoginRateLock, SkipLocalIP: g.SkipLocalIP})
+		identity.SetTurnstileKeys(g.TurnstileSiteKey, g.TurnstileSecretKey)
+		guard.Configure(svcsecurity.Config{Enabled: g.BruteForceEnabled, MaxFailures: g.BruteForceMaxFailures, Window: g.BruteForceWindow,
+			Block: g.BruteForceBlock, SkipLocalIP: g.SkipLocalIP})
+	}
+	current, err := settingsRepo.Load(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	apply(current)
+	settings.OnWrite(apply)
+
+	// 顺序（从外到内）：门（来源 → 关闭公网访问 → 静默模式 → 封禁）→ CORS → authn（判身份，无效凭据计一次令牌校验失败）
+	// → SameOrigin（管住所有浏览器发来的写请求：REST、/mcp、会话入口）→ mux。
+	handler := gates.Wrap(rest.CORS(cfg.AllowedOrigins, authn.Middleware(identity, tokens, guard, rest.SameOrigin(mux))))
+	return &app{table: table, runner: runner, handler: handler, mounts: patterns, db: bdb, dataDir: dataDir, logger: logger,
+		gate: gates, guard: guard, identity: identity}, nil
+}
+
+// notFoundPath 是顶层没有登记的路径的回应（四字段的 not_found）。
+func notFoundPath(w http.ResponseWriter, r *http.Request) {
+	rest.WriteError(w, v1.Newf(v1.CodeNotFound, "没有这个路径：%s", r.URL.Path))
+}
+
+// hiddenPath 是静默模式锁定时面板入口的回应：与请求一个不存在的路径完全相同——/api/v1/ 下用 REST 自己的 404，其余用上面的兜底。
+func hiddenPath(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, command.APIPrefix) {
+		rest.NotFound(w, r)
+		return
+	}
+	notFoundPath(w, r)
 }
 
 // listen 建两个监听：TCP 在 listenAddr，unix socket 在数据目录下（权限 0600）。socket 文件已存在时先试着连它：
@@ -146,6 +224,9 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          slog.NewLogLogger(a.logger.Handler(), slog.LevelWarn),
 	}
+	// 内存里过期的封禁与计数、登录限流的计数定期清理，随 serve 停下（m1-06 的定时任务接上之后改挂到那里）。
+	go a.guard.Run(ctx)
+	go a.identity.Run(ctx)
 	errCh := make(chan error, 2)
 	for _, ln := range []net.Listener{tcp, unix} {
 		go func(ln net.Listener) {

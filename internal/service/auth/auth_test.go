@@ -23,9 +23,13 @@ import (
 
 const password = "correct horse battery"
 
+// service 建一个服务给 m1-02 的老用例用：它们测的是登录、两步验证与恢复码本身，里面有连续验错的步骤，
+// 所以把登录限流的上限调高，免得被锁住；限流自己的用例在 limit_test.go，用默认参数。
 func service(t *testing.T, bdb *bun.DB) *Service {
 	t.Helper()
-	return New(users.New(bdb, store.New(bdb, schema.Default())), sessions.New(bdb))
+	s := New(users.New(bdb, store.New(bdb, schema.Default())), sessions.New(bdb))
+	s.SetLoginLimits(LoginLimits{MaxAttempts: 1000, Window: time.Hour, Lock: time.Hour, SkipLocalIP: true})
+	return s
 }
 
 // seedUser 直接插一个账号（M3 之前没有用户管理命令）。
@@ -101,14 +105,14 @@ func TestLoginAndSessions(t *testing.T) {
 		seedUser(t, bdb, "bob", "user", true)
 		seedUser(t, bdb, "off", "user", false)
 
-		res, err := s.Login(ctx, "admin", password, false)
+		res, err := s.Login(ctx, "admin", password, false, "")
 		if err != nil || res.Token == "" || res.Username != "admin" || res.Role != v1.RoleAdmin || res.TwoFactorRequired {
 			t.Fatalf("登录：%+v %v", res, err)
 		}
 		if d := time.Until(res.ExpiresAt); d < 23*time.Hour || d > 25*time.Hour {
 			t.Fatalf("有效期应当约 24 小时，得到 %v", d)
 		}
-		long, _ := s.Login(ctx, "admin", password, true)
+		long, _ := s.Login(ctx, "admin", password, true, "")
 		if d := time.Until(long.ExpiresAt); d < 29*24*time.Hour {
 			t.Fatalf("记住我应当约 30 天，得到 %v", d)
 		}
@@ -125,18 +129,18 @@ func TestLoginAndSessions(t *testing.T) {
 		if err != nil || !ok || id.ActorKind != v1.ActorUser || id.Actor != "admin" || id.Role != v1.RoleAdmin || len(id.Danger) != 6 || hash != HashToken(res.Token) {
 			t.Fatalf("Resolve 管理员：%+v %v %v", id, ok, err)
 		}
-		bobRes, _ := s.Login(ctx, "bob", password, false)
+		bobRes, _ := s.Login(ctx, "bob", password, false, "")
 		bid, _, _, _ := s.Resolve(ctx, bobRes.Token)
 		if bid.Role != v1.RoleUser || len(bid.Danger) != 0 || !bid.HasScope(v1.ScopeOperate) || bid.HasScope(v1.ScopeSecrets) {
 			t.Fatalf("普通用户的权限：%+v", bid)
 		}
 		for _, bad := range [][2]string{{"admin", "wrong"}, {"nobody", password}, {"", ""}} {
-			_, err := s.Login(ctx, bad[0], bad[1], false)
+			_, err := s.Login(ctx, bad[0], bad[1], false, "")
 			if e := v1.AsError(err); err == nil || e.Code != v1.CodeUnauthenticated || strings.Contains(e.Reason, "不存在") {
 				t.Errorf("%v 应当 unauthenticated 且不说哪个错：%v", bad, err)
 			}
 		}
-		if _, err := s.Login(ctx, "off", password, false); err == nil || v1.AsError(err).Code != v1.CodeForbidden {
+		if _, err := s.Login(ctx, "off", password, false, ""); err == nil || v1.AsError(err).Code != v1.CodeForbidden {
 			t.Fatalf("停用应当 forbidden：%v", err)
 		}
 		// 过期与登出。
@@ -218,7 +222,7 @@ func TestTwoFactor(t *testing.T) {
 		}
 
 		// 两步登录：第一步不发会话；TOTP 完成；同一个码不能再用；pending 只能用一次。
-		first, err := s.Login(ctx, "admin", password, false)
+		first, err := s.Login(ctx, "admin", password, false, "")
 		if err != nil || !first.TwoFactorRequired || first.Token != "" || first.Pending == "" {
 			t.Fatalf("第一步：%+v %v", first, err)
 		}
@@ -230,17 +234,17 @@ func TestTwoFactor(t *testing.T) {
 		if _, err := s.CompleteTwoFactor(ctx, first.Pending, c1); err == nil || v1.AsError(err).Code != v1.CodeUnauthenticated {
 			t.Fatalf("pending 用过应当 unauthenticated：%v", err)
 		}
-		second, _ := s.Login(ctx, "admin", password, false)
+		second, _ := s.Login(ctx, "admin", password, false, "")
 		if _, err := s.CompleteTwoFactor(ctx, second.Pending, c1); err == nil || v1.AsError(err).Code != v1.CodeUnauthenticated {
 			t.Fatalf("同一个 TOTP 码重放应当 unauthenticated：%v", err)
 		}
 
 		// 恢复码：一枚只能用一次，不关两步验证。
-		third, _ := s.Login(ctx, "admin", password, false)
+		third, _ := s.Login(ctx, "admin", password, false, "")
 		if _, err := s.CompleteTwoFactor(ctx, third.Pending, codes[0]); err != nil {
 			t.Fatalf("恢复码登录：%v", err)
 		}
-		fourth, _ := s.Login(ctx, "admin", password, false)
+		fourth, _ := s.Login(ctx, "admin", password, false, "")
 		if _, err := s.CompleteTwoFactor(ctx, fourth.Pending, codes[0]); err == nil || v1.AsError(err).Code != v1.CodeUnauthenticated {
 			t.Fatalf("同一枚恢复码第二次应当 unauthenticated：%v", err)
 		}
@@ -251,7 +255,7 @@ func TestTwoFactor(t *testing.T) {
 		// 并发十次同一枚：恰好一个成功（每次都要新 pending）。
 		var pendings []string
 		for i := 0; i < 10; i++ {
-			r, _ := s.Login(ctx, "admin", password, false)
+			r, _ := s.Login(ctx, "admin", password, false, "")
 			pendings = append(pendings, r.Pending)
 		}
 		var wg sync.WaitGroup
@@ -277,19 +281,19 @@ func TestTwoFactor(t *testing.T) {
 		}
 		// 假重启：新的 Service 实例，同一枚码仍然不能再用。
 		s2 := service(t, bdb)
-		fifth, _ := s2.Login(ctx, "admin", password, false)
+		fifth, _ := s2.Login(ctx, "admin", password, false, "")
 		if _, err := s2.CompleteTwoFactor(ctx, fifth.Pending, codes[1]); err == nil {
 			t.Fatal("重启后同一枚恢复码仍应当不可用")
 		}
 		// 用到只剩一枚：codes[0]、codes[1] 已用，再用 codes[2] 到 codes[6]。
 		for i := 2; i <= 6; i++ {
-			r, _ := s.Login(ctx, "admin", password, false)
+			r, _ := s.Login(ctx, "admin", password, false, "")
 			if _, err := s.CompleteTwoFactor(ctx, r.Pending, codes[i]); err != nil {
 				t.Fatalf("用恢复码 %d：%v", i, err)
 			}
 		}
 		advance(s, time.Minute)
-		r, _ := s.Login(ctx, "admin", password, false)
+		r, _ := s.Login(ctx, "admin", password, false, "")
 		last, err := s.CompleteTwoFactor(ctx, r.Pending, code(t, s, key.Secret))
 		if err != nil || *last.RecoveryCodesRemaining != 1 || !last.RecoveryCodesLow {
 			t.Fatalf("只剩一枚应当 low：%+v %v", last, err)
@@ -299,7 +303,7 @@ func TestTwoFactor(t *testing.T) {
 		if err != nil || len(regen.(RecoveryCodes).RecoveryCodes) != 8 {
 			t.Fatalf("regenerate：%v %v", regen, err)
 		}
-		r, _ = s.Login(ctx, "admin", password, false)
+		r, _ = s.Login(ctx, "admin", password, false, "")
 		if _, err := s.CompleteTwoFactor(ctx, r.Pending, codes[7]); err == nil {
 			t.Fatal("旧码应当作废")
 		}
@@ -307,7 +311,7 @@ func TestTwoFactor(t *testing.T) {
 		if _, err := b["account totp disable"](uctx, &command.Invocation{}); err != nil {
 			t.Fatal(err)
 		}
-		plain, err := s.Login(ctx, "admin", password, false)
+		plain, err := s.Login(ctx, "admin", password, false, "")
 		if err != nil || plain.TwoFactorRequired || plain.Token == "" {
 			t.Fatalf("禁用后应当直接登录：%+v %v", plain, err)
 		}
@@ -418,13 +422,13 @@ func TestSetupAndAccountCommands(t *testing.T) {
 		if _, err := b["setup init"](ctx, &command.Invocation{Flags: map[string]any{"username": "again", "password": password}}); err == nil || v1.AsError(err).Code != v1.CodeConflict {
 			t.Fatalf("已初始化应当 conflict：%v", err)
 		}
-		if _, err := s.Login(ctx, "admin", password, false); err != nil {
+		if _, err := s.Login(ctx, "admin", password, false, ""); err != nil {
 			t.Fatalf("建好的管理员应当能登录：%v", err)
 		}
 		// account show / set-password：两处登录，改密后另一处作废、当前保留。
 		a, _ := s.users.GetByUsername(ctx, "admin")
-		one, _ := s.Login(ctx, "admin", password, false)
-		two, _ := s.Login(ctx, "admin", password, false)
+		one, _ := s.Login(ctx, "admin", password, false, "")
+		two, _ := s.Login(ctx, "admin", password, false, "")
 		uctx := WithSessionHash(userCtx(a), HashToken(one.Token))
 		info, _ := b["account show"](uctx, &command.Invocation{})
 		if ai := info.(AccountInfo); ai.Sessions != 3 || ai.Email != "a@b.c" || ai.Role != v1.RoleAdmin {
@@ -443,10 +447,10 @@ func TestSetupAndAccountCommands(t *testing.T) {
 		if _, _, ok, _ := s.Resolve(ctx, two.Token); ok {
 			t.Fatal("另一处会话应当作废")
 		}
-		if _, err := s.Login(ctx, "admin", password, false); err == nil {
+		if _, err := s.Login(ctx, "admin", password, false, ""); err == nil {
 			t.Fatal("旧密码应当不能登录")
 		}
-		if _, err := s.Login(ctx, "admin", "new password 123", false); err != nil {
+		if _, err := s.Login(ctx, "admin", "new password 123", false, ""); err != nil {
 			t.Fatalf("新密码应当能登录：%v", err)
 		}
 		// 本机管理员不是账号。
