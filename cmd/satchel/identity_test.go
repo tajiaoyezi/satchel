@@ -80,6 +80,33 @@ func code(t *testing.T, secret string, at time.Time) string {
 	return c
 }
 
+// totpCodes 按需给出还没用过的 TOTP 码。主控只认当下前后各一个周期（30 秒）的码，同一个码只认一次；
+// 若按测试开头记下的时间推算「上一周期」的码，中途跨过周期边界它就落出窗口（偶发 401）。所以每次按当下的时间，
+// 依次试当前、下一个、上一个周期里还没用过的码：前两个就算请求途中跨过边界也仍然有效；上一个周期的码离边界
+// 不到 2 秒就先等过边界再挑。用过的码按值记（与主控的防重放一致）。
+type totpCodes struct {
+	secret string
+	used   map[string]bool
+}
+
+func (c *totpCodes) next(t *testing.T) string {
+	t.Helper()
+	for {
+		cur := time.Now().Unix() / 30
+		boundary := time.Unix((cur+1)*30, 0)
+		for _, step := range []int64{0, 1, -1} {
+			if step == -1 && time.Until(boundary) < 2*time.Second {
+				break
+			}
+			if v := code(t, c.secret, time.Unix((cur+step)*30, 0)); !c.used[v] {
+				c.used[v] = true
+				return v
+			}
+		}
+		time.Sleep(time.Until(boundary) + 50*time.Millisecond)
+	}
+}
+
 // login 走密码登录 + 第二步（second 非空时），返回第二步的响应字段。
 func (b *browser) login(base, username, password, second string) (int, map[string]json.RawMessage) {
 	b.t.Helper()
@@ -213,8 +240,8 @@ func TestIdentityEndToEnd(t *testing.T) {
 		if status != 200 || secret == "" || !strings.HasPrefix(str(fields["otpauth_url"]), "otpauth://totp/Satchel") {
 			t.Fatalf("totp setup：%d %v", status, fields)
 		}
-		now := time.Now()
-		status, fields, _ = alice.call("POST", base+"/api/v1/account/totp/confirm", `{"code":"`+code(t, secret, now)+`","verify-password":"secret12"}`, nil)
+		totps := &totpCodes{secret: secret, used: map[string]bool{}}
+		status, fields, _ = alice.call("POST", base+"/api/v1/account/totp/confirm", `{"code":"`+totps.next(t)+`","verify-password":"secret12"}`, nil)
 		var codes []string
 		_ = json.Unmarshal(fields["recovery_codes"], &codes)
 		if status != 200 || len(codes) != 8 {
@@ -228,11 +255,11 @@ func TestIdentityEndToEnd(t *testing.T) {
 		if status, _, _ := alice.call("GET", base+"/api/v1/whoami", "", nil); status != 401 {
 			t.Fatalf("登出后应当 401：%d", status)
 		}
-		// 密码错：401 同一条；停用之外的两步登录：TOTP（下一周期的码，避开 confirm 用掉的那一个）。
+		// 密码错：401 同一条；停用之外的两步登录：TOTP（再取一个还没用过的码）。
 		if status, fields := alice.login(base, "admin", "nope", ""); status != 401 || str(fields["code"]) != "unauthenticated" {
 			t.Fatalf("密码错：%d %v", status, fields)
 		}
-		if status, fields := alice.login(base, "admin", "secret12", code(t, secret, now.Add(30*time.Second))); status != 200 || string(fields["recovery_codes_remaining"]) != "8" {
+		if status, fields := alice.login(base, "admin", "secret12", totps.next(t)); status != 200 || string(fields["recovery_codes_remaining"]) != "8" {
 			t.Fatalf("TOTP 登录：%d %v", status, fields)
 		}
 		if status, fields, _ := alice.call("GET", base+"/api/v1/whoami", "", nil); status != 200 || str(fields["actor"]) != "admin" {
@@ -253,9 +280,9 @@ func TestIdentityEndToEnd(t *testing.T) {
 		if status, _ := alice.login(base, "admin", "secret12", codes[1]); status != 200 {
 			t.Fatalf("另一枚恢复码：%d", status)
 		}
-		// 第二处登录（TOTP 上一周期的码）；account show 看到两个会话。
+		// 第二处登录（TOTP，再取一个还没用过的码）；account show 看到两个会话。
 		bob := newBrowser(t)
-		if status, _ := bob.login(base, "admin", "secret12", code(t, secret, now.Add(-30*time.Second))); status != 200 {
+		if status, _ := bob.login(base, "admin", "secret12", totps.next(t)); status != 200 {
 			t.Fatalf("第二处登录：%d", status)
 		}
 		if _, fields, _ := alice.call("GET", base+"/api/v1/account/show", "", nil); string(fields["sessions"]) != "2" || string(fields["totp_enabled"]) != "true" || string(fields["recovery_codes_remaining"]) != "6" {
