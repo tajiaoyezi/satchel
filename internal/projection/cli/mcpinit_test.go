@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -73,7 +74,7 @@ func runtimeHome(t *testing.T) (home, claudeLog string) {
 	t.Setenv("HERMES_HOME", filepath.Join(home, ".hermes"))
 	bin := filepath.Join(home, "bin")
 	claudeLog = filepath.Join(home, "claude.log")
-	script := "#!/bin/sh\necho \"$@\" >> " + claudeLog + "\n"
+	script := "#!/bin/sh\necho \"$@\" >> " + claudeLog + "\nif [ \"$1 $2\" = \"mcp add\" ] && [ -n \"$CLAUDE_FAIL_ADD\" ]; then echo boom >&2; exit 1; fi\n"
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +83,13 @@ func runtimeHome(t *testing.T) (home, claudeLog string) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return home, claudeLog
+}
+
+// targetMaster 是写进 runtime 配置的那个地址上的假主控：healthz 回 ok，whoami 认签出来的令牌（id 42）。
+func targetMaster(t *testing.T) string {
+	t.Helper()
+	srv, _ := fakeMaster(t, map[string]v1.Identity{issuedToken: tokenIdentity(42, v1.ScopeRead, v1.ScopeOperate)})
+	return srv.URL
 }
 
 func initOptions(answers ...string) (Options, *fakePrompt) {
@@ -108,10 +116,12 @@ func TestMcpInitClaudeCode(t *testing.T) {
 	}
 	home, claudeLog := runtimeHome(t)
 	dataDir, master := startSocketMaster(t)
+	target := targetMaster(t)
 	settings := filepath.Join(home, ".claude", "settings.json")
-	put(t, settings, `{"theme":"dark","env":{"FOO":"1"},"model":"opus"}`)
+	original := `{"theme":"dark","env":{"FOO":"1","SATCHEL_TOKEN":"sat_old"},"model":"opus"}`
+	put(t, settings, original)
 	opts, fp := initOptions("secret12", "")
-	stdout, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "claude-code", "--verify-user", "admin", "--data-dir", dataDir, "--json")
+	stdout, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "claude-code", "--verify-user", "admin", "--url", target, "--data-dir", dataDir, "--json")
 	if code != 0 {
 		t.Fatalf("mcp init：%d %s", code, stderr)
 	}
@@ -131,7 +141,7 @@ func TestMcpInitClaudeCode(t *testing.T) {
 	if len(fp.labels) != 2 || !strings.Contains(fp.labels[0], "admin 的密码") {
 		t.Fatalf("应当问密码与验证码：%v", fp.labels)
 	}
-	if out.URL != "http://127.0.0.1:12889" || !out.Token.Issued || *out.Token.ID != 42 || out.Token.Token != "" || strings.Contains(stdout, issuedToken) {
+	if out.URL != target || !out.Token.Issued || *out.Token.ID != 42 || out.Token.Token != "" || strings.Contains(stdout, issuedToken) {
 		t.Fatalf("输出（不含明文）：%s", stdout)
 	}
 	logged, _ := os.ReadFile(claudeLog)
@@ -144,20 +154,27 @@ func TestMcpInitClaudeCode(t *testing.T) {
 	var got map[string]any
 	_ = json.Unmarshal(raw, &got)
 	env := got["env"].(map[string]any)
-	if env["SATCHEL_TOKEN"] != issuedToken || env["SATCHEL_SERVER"] != "http://127.0.0.1:12889" || env["SATCHEL_OUTPUT"] != "json" || env["FOO"] != "1" {
+	if env["SATCHEL_TOKEN"] != issuedToken || env["SATCHEL_SERVER"] != target || env["SATCHEL_OUTPUT"] != "json" || env["FOO"] != "1" {
 		t.Fatalf("settings.json 的 env：%v", env)
 	}
 	if !strings.HasPrefix(string(raw), "{\n  \"theme\": \"dark\",\n  \"env\"") || !strings.Contains(string(raw), "\"model\": \"opus\"\n}") {
 		t.Fatalf("顶层键的顺序应当不变：\n%s", raw)
 	}
-	if len(out.Files) != 1 || out.Files[0].Backup == "" {
-		t.Fatalf("应当有备份：%+v", out.Files)
+	if len(out.Files) != 1 || out.Files[0].Backup == "" || out.Files[0].Mode != "0640 → 0600" {
+		t.Fatalf("应当有备份、并说明权限收紧：%+v", out.Files)
 	}
-	if backup, _ := os.ReadFile(out.Files[0].Backup); string(backup) != `{"theme":"dark","env":{"FOO":"1"},"model":"opus"}` {
+	if backup, _ := os.ReadFile(out.Files[0].Backup); string(backup) != original {
 		t.Fatalf("备份是改前的内容：%s", backup)
 	}
-	if info, _ := os.Stat(settings); info.Mode().Perm() != 0o640 {
-		t.Fatalf("保留原权限：%v", info.Mode())
+	// 文件里有令牌：去掉组与其他用户的权限；备份里有旧令牌，一律 0600。
+	if info, _ := os.Stat(settings); info.Mode().Perm() != 0o600 {
+		t.Fatalf("含令牌的文件应当收紧到 0600：%v", info.Mode())
+	}
+	if info, _ := os.Stat(out.Files[0].Backup); info.Mode().Perm() != 0o600 {
+		t.Fatalf("备份应当是 0600：%v", info.Mode())
+	}
+	if !strings.Contains(strings.Join(out.Notes, "\n"), "原来有一把别的令牌") {
+		t.Fatalf("应当提示旧令牌没有吊销：%v", out.Notes)
 	}
 	if text, _, _ := runWith(t, opts, "mcp", "init", "--runtime", "bogus", "--data-dir", dataDir); text != "" {
 		t.Fatalf("不认识的 runtime 不该有输出：%s", text)
@@ -168,20 +185,21 @@ func TestMcpInitClaudeCode(t *testing.T) {
 func TestMcpInitCodexAndHermes(t *testing.T) {
 	home, _ := runtimeHome(t)
 	dataDir, master := startSocketMaster(t)
+	target := targetMaster(t)
 	codexCfg := filepath.Join(home, ".codex", "config.toml")
 	put(t, codexCfg, "# mine\n[mcp_servers.docs]\nurl = \"https://docs.example/mcp\"\n\n[shell_environment_policy]\ninherit = \"all\"\n")
 	opts, _ := initOptions("secret12", "")
-	if _, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "codex", "--verify-user", "admin", "--url", "https://panel.example.com/", "--data-dir", dataDir); code != 0 {
+	if _, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "codex", "--verify-user", "admin", "--url", target+"/", "--data-dir", dataDir); code != 0 {
 		t.Fatalf("codex：%d %s", code, stderr)
 	}
 	raw, _ := os.ReadFile(codexCfg)
-	for _, want := range []string{"# mine", "[mcp_servers.docs]", `url = "https://panel.example.com/mcp"`, `Authorization = "Bearer ` + issuedToken + `"`, `SATCHEL_TOKEN = "` + issuedToken + `"`} {
+	for _, want := range []string{"# mine", "[mcp_servers.docs]", `url = "` + target + `/mcp"`, `Authorization = "Bearer ` + issuedToken + `"`, `SATCHEL_TOKEN = "` + issuedToken + `"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("config.toml 应当有 %q：\n%s", want, raw)
 		}
 	}
 	opts, _ = initOptions("secret12", "")
-	stdout, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "hermes", "--verify-user", "admin", "--name", "hermes-box", "--preset", "readonly", "--data-dir", dataDir)
+	stdout, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "hermes", "--verify-user", "admin", "--name", "hermes-box", "--preset", "readonly", "--url", target, "--data-dir", dataDir)
 	if code != 0 {
 		t.Fatalf("hermes：%d %s", code, stderr)
 	}
@@ -286,6 +304,15 @@ func TestMcpInitPrintUseTokenAndRemote(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".codex")); !os.IsNotExist(err) {
 		t.Fatal("远程令牌身份不该写文件")
 	}
+	// 远程不带令牌（环境变量给的 server）：同样在问密码之前停下，不发签发请求。
+	t.Setenv(EnvServer, srv.URL)
+	before := log.count()
+	opts, fp = initOptions("secret12", "")
+	_, stderr, code = runWith(t, opts, "mcp", "init", "--runtime", "codex", "--verify-user", "admin", "--json")
+	if e := decodeError(t, stderr); code != v1.ExitHumanRequired || !strings.Contains(e.Reason, "远程 CLI") || len(fp.labels) != 0 || log.count() != before {
+		t.Fatalf("远程不带令牌：%d %+v %v", code, e, fp.labels)
+	}
+	os.Unsetenv(EnvServer)
 	// 本机管理员没给 --verify-user：在问密码之前就停下。
 	opts, fp = initOptions("secret12", "")
 	if _, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "codex", "--data-dir", dataDir, "--json"); code != v1.ExitHumanRequired || len(fp.labels) != 0 || !strings.Contains(stderr, "verify-user") {
@@ -339,9 +366,84 @@ func TestMcpInitPartialFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(dir, 0o700) })
 	opts, _ := initOptions("secret12", "")
-	_, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "codex", "--verify-user", "admin", "--data-dir", dataDir, "--json")
+	_, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "codex", "--verify-user", "admin", "--url", targetMaster(t), "--data-dir", dataDir, "--json")
 	e := decodeError(t, stderr)
 	if code != v1.ExitPartialFailure || e.Code != v1.CodePartialFailure || e.State["token"] != issuedToken || e.State["snippet"] == nil || master.count() != 1 {
 		t.Fatalf("partial_failure：%d %+v", code, e)
+	}
+}
+
+// 写进配置的地址先核对：连不上、不是 Satchel 的在签发之前停下；签发后那里不认这把令牌是 partial_failure，不写配置、不给明文。
+func TestMcpInitChecksTarget(t *testing.T) {
+	home, _ := runtimeHome(t)
+	dataDir, master := startSocketMaster(t)
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	dead := "http://" + ln.Addr().String()
+	ln.Close()
+	notSatchel := httptest.NewServer(http.NotFoundHandler())
+	defer notSatchel.Close()
+	for _, tc := range []struct {
+		url  string
+		code v1.Code
+	}{{dead, v1.CodeUnavailable}, {notSatchel.URL, v1.CodeConfig}} {
+		opts, fp := initOptions("secret12", "")
+		_, stderr, _ := runWith(t, opts, "mcp", "init", "--runtime", "hermes", "--verify-user", "admin", "--url", tc.url, "--data-dir", dataDir, "--json")
+		if e := decodeError(t, stderr); e.Code != tc.code || !strings.Contains(e.Reason, "没有签发令牌") || len(fp.labels) != 0 || master.count() != 0 {
+			t.Fatalf("%s：%+v %v", tc.url, e, fp.labels)
+		}
+	}
+	// 目标上是另一台主控：认得出令牌格式，但这把令牌在那里不是 id 42。
+	other, _ := fakeMaster(t, map[string]v1.Identity{issuedToken: tokenIdentity(7, v1.ScopeRead)})
+	opts, _ := initOptions("secret12", "")
+	_, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "hermes", "--verify-user", "admin", "--url", other.URL, "--data-dir", dataDir, "--json")
+	e := decodeError(t, stderr)
+	if code != v1.ExitPartialFailure || !strings.Contains(e.Next, "token revoke 42") || strings.Contains(stderr, issuedToken) || master.count() != 1 {
+		t.Fatalf("目标不认这把令牌：%d %+v", code, e)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hermes")); !os.IsNotExist(err) {
+		t.Fatal("核对不过不该写配置")
+	}
+}
+
+// Claude Code 已经登记了同样的垫片就不再 remove / add；登记不同时 add 失败，把原来的登记交还。
+func TestMcpInitClaudeRegistration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("假 claude 是 shell 脚本")
+	}
+	home, claudeLog := runtimeHome(t)
+	dataDir, _ := startSocketMaster(t)
+	target := targetMaster(t)
+	exe, _ := os.Executable()
+	exe, _ = filepath.EvalSymlinks(exe)
+	same := `{"mcpServers":{"satchel":{"type":"stdio","command":` + string(jsonString(exe)) + `,"args":["mcp","stdio"],"env":{}}}}`
+	put(t, filepath.Join(home, ".claude.json"), same)
+	opts, _ := initOptions("secret12", "")
+	stdout, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "claude-code", "--verify-user", "admin", "--url", target, "--data-dir", dataDir, "--json")
+	if code != 0 {
+		t.Fatalf("同样的登记：%d %s", code, stderr)
+	}
+	if logged, _ := os.ReadFile(claudeLog); len(logged) != 0 || !strings.Contains(stdout, "没有重新登记") {
+		t.Fatalf("同样的登记不该再跑 claude：%q %s", logged, stdout)
+	}
+	previous := `{"type":"stdio","command":"/old/satchel","args":["mcp","stdio"],"env":{}}`
+	put(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"satchel":`+previous+`}}`)
+	t.Setenv("CLAUDE_FAIL_ADD", "1")
+	opts, _ = initOptions("secret12", "")
+	_, stderr, code = runWith(t, opts, "mcp", "init", "--runtime", "claude-code", "--verify-user", "admin", "--url", target, "--data-dir", dataDir, "--json")
+	e := decodeError(t, stderr)
+	if code != v1.ExitPartialFailure || e.State["previous_registration"] != previous || !strings.Contains(e.Next, "claude mcp add-json") {
+		t.Fatalf("add 失败应当交还原来的登记：%d %+v", code, e)
+	}
+	// 写 settings.json 就失败了（remove 没跑）：登记还在，不交还、也不说它被删了。
+	if os.Geteuid() != 0 {
+		dir := filepath.Join(home, ".claude")
+		put(t, filepath.Join(dir, "settings.json"), `{}`)
+		os.Chmod(dir, 0o500)
+		t.Cleanup(func() { os.Chmod(dir, 0o700) })
+		opts, _ = initOptions("secret12", "")
+		_, stderr, code = runWith(t, opts, "mcp", "init", "--runtime", "claude-code", "--verify-user", "admin", "--url", target, "--data-dir", dataDir, "--json")
+		if e := decodeError(t, stderr); code != v1.ExitPartialFailure || e.State["previous_registration"] != nil || strings.Contains(e.Next, "add-json") {
+			t.Fatalf("remove 没跑时不该交还登记：%d %+v", code, e)
+		}
 	}
 }

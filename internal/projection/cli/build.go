@@ -120,11 +120,23 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 			p := page
 			inv.Page = &p
 		}
-		runner, err := runnerFor(cmd.Context(), c, opts, o)
+		runner, conn, err := runnerFor(cmd.Context(), c, opts, o)
 		if err != nil {
 			return err
 		}
 		if !opts.ServerSide && c.Class != command.ClassLocal {
+			// 读终端之前：人类专属命令只有经本机 socket、不带令牌才验得过，别的连法直接拒绝，不把密码发出去；
+			// 终端里读的密码要经明文 HTTP 发往别的机器时先提示（带令牌时 Connect 已经提示过；输出是 JSON 时不提示）。
+			if conn != nil {
+				if c.HumanOnly {
+					if err := humanReachable(c.Name(), *conn); err != nil {
+						return err
+					}
+				}
+				if conn.Token == "" && hasPasswordFlag(c) {
+					plaintextWarning(cmd.Context(), conn.Server, "终端里读的密码会")
+				}
+			}
 			// 密码类 flag 从终端读两遍（新密钥），人类专属命令再读当场验证的密码与可选的验证码。
 			if err := readPasswords(c, inv, opts); err != nil {
 				return err
@@ -152,19 +164,29 @@ func confirmHint(c *command.Command) string {
 }
 
 // runnerFor 决定一条经主控的命令交给谁执行：有 Remote 执行器（MCP 的进程内执行链、测试）用它，否则按本次的连法
-// （flag、环境变量、登录文件）建客户端。本地命令与本机作答的离线命令返回 nil。连法在读终端之前解析，配错了不必先输密码。
-func runnerFor(ctx context.Context, c *command.Command, opts Options, o *options) (command.Runner, error) {
+// （flag、环境变量、登录文件）建客户端，并交回这个连法。本地命令与本机作答的离线命令返回 nil。
+// 连法在读终端之前解析，配错了不必先输密码。
+func runnerFor(ctx context.Context, c *command.Command, opts Options, o *options) (command.Runner, *Connection, error) {
 	if c.Class == command.ClassLocal || (c.Offline && !opts.ServerSide) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if opts.Remote != nil {
-		return opts.Remote(o.dataDir), nil
+		return opts.Remote(o.dataDir), nil, nil
 	}
 	conn, err := Connect(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return NewClient(opts.Table, conn), nil
+	return NewClient(opts.Table, conn), &conn, nil
+}
+
+func hasPasswordFlag(c *command.Command) bool {
+	for _, f := range c.Flags {
+		if f.Type == command.TypePassword {
+			return true
+		}
+	}
+	return false
 }
 
 // execute 决定一条命令在哪里跑：本地命令调 Local 里的处理函数（除了会连主控的几条，显式给了 --server / --token 是用法错误），

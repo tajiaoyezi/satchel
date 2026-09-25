@@ -64,10 +64,32 @@ func TestRuntimeCodexShapes(t *testing.T) {
 			}},
 		{"已有 satchel 块与 tools 子表", "[mcp_servers.satchel]\nurl = \"http://old/mcp\"\nstartup_timeout_sec = 20\n\n# tools\n[mcp_servers.satchel.tools.satchel_run]\napproval_mode = \"approve\"\n",
 			func(t *testing.T, after string) {
-				if strings.Contains(after, "old") || strings.Contains(after, "startup_timeout_sec") || !strings.Contains(after, "# tools\n[mcp_servers.satchel.tools.satchel_run]\napproval_mode = \"approve\"") {
-					t.Errorf("satchel 块整块替换、tools 子表与它上面的注释不动：\n%s", after)
+				want := "[mcp_servers.satchel]\nurl = \"https://panel.example.com/mcp\"\nhttp_headers = { Authorization = \"Bearer " + testToken + "\" }\nstartup_timeout_sec = 20\n\n# tools\n[mcp_servers.satchel.tools.satchel_run]\napproval_mode = \"approve\"\n"
+				if !strings.HasPrefix(after, want) {
+					t.Errorf("只换 url、补 http_headers，别的键与 tools 子表不动：\n%s", after)
 				}
 			}},
+		{"用户关掉与收窄的设置保留", "[mcp_servers.satchel]\nurl = \"http://127.0.0.1:12889/mcp\"\nenabled = false\ndisabled_tools = [\"satchel_run\"]\nrequired = true\n",
+			func(t *testing.T, after string) {
+				for _, want := range []string{"enabled = false", `disabled_tools = ["satchel_run"]`, "required = true"} {
+					if !strings.Contains(after, want) {
+						t.Errorf("应当保留 %q：\n%s", want, after)
+					}
+				}
+			}},
+		{"http_headers 内联表并进 Authorization", "[mcp_servers.satchel]\nurl = \"http://old/mcp\"\nhttp_headers = { \"X-Env\" = \"prod\", Authorization = \"Bearer old\" } # h\n",
+			func(t *testing.T, after string) {
+				if !strings.Contains(after, `http_headers = { X-Env = "prod", Authorization = "Bearer `+testToken+`" } # h`) {
+					t.Errorf("别的头与注释保留：\n%s", after)
+				}
+			}},
+		{"http_headers 子表", "[mcp_servers.satchel]\nurl = \"http://old/mcp\"\n\n[mcp_servers.satchel.http_headers]\nX-Env = \"prod\"\n",
+			func(t *testing.T, after string) {
+				if !strings.Contains(after, "[mcp_servers.satchel.http_headers]\nX-Env = \"prod\"\nAuthorization = \"Bearer "+testToken+"\"") || strings.Count(after, "http_headers") != 1 {
+					t.Errorf("子表里逐键追加，不另写内联表：\n%s", after)
+				}
+			}},
+		{"只有 http_headers 子表", "[mcp_servers.satchel.http_headers]\nX-Env = \"prod\"\n", nil},
 		{"只有 tools 子表", "[mcp_servers.satchel.tools.satchel_run]\napproval_mode = \"approve\"\n", nil},
 		{"内联的 set 合并", "[shell_environment_policy]\nset = { FOO = \"1\", SATCHEL_TOKEN = \"old\" } # keep\n",
 			func(t *testing.T, after string) {
@@ -117,6 +139,9 @@ func TestRuntimeCodexShapes(t *testing.T) {
 		{"filters 里的 include 不放行", "[shell_environment_policy.filters]\n\"PATH\" = \"include\"\n", "filters"},
 		{"mcp_servers 写成内联表", "mcp_servers = { docs = { url = \"https://docs.example/mcp\" } }\n", "内联表或点号键"},
 		{"satchel 写成点号键", "[mcp_servers]\nsatchel.url = \"http://old/mcp\"\n", "不是用 [mcp_servers.satchel] 表头写的"},
+		{"satchel 是 stdio 写法", "[mcp_servers.satchel]\ncommand = \"satchel\"\nargs = [\"mcp\", \"stdio\"]\n", "stdio 写法"},
+		{"配了 bearer_token_env_var", "[mcp_servers.satchel]\nurl = \"http://old/mcp\"\nbearer_token_env_var = \"SATCHEL_TOKEN\"\n", "bearer_token_env_var"},
+		{"http_headers 写成点号键", "[mcp_servers.satchel]\nhttp_headers.Authorization = \"Bearer old\"\n", "点号键"},
 		{"policy 写成点号键", "shell_environment_policy.inherit = \"all\"\n", "内联表或点号键"},
 		{"set 跨行（TOML 1.0 不许，照样停下）", "[shell_environment_policy]\nset = {\n  FOO = \"1\" }\n", "不是合法的 TOML"},
 		{"set 的值不是字符串", "[shell_environment_policy]\nset = { FOO = 1 }\n", "不是字符串"},
@@ -174,11 +199,13 @@ func TestRuntimeHermes(t *testing.T) {
 		t.Fatalf("没有文件时新建：%v", err)
 	}
 	for why, content := range map[string]string{
-		"不是合法的 YAML":           "a: [\n",
-		"顶层不是映射":               "- a\n- b\n",
-		"terminal 不是映射":        "terminal: local\n",
-		"env_passthrough 不是列表": "terminal:\n  env_passthrough: FOO\n",
-		"多个 YAML 文档":           "a: 1\n---\nb: 2\n",
+		"不是合法的 YAML":                       "a: [\n",
+		"顶层不是映射":                           "- a\n- b\n",
+		"terminal 不是映射":                    "terminal: local\n",
+		"env_passthrough 不是列表":             "terminal:\n  env_passthrough: FOO\n",
+		"多个 YAML 文档":                       "a: 1\n---\nb: 2\n",
+		"stdio 写法":                         "mcp_servers:\n  satchel:\n    command: satchel\n    args: [mcp, stdio]\n",
+		"mcp_servers.satchel.headers 不是映射": "mcp_servers:\n  satchel:\n    headers: x\n",
 	} {
 		e := testRuntimeEnv(t)
 		put(t, filepath.Join(e.hermesHome, hermesConfigFile), content)
@@ -225,4 +252,46 @@ func TestRuntimeClaudeSettings(t *testing.T) {
 	noClaude.lookPath = func(string) (string, error) { return "", errors.New("not found") }
 	_, err = planClaudeCode(noClaude, testURL, testToken)
 	wantUnsupported(t, err, "找不到 claude")
+}
+
+// Hermes 的 mcp_servers.satchel 里用户写的别的键（enabled、timeout、trust、tools、别的头）原样保留，只换 url 与 Authorization；
+// enabled 是 false 时提示接入后仍是停用的。
+func TestRuntimeHermesKeepsUserSettings(t *testing.T) {
+	env := testRuntimeEnv(t)
+	put(t, filepath.Join(env.hermesHome, hermesConfigFile), `mcp_servers:
+  docs:
+    url: https://docs.example/mcp
+  satchel:
+    url: https://old.example/mcp
+    enabled: false
+    timeout: 15
+    trust: untrusted
+    headers:
+      Authorization: "Bearer ${SATCHEL_TOKEN}"
+      X-Custom: keep-me
+    tools:
+      include: [satchel_explain]
+`)
+	plan, err := planHermes(env, testURL, testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tree map[string]any
+	if err := yaml.Unmarshal(plan.edits[1].after, &tree); err != nil {
+		t.Fatal(err)
+	}
+	srv := yamlDig(tree, "mcp_servers", "satchel").(map[string]any)
+	headers := srv["headers"].(map[string]any)
+	include, _ := yamlDig(srv, "tools", "include").([]any)
+	if srv["url"] != testURL+"/mcp" || srv["enabled"] != false || srv["timeout"] != 15 || srv["trust"] != "untrusted" ||
+		headers["X-Custom"] != "keep-me" || headers["Authorization"] != hermesAuthorization || len(include) != 1 || include[0] != "satchel_explain" {
+		t.Fatalf("用户的设置应当原样保留：%v", srv)
+	}
+	if yamlDig(tree, "mcp_servers", "docs", "url") != "https://docs.example/mcp" {
+		t.Fatal("别的服务器不动")
+	}
+	notes := strings.Join(plan.notes, "\n")
+	if !strings.Contains(notes, "enabled 是 false") {
+		t.Fatalf("应当提示仍是停用的：%v", plan.notes)
+	}
 }

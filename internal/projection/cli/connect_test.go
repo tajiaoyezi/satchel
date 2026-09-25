@@ -75,7 +75,7 @@ func (l *masterLog) count() int {
 	return len(l.auths)
 }
 
-// fakeMaster 是 TCP 上的假主控：whoami 按 Authorization 头回身份，tokens 里没有的令牌与不带令牌都是 401。
+// fakeMaster 是 TCP 上的假主控：healthz 回 ok；whoami 按 Authorization 头回身份，tokens 里没有的令牌与不带令牌都是 401。
 func fakeMaster(t *testing.T, tokens map[string]v1.Identity) (*httptest.Server, *masterLog) {
 	t.Helper()
 	log := &masterLog{}
@@ -85,6 +85,10 @@ func fakeMaster(t *testing.T, tokens map[string]v1.Identity) (*httptest.Server, 
 		log.paths = append(log.paths, r.URL.Path)
 		log.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/api/v1/healthz") {
+			_, _ = w.Write([]byte(`{"apiVersion":"` + v1.APIVersion + `","status":"ok"}`))
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/api/v1/whoami") {
 			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(v1.New(v1.CodeNotFound, "没有这个路径"))
@@ -277,35 +281,94 @@ func TestRemoteCLI(t *testing.T) {
 
 func TestPlaintextWarning(t *testing.T) {
 	cases := []struct {
-		conn Connection
-		warn bool
+		server string
+		warn   bool
 	}{
-		{Connection{Server: "http://10.0.0.5:12889", Token: "sat_x"}, true},
-		{Connection{Server: "http://panel.example.com/sub", Token: "sat_x"}, true},
-		{Connection{Server: "http://10.0.0.5:12889"}, false},
-		{Connection{Server: "https://panel.example.com", Token: "sat_x"}, false},
-		{Connection{Server: "http://127.0.0.1:12889", Token: "sat_x"}, false},
-		{Connection{Server: "http://127.8.0.1:12889", Token: "sat_x"}, false},
-		{Connection{Server: "http://[::1]:12889", Token: "sat_x"}, false},
-		{Connection{Server: "http://LocalHost:12889", Token: "sat_x"}, false},
-		{Connection{Token: "sat_x"}, false},
+		{"http://10.0.0.5:12889", true},
+		{"http://panel.example.com/sub", true},
+		{"https://panel.example.com", false},
+		{"http://127.0.0.1:12889", false},
+		{"http://127.8.0.1:12889", false},
+		{"http://[::1]:12889", false},
+		{"http://LocalHost:12889", false},
+		{"", false},
 	}
 	for _, tc := range cases {
 		var buf bytes.Buffer
-		warnPlaintext(&buf, tc.conn)
+		warnPlaintext(&buf, tc.server, "令牌会")
 		if got := buf.Len() > 0; got != tc.warn {
-			t.Errorf("%+v：提示 %v，想要 %v（%s）", tc.conn, got, tc.warn, buf.String())
+			t.Errorf("%q：提示 %v，想要 %v（%s）", tc.server, got, tc.warn, buf.String())
 		}
-		if tc.warn && strings.Count(buf.String(), "\n") != 1 {
+		if tc.warn && (strings.Count(buf.String(), "\n") != 1 || !strings.Contains(buf.String(), "令牌会经明文 HTTP")) {
 			t.Errorf("提示应当恰好一行：%q", buf.String())
 		}
 	}
-	// Connect 解析完连法就提示，写到本次执行的 stderr。
+	// Connect 只在带令牌时提示，写到本次执行的 stderr；输出是 JSON 时不提示（stderr 只留给四字段错误）。
 	isolateHome(t)
-	var buf bytes.Buffer
-	ctx := withStderr(withConnFlags(context.Background(), connFlags{server: "http://10.0.0.5:12889", serverSet: true, token: "sat_x", tokenSet: true}), &buf)
-	if _, err := Connect(ctx); err != nil || !strings.Contains(buf.String(), "10.0.0.5:12889") || strings.Count(buf.String(), "\n") != 1 {
-		t.Fatalf("connect 应当提示一行：%v %q", err, buf.String())
+	withToken := connFlags{server: "http://10.0.0.5:12889", serverSet: true, token: "sat_x", tokenSet: true}
+	for _, tc := range []struct {
+		flags  connFlags
+		asJSON bool
+		warn   bool
+	}{
+		{withToken, false, true},
+		{withToken, true, false},
+		{connFlags{server: "http://10.0.0.5:12889", serverSet: true}, false, false},
+	} {
+		var buf bytes.Buffer
+		ctx := withStderr(withConnFlags(context.WithValue(context.Background(), jsonOutputKey{}, tc.asJSON), tc.flags), &buf)
+		if _, err := Connect(ctx); err != nil || (buf.Len() > 0) != tc.warn {
+			t.Fatalf("%+v json=%v：%v %q", tc.flags, tc.asJSON, err, buf.String())
+		}
+	}
+}
+
+// 人类专属命令经远程主控或带着令牌时，在读终端之前就拒绝（human_required），密码与验证码不发出去；
+// 终端里读的密码（如 setup init）要经明文 HTTP 发往别的机器时先提示一行。
+func TestHumanOnlyNeedsLocalSocket(t *testing.T) {
+	isolateHome(t)
+	srv, log := fakeMaster(t, map[string]v1.Identity{"sat_good": tokenIdentity(7, v1.ScopeRead, v1.ScopeOperate)})
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  map[string]string
+	}{
+		{"远程不带令牌", []string{"--server", srv.URL, "token", "create", "--name", "x", "--verify-user", "admin"}, nil},
+		{"远程带令牌", []string{"--server", srv.URL, "--token", "sat_good", "account", "set-password"}, nil},
+		{"环境变量给的远程", []string{"settings", "master-url", "set", "--url", "https://a.example", "--resource-version", "1"}, map[string]string{EnvServer: srv.URL}},
+		{"本机带令牌", []string{"token", "revoke", "3", "--data-dir", shortTempDir(t)}, map[string]string{EnvToken: "sat_good"}},
+	} {
+		for k, v := range tc.env {
+			t.Setenv(k, v)
+		}
+		fp := &fakePrompt{answers: []string{"pw", "123456", "pw", "pw"}}
+		opts := testOptions()
+		opts.Prompt = fp.prompt
+		before := log.count()
+		_, stderr, code := runWith(t, opts, append(tc.args, "--json")...)
+		if e := decodeError(t, stderr); code != v1.ExitHumanRequired || e.Code != v1.CodeHumanRequired || !strings.Contains(e.Reason, "没有问密码") {
+			t.Errorf("%s：%d %+v", tc.name, code, e)
+		}
+		if len(fp.labels) != 0 || log.count() != before {
+			t.Errorf("%s：不该问密码（%v），也不该发请求", tc.name, fp.labels)
+		}
+		for k := range tc.env {
+			os.Unsetenv(k)
+		}
+	}
+	// setup init 经明文 HTTP 发往别的机器：问密码之前提示（假终端不给答案，读密码就失败，不会真的去连）；
+	// --json 时不提示，stderr 恰好是四字段错误。
+	fp := &fakePrompt{}
+	opts := testOptions()
+	opts.Prompt = fp.prompt
+	args := []string{"--server", "http://10.255.255.1:9", "setup", "init", "--username", "admin"}
+	_, stderr, _ := runWith(t, opts, args...)
+	if !strings.HasPrefix(stderr, "提示：终端里读的密码会经明文 HTTP 发往 10.255.255.1:9") || len(fp.labels) != 1 {
+		t.Fatalf("应当先提示再问密码：%q %v", stderr, fp.labels)
+	}
+	_, stderr, _ = runWith(t, opts, append(args, "--json")...)
+	if e := decodeError(t, stderr); e.Code != v1.CodeBadRequest || strings.Contains(stderr, "提示") {
+		t.Fatalf("--json 时 stderr 只有四字段错误：%q", stderr)
 	}
 }
 

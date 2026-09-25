@@ -82,7 +82,7 @@ func loginCommand(ctx context.Context, _ *command.Invocation) (any, error) {
 		}
 	}
 	conn := Connection{Server: server, Token: token}
-	warnPlaintext(stderrOf(ctx), conn)
+	plaintextWarning(ctx, server, "令牌会")
 	res, err := NewClient(tableOf(ctx), conn).Run(ctx, &command.Invocation{Path: []string{"whoami"}})
 	if err != nil {
 		return nil, err

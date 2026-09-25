@@ -12,9 +12,10 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Codex（design 第 14 条，notes/runtime-configs.md A1、A3）：$CODEX_HOME/config.toml 里的 [mcp_servers.satchel] 整块归 Satchel
-// （url 加 http_headers 里的 Bearer，已有就整块替换、下面的 tools 子表不动，没有就追加）；三个变量写进 [shell_environment_policy]
-// 的 set（set 在排除规则之后执行，能把被排除的变量加回来）。按行定位表头，改完用 BurntSushi/toml 重新解析做整树比对。
+// Codex（design 第 14 条，notes/runtime-configs.md A1、A3）：$CODEX_HOME/config.toml 的 [mcp_servers.satchel] 里设 url 与
+// http_headers.Authorization（没有这张表就追加一块），块里其余的键原样保留——用户的 enabled、disabled_tools、超时与 tools 子表都不动；
+// 三个变量写进 [shell_environment_policy] 的 set（set 在排除规则之后执行，能把被排除的变量加回来）。
+// 按行定位表头，改完用 BurntSushi/toml 重新解析做整树比对。
 
 const codexVerify = "codex mcp get satchel --json"
 
@@ -23,17 +24,19 @@ func codexNotes() []string {
 		"重启 Codex 后生效",
 		"Codex 0.76 之前的版本默认会滤掉名字含 TOKEN 的变量，这里写的 shell_environment_policy.set 不受影响",
 		"默认的 workspace-write 沙箱不许出网：shell 里的 satchel 可能要你批准联网；MCP 工具走 Codex 自己的连接，不受沙箱影响",
+		"Codex 把受信任（trusted）项目里的 .codex/config.toml 与这里按键合并：项目层只写一个 [mcp_servers.satchel] 的 url，令牌就会随 http_headers 发往那个地址。只把你信任的仓库标为 trusted；仓库里自己配了 mcp_servers.satchel 时先看清它指向哪里",
 		"skills 随 m1-09 交付",
 	}
 }
 
 func codexConfigPath(env runtimeEnv) string { return filepath.Join(env.codexHome, "config.toml") }
 
+func codexURLLine(url string) string { return "url = " + tomlString(url+"/mcp") }
+
+func codexAuth(token string) [][2]string { return [][2]string{{"Authorization", "Bearer " + token}} }
+
 func codexServerBody(url, token string) []string {
-	return []string{
-		"url = " + tomlString(url+"/mcp"),
-		"http_headers = { Authorization = " + tomlString("Bearer "+token) + " }",
-	}
+	return []string{codexURLLine(url), inlineTable("http_headers", codexAuth(token))}
 }
 
 func snippetCodex(env runtimeEnv, url, token string) string {
@@ -67,7 +70,17 @@ func planCodex(env runtimeEnv, url, token string) (*initPlan, error) {
 	if err := checkCodexTree(path, before, after, url, token); err != nil {
 		return nil, err
 	}
-	return &initPlan{edits: []fileEdit{{path: path, before: before, after: after}}, verify: codexVerify, notes: codexNotes()}, nil
+	plan := &initPlan{edits: []fileEdit{{path: path, before: before, after: after, secret: true}}, verify: codexVerify, notes: codexNotes()}
+	srv := tomlTable(tree, "mcp_servers", "satchel")
+	if prev, _ := tomlTable(tree, "shell_environment_policy", "set")[EnvToken].(string); prev != "" && prev != token {
+		plan.notes = append(plan.notes, replacedTokenNote(path))
+	} else if prev, _ := tomlTable(srv, "http_headers")["Authorization"].(string); prev != "" && prev != "Bearer "+token {
+		plan.notes = append(plan.notes, replacedTokenNote(path))
+	}
+	if enabled, ok := srv["enabled"].(bool); ok && !enabled {
+		plan.notes = append(plan.notes, "[mcp_servers.satchel] 里 enabled = false，mcp init 没有改它，接入后仍是停用的；要启用就改成 true")
+	}
+	return plan, nil
 }
 
 // checkCodexIncludes：用户配了 include 过滤（include_only 或 filters 里的 include）且不匹配 SATCHEL_* 时，
@@ -107,24 +120,71 @@ func checkCodexIncludes(file string, tree map[string]any) error {
 	return nil
 }
 
-// setCodexServer 写 [mcp_servers.satchel]：已有就把表头下的键值整段换掉（段尾的空行与注释留着，它们多半属于下一张表），没有就追加。
+// setCodexServer 在 [mcp_servers.satchel] 里设 url 与 http_headers.Authorization，块里其余的键原样保留：url 行就地换掉，
+// http_headers 是单行内联表就并进 Authorization、是 [mcp_servers.satchel.http_headers] 子表就逐键替换或追加，缺的行插在表头下。
+// 没有这张表就在文件末尾追加一块。块是 stdio 写法（有 command）或配了 bearer_token_env_var（Codex 会用它取令牌）时停下。
 func setCodexServer(path string, lines []string, tree map[string]any, url, token string) ([]string, error) {
-	body := codexServerBody(url, token)
-	if h := findHeader(lines, "mcp_servers", "satchel"); h >= 0 {
-		last := lastContent(lines, h+1, nextHeader(lines, h+1))
-		out := append(append(append([]string{}, lines[:h+1]...), body...), lines[last+1:]...)
-		return out, nil
+	existing := tomlTable(tree, "mcp_servers", "satchel")
+	if _, ok := existing["command"]; ok {
+		return nil, unsupportedf(path, "[mcp_servers.satchel] 是 stdio 写法（有 command），mcp init 写的是 HTTP 加 Bearer；删掉这一块后重跑")
 	}
-	if _, ok := tree["mcp_servers"]; ok && !anyHeaderUnder(lines, "mcp_servers") {
-		return nil, unsupportedf(path, "mcp_servers 写成了内联表或点号键，mcp init 只改 [mcp_servers.satchel] 这种写法")
+	if _, ok := existing["bearer_token_env_var"]; ok {
+		return nil, unsupportedf(path, "[mcp_servers.satchel] 配了 bearer_token_env_var，Codex 会用它取令牌，与 mcp init 写的 Authorization 冲突；删掉这个键后重跑")
 	}
-	for k := range tomlTable(tree, "mcp_servers", "satchel") {
-		if k != "tools" {
-			return nil, unsupportedf(path, "mcp_servers.satchel 不是用 [mcp_servers.satchel] 表头写的")
+	h := findHeader(lines, "mcp_servers", "satchel")
+	if h < 0 {
+		if _, ok := tree["mcp_servers"]; ok && !anyHeaderUnder(lines, "mcp_servers") {
+			return nil, unsupportedf(path, "mcp_servers 写成了内联表或点号键，mcp init 只改 [mcp_servers.satchel] 这种写法")
+		}
+		for k := range existing {
+			if k != "tools" && k != "http_headers" {
+				return nil, unsupportedf(path, "mcp_servers.satchel 不是用 [mcp_servers.satchel] 表头写的")
+			}
+		}
+		if _, ok := existing["http_headers"]; ok {
+			// 只有 [mcp_servers.satchel.http_headers] 子表、没有 [mcp_servers.satchel] 表头：并进子表，再补一块只有 url 的表头。
+			s := findHeader(lines, "mcp_servers", "satchel", "http_headers")
+			if s < 0 {
+				return nil, unsupportedf(path, "mcp_servers.satchel.http_headers 的写法不在支持范围内")
+			}
+			return append(withBlankLine(setSubtable(lines, s, codexAuth(token))), "[mcp_servers.satchel]", codexURLLine(url)), nil
+		}
+		return append(withBlankLine(lines), append([]string{"[mcp_servers.satchel]"}, codexServerBody(url, token)...)...), nil
+	}
+	out := append([]string{}, lines...)
+	at, hasURL, hasHeaders := h, false, false // at：缺的行插在它后面（有 url 行就插在 url 行后，否则在表头下）
+	for i := h + 1; i < nextHeader(out, h+1); i++ {
+		key, dotted, ok := lineKey(out[i])
+		switch {
+		case !ok || (key != "url" && key != "http_headers"):
+		case dotted:
+			return nil, unsupportedf(path, "[mcp_servers.satchel] 里的 %s 写成了点号键，mcp init 只改 %s = … 这种写法", key, key)
+		case key == "url":
+			out[i], hasURL, at = indentOf(out[i])+codexURLLine(url), true, i
+		default:
+			merged, err := mergeInlineTable(path, out[i], "http_headers", "mcp_servers.satchel.http_headers", codexAuth(token))
+			if err != nil {
+				return nil, err
+			}
+			out[i], hasHeaders = merged, true
 		}
 	}
-	return append(withBlankLine(lines), append([]string{"[mcp_servers.satchel]"}, body...)...), nil
+	var insert []string
+	if !hasURL {
+		insert = append(insert, codexURLLine(url))
+	}
+	subtable := findHeader(out, "mcp_servers", "satchel", "http_headers") >= 0
+	if !hasHeaders && !subtable {
+		insert = append(insert, inlineTable("http_headers", codexAuth(token)))
+	}
+	out = append(append(append([]string{}, out[:at+1]...), insert...), out[at+1:]...)
+	if !hasHeaders && subtable {
+		out = setSubtable(out, findHeader(out, "mcp_servers", "satchel", "http_headers"), codexAuth(token))
+	}
+	return out, nil
 }
+
+func indentOf(line string) string { return line[:len(line)-len(strings.TrimLeft(line, " \t"))] }
 
 // setCodexPolicy 把变量并进 [shell_environment_policy] 的 set：表不存在就追加；有表没 set 就在表头下插一行；
 // set 是单行内联表就按原顺序合并改写那一行；set 是 [shell_environment_policy.set] 子表就逐键替换或追加。其余写法停下。
@@ -144,7 +204,7 @@ func setCodexPolicy(path string, lines []string, tree map[string]any, vars [][2]
 		if dotted {
 			return nil, unsupportedf(path, "shell_environment_policy.set 写成了点号键，mcp init 只改内联表或 [shell_environment_policy.set] 子表")
 		}
-		merged, err := mergeInlineSet(path, lines[i], vars)
+		merged, err := mergeInlineTable(path, lines[i], "set", "shell_environment_policy.set", vars)
 		if err != nil {
 			return nil, err
 		}
@@ -161,33 +221,34 @@ func setCodexPolicy(path string, lines []string, tree map[string]any, vars [][2]
 	return append(append(append([]string{}, lines[:h+1]...), inlineTable("set", vars)), lines[h+1:]...), nil
 }
 
-// mergeInlineSet 把变量并进 set = { … } 这一行：原有的键按原顺序保留，同名的就地换值，没有的追加；行尾注释保留。
-func mergeInlineSet(path, line string, vars [][2]string) (string, error) {
+// mergeInlineTable 把键值并进 key = { … } 这一行（what 是报错里的全名）：原有的键按原顺序保留，同名的就地换值，
+// 没有的追加；缩进与行尾注释保留。值都得是字符串，跨行、嵌套与别的写法停下。
+func mergeInlineTable(path, line, key, what string, vars [][2]string) (string, error) {
 	eq := strings.Index(line, "=")
 	table, rest, ok := splitInlineTable(line[eq+1:])
 	if !ok {
-		return "", unsupportedf(path, "shell_environment_policy.set 不是写在一行里的内联表")
+		return "", unsupportedf(path, "%s 不是写在一行里的内联表", what)
 	}
 	if rest != "" && !strings.HasPrefix(rest, "#") {
-		return "", unsupportedf(path, "shell_environment_policy.set 那一行在内联表后面还有别的内容")
+		return "", unsupportedf(path, "%s 那一行在内联表后面还有别的内容", what)
 	}
 	var m map[string]any
-	md, err := toml.Decode("set = "+table, &m)
+	md, err := toml.Decode(key+" = "+table, &m)
 	if err != nil {
-		return "", unsupportedf(path, "shell_environment_policy.set 解析不了（%v）", err)
+		return "", unsupportedf(path, "%s 解析不了（%v）", what, err)
 	}
-	set := tomlTable(m, "set")
+	values := tomlTable(m, key)
 	var pairs [][2]string
 	for _, k := range md.Keys() {
-		if len(k) != 2 || k[0] != "set" {
+		if len(k) != 2 || k[0] != key {
 			if len(k) > 2 {
-				return "", unsupportedf(path, "shell_environment_policy.set 里有嵌套的表")
+				return "", unsupportedf(path, "%s 里有嵌套的表", what)
 			}
 			continue
 		}
-		v, ok := set[k[1]].(string)
+		v, ok := values[k[1]].(string)
 		if !ok {
-			return "", unsupportedf(path, "shell_environment_policy.set.%s 的值不是字符串", k[1])
+			return "", unsupportedf(path, "%s.%s 的值不是字符串", what, k[1])
 		}
 		pairs = append(pairs, [2]string{k[1], v})
 	}
@@ -202,15 +263,15 @@ func mergeInlineSet(path, line string, vars [][2]string) (string, error) {
 			pairs = append(pairs, kv)
 		}
 	}
-	indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-	out := indent + inlineTable("set", pairs)
+	out := indentOf(line) + inlineTable(key, pairs)
 	if rest != "" {
 		out += " " + rest
 	}
 	return out, nil
 }
 
-// setSubtable 在 [shell_environment_policy.set] 子表里逐键替换，没有的追加在子表最后一个键值之后。
+// setSubtable 在一张子表（[shell_environment_policy.set] 或 [mcp_servers.satchel.http_headers]）里逐键替换，
+// 没有的追加在子表最后一个键值之后。
 func setSubtable(lines []string, s int, vars [][2]string) []string {
 	end := nextHeader(lines, s+1)
 	out := append([]string{}, lines...)
@@ -256,16 +317,18 @@ func checkCodexTree(path string, before, after []byte, url, token string) error 
 	return nil
 }
 
-// stripCodex 去掉 Satchel 的键：mcp_servers.satchel 除 tools 以外的键、set 里的三个变量；因此变空的表一并去掉。
+// stripCodex 去掉 Satchel 的键：mcp_servers.satchel 的 url 与 http_headers.Authorization、set 里的三个变量；因此变空的表一并去掉。
 func stripCodex(m map[string]any) map[string]any {
 	if m == nil {
 		m = map[string]any{}
 	}
 	if servers := tomlTable(m, "mcp_servers"); servers != nil {
 		if s := tomlTable(servers, "satchel"); s != nil {
-			for k := range s {
-				if k != "tools" {
-					delete(s, k)
+			delete(s, "url")
+			if headers := tomlTable(s, "http_headers"); headers != nil {
+				delete(headers, "Authorization")
+				if len(headers) == 0 {
+					delete(s, "http_headers")
 				}
 			}
 			if len(s) == 0 {

@@ -109,8 +109,25 @@ func Connect(ctx context.Context) (Connection, error) {
 	if err != nil {
 		return Connection{}, err
 	}
-	warnPlaintext(stderrOf(ctx), conn)
+	if conn.Token != "" {
+		plaintextWarning(ctx, conn.Server, "令牌会")
+	}
 	return conn, nil
+}
+
+// humanReachable 报告经这个连法能不能做人类专属操作：只有经本机 socket、不带令牌（本机管理员）时当场验证才可能通过。
+// 带令牌的一律不能做；远程主控上 CLI 没有人的身份（TCP 上只认令牌，CLI 不带会话）。在读终端之前调它，
+// 免得把密码与第二因素发给一个不可能接受它们的地方。
+func humanReachable(what string, conn Connection) error {
+	switch {
+	case conn.Token != "":
+		return v1.Newf(v1.CodeHumanRequired, "%s 是只有人能做的操作，CLI 现在带着令牌，令牌一律不能做；没有问密码", what).
+			WithNext("在主控本机不带令牌执行（去掉 --token 与环境变量 " + EnvToken + "，登录过的先 satchel logout），或在网页上操作")
+	case conn.Server != "":
+		return v1.Newf(v1.CodeHumanRequired, "%s 是只有人能做的操作，远程 CLI 没有人的身份（TCP 上只认令牌）；没有问密码", what).
+			WithNext("在主控本机经 socket 执行（去掉 --server 与环境变量 " + EnvServer + "，登录过的先 satchel logout），或在网页上操作")
+	}
+	return nil
 }
 
 // resolveConnection 按第 05 章的顺序取 server 与令牌：根 flag、环境变量、登录文件，各取第一个有的。
@@ -205,12 +222,23 @@ func checkToken(tok string) error {
 	return nil
 }
 
-// warnPlaintext 在令牌经明文 HTTP 发往回环以外的地址时往 w 写一行提示，不阻塞。
-func warnPlaintext(w io.Writer, c Connection) {
-	if c.Token == "" || !strings.HasPrefix(c.Server, "http://") {
+type jsonOutputKey struct{}
+
+// plaintextWarning 在凭据要经明文 HTTP 发往回环以外的地址时往本次执行的 stderr 写一行提示；输出是 JSON
+// （--json 或 SATCHEL_OUTPUT=json）时不写：那时 stderr 只留给四字段错误，脚本能直接当 JSON 解析。
+func plaintextWarning(ctx context.Context, server, what string) {
+	if asJSON, _ := ctx.Value(jsonOutputKey{}).(bool); asJSON {
 		return
 	}
-	u, err := url.Parse(c.Server)
+	warnPlaintext(stderrOf(ctx), server, what)
+}
+
+// warnPlaintext 在凭据要经明文 HTTP 发往回环以外的地址时往 w 写一行提示，不阻塞。what 是提示的主语，如「令牌会」。
+func warnPlaintext(w io.Writer, server, what string) {
+	if !strings.HasPrefix(server, "http://") {
+		return
+	}
+	u, err := url.Parse(server)
 	if err != nil {
 		return
 	}
@@ -221,7 +249,7 @@ func warnPlaintext(w io.Writer, c Connection) {
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 		return
 	}
-	fmt.Fprintf(w, "提示：令牌经明文 HTTP 发往 %s，同一网络上的人能截获它；请给主控配上 HTTPS\n", u.Host)
+	fmt.Fprintf(w, "提示：%s经明文 HTTP 发往 %s，同一网络上的人能截获；请给主控配上 HTTPS\n", what, u.Host)
 }
 
 // loginRecord 是登录文件的内容。

@@ -108,7 +108,9 @@ func newRoot(opts Options) (*cobra.Command, *options) {
 			}
 			o.dataDir = db.DataDir(o.dataDir)
 			o.conn.serverSet, o.conn.tokenSet = cmd.Flags().Changed("server"), cmd.Flags().Changed("token")
-			cmd.SetContext(withConnFlags(context.WithValue(cmd.Context(), dataDirKey{}, o.dataDir), o.conn))
+			ctx := context.WithValue(cmd.Context(), dataDirKey{}, o.dataDir)
+			ctx = context.WithValue(ctx, jsonOutputKey{}, o.json)
+			cmd.SetContext(withConnFlags(ctx, o.conn))
 		},
 	}
 	root.PersistentFlags().BoolVar(&o.json, "json", false, "以 JSON 输出（等价于环境变量 SATCHEL_OUTPUT=json）")

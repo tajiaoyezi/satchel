@@ -49,11 +49,60 @@ func planClaudeCode(env runtimeEnv, url, token string) (*initPlan, error) {
 	if err := checkJSONEnv(path, before, after, vars); err != nil {
 		return nil, err
 	}
-	return &initPlan{
-		edits:    []fileEdit{{path: path, before: before, after: after}},
+	plan := &initPlan{
+		edits:    []fileEdit{{path: path, before: before, after: after, secret: true}},
 		commands: claudeCommands(claude, env.executable),
 		verify:   claudeVerify, notes: claudeNotes(),
-	}, nil
+	}
+	var old struct {
+		Env map[string]any `json:"env"`
+	}
+	if json.Unmarshal(before, &old) == nil {
+		if prev, _ := old.Env[EnvToken].(string); prev != "" && prev != token {
+			plan.notes = append(plan.notes, replacedTokenNote(path))
+		}
+	}
+	// 已经登记了同样的垫片就不再 remove / add（重跑 mcp init 换令牌时不碰登记）；否则记下原有的登记，add 失败时交还。
+	switch prev := claudeRegistration(env); {
+	case prev == nil:
+	case sameClaudeRegistration(prev, env.executable):
+		plan.commands = nil
+		plan.notes = append(plan.notes, "Claude Code 里已经登记了同样的 satchel（"+env.executable+" mcp stdio），没有重新登记")
+	default:
+		plan.previous = string(prev)
+	}
+	return plan, nil
+}
+
+// claudeRegistration 读 Claude Code 在用户级登记的 satchel（~/.claude.json 顶层 mcpServers.satchel 的原文）；
+// 没有或读不懂返回 nil。只读，不改这个文件（Claude Code 自己频繁改写它）。
+func claudeRegistration(env runtimeEnv) json.RawMessage {
+	raw, err := readOptional(filepath.Join(env.home, ".claude.json"))
+	if err != nil || raw == nil {
+		return nil
+	}
+	var cfg struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return nil
+	}
+	return cfg.MCPServers["satchel"]
+}
+
+// sameClaudeRegistration 报告原有的登记是不是与 mcp init 要登记的一样：stdio、命令是这个 satchel、参数恰好 mcp stdio、没有 env。
+func sameClaudeRegistration(prev json.RawMessage, executable string) bool {
+	var reg struct {
+		Type    string         `json:"type"`
+		Command string         `json:"command"`
+		Args    []string       `json:"args"`
+		Env     map[string]any `json:"env"`
+	}
+	if json.Unmarshal(prev, &reg) != nil {
+		return false
+	}
+	return (reg.Type == "" || reg.Type == "stdio") && reg.Command == executable &&
+		len(reg.Args) == 2 && reg.Args[0] == "mcp" && reg.Args[1] == "stdio" && len(reg.Env) == 0
 }
 
 func snippetClaudeCode(env runtimeEnv, url, token string) string {

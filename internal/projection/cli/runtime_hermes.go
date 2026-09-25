@@ -14,9 +14,10 @@ import (
 )
 
 // Hermes（design 第 14 条，notes/runtime-configs.md B1、B2）：$HERMES_HOME/.env 里设三个变量（Hermes 启动时载入进程环境，
-// 默认的 local 终端能继承）；config.yaml 里设 mcp_servers.satchel（headers.Authorization 写 Bearer ${SATCHEL_TOKEN}，
-// Hermes 从 .env 展开，令牌只在 .env 一处），并把三个变量名并进 terminal.env_passthrough（execute_code 与非本机的终端后端
-// 默认会删掉名字含 TOKEN 的变量）。YAML 经 yaml.v3 的节点树改，注释保留，缩进统一成两格。
+// 默认的 local 终端能继承）；config.yaml 的 mcp_servers.satchel 里设 url 与 headers.Authorization（写 Bearer ${SATCHEL_TOKEN}，
+// Hermes 从 .env 展开，令牌只在 .env 一处），条目里其余的键原样保留（用户的 enabled、timeout、trust、tools 与别的头都不动），
+// 并把三个变量名并进 terminal.env_passthrough（execute_code 与非本机的终端后端默认会删掉名字含 TOKEN 的变量）。
+// YAML 经 yaml.v3 的节点树改，注释保留，缩进统一成两格。
 
 const hermesVerify = "hermes mcp test satchel"
 
@@ -52,10 +53,20 @@ func planHermes(env runtimeEnv, url, token string) (*initPlan, error) {
 	if err := checkHermesConfig(cfgPath, beforeCfg, afterCfg, url); err != nil {
 		return nil, err
 	}
-	return &initPlan{
-		edits:  []fileEdit{{path: envPath, before: beforeEnv, after: afterEnv}, {path: cfgPath, before: beforeCfg, after: afterCfg}},
+	plan := &initPlan{
+		edits:  []fileEdit{{path: envPath, before: beforeEnv, after: afterEnv, secret: true}, {path: cfgPath, before: beforeCfg, after: afterCfg}},
 		verify: hermesVerify, notes: hermesNotes(),
-	}, nil
+	}
+	if prev := parseDotenv(beforeEnv)[EnvToken]; prev != "" && prev != token {
+		plan.notes = append(plan.notes, replacedTokenNote(envPath))
+	}
+	var old map[string]any
+	if yaml.Unmarshal(beforeCfg, &old) == nil {
+		if srv, ok := yamlDig(old, "mcp_servers", "satchel").(map[string]any); ok && srv["enabled"] == false {
+			plan.notes = append(plan.notes, "config.yaml 的 mcp_servers.satchel 里 enabled 是 false，mcp init 没有改它，接入后仍是停用的；要启用就改成 true")
+		}
+	}
+	return plan, nil
 }
 
 func snippetHermes(env runtimeEnv, url, token string) string {
@@ -138,15 +149,24 @@ func setHermesConfig(path string, before []byte, url string) ([]byte, error) {
 		return nil, err
 	}
 	root := doc.Content[0]
-	servers, err := yamlMapping(path, root, "mcp_servers")
+	servers, err := yamlMapping(path, root, "mcp_servers", "mcp_servers")
 	if err != nil {
 		return nil, err
 	}
-	yamlSet(servers, "satchel", yamlMap(
-		"url", yamlString(url+"/mcp"),
-		"headers", yamlMap("Authorization", yamlString(hermesAuthorization)),
-	))
-	terminal, err := yamlMapping(path, root, "terminal")
+	satchel, err := yamlMapping(path, servers, "satchel", "mcp_servers.satchel")
+	if err != nil {
+		return nil, err
+	}
+	if yamlGet(satchel, "command") != nil {
+		return nil, unsupportedf(path, "mcp_servers.satchel 是 stdio 写法（有 command），mcp init 写的是 HTTP 加 Bearer；删掉这一条后重跑")
+	}
+	yamlSet(satchel, "url", yamlString(url+"/mcp"))
+	headers, err := yamlMapping(path, satchel, "headers", "mcp_servers.satchel.headers")
+	if err != nil {
+		return nil, err
+	}
+	yamlSet(headers, "Authorization", yamlString(hermesAuthorization))
+	terminal, err := yamlMapping(path, root, "terminal", "terminal")
 	if err != nil {
 		return nil, err
 	}
@@ -226,29 +246,21 @@ func yamlSet(m *yaml.Node, key string, value *yaml.Node) {
 	m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value)
 }
 
-// yamlMapping 取映射里一个键的值作为映射：没有或是 null 就建一个空映射，是别的东西就停下。
-func yamlMapping(path string, m *yaml.Node, key string) (*yaml.Node, error) {
+// yamlMapping 取映射里一个键的值作为映射：没有或是 null 就建一个空映射，是别的东西就停下（what 是报错里的全名）。
+func yamlMapping(path string, m *yaml.Node, key, what string) (*yaml.Node, error) {
 	v := yamlGet(m, key)
 	if v == nil || (v.Kind == yaml.ScalarNode && v.Tag == "!!null") {
 		v = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 		yamlSet(m, key, v)
 	}
 	if v.Kind != yaml.MappingNode {
-		return nil, unsupportedf(path, "%s 不是映射", key)
+		return nil, unsupportedf(path, "%s 不是映射", what)
 	}
 	return v, nil
 }
 
 func yamlString(s string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: yaml.DoubleQuotedStyle}
-}
-
-func yamlMap(kv ...any) *yaml.Node {
-	m := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	for i := 0; i+1 < len(kv); i += 2 {
-		m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: kv[i].(string)}, kv[i+1].(*yaml.Node))
-	}
-	return m
 }
 
 // checkHermesConfig 是改后的整树比对：mcp_servers.satchel 与 env_passthrough 是要写的样子；去掉它们后改前改后一模一样。
@@ -295,7 +307,8 @@ func yamlDig(m map[string]any, keys ...string) any {
 	return cur
 }
 
-// stripHermes 去掉 mcp_servers.satchel 与 env_passthrough 里的三个变量名；因此变空的键一并去掉。
+// stripHermes 去掉 Satchel 的键：mcp_servers.satchel 的 url 与 headers.Authorization、env_passthrough 里的三个变量名；
+// 因此变空的键一并去掉。
 func stripHermes(m map[string]any) map[string]any {
 	if m == nil {
 		m = map[string]any{}
@@ -303,7 +316,24 @@ func stripHermes(m map[string]any) map[string]any {
 	if v, ok := m["mcp_servers"]; ok {
 		servers, isMap := v.(map[string]any)
 		if isMap {
-			delete(servers, "satchel")
+			if sv, ok := servers["satchel"]; ok {
+				satchel, isMap := sv.(map[string]any)
+				if isMap {
+					delete(satchel, "url")
+					if hv, ok := satchel["headers"]; ok {
+						headers, isMap := hv.(map[string]any)
+						if isMap {
+							delete(headers, "Authorization")
+						}
+						if hv == nil || (isMap && len(headers) == 0) {
+							delete(satchel, "headers")
+						}
+					}
+				}
+				if sv == nil || (isMap && len(satchel) == 0) {
+					delete(servers, "satchel")
+				}
+			}
 		}
 		if v == nil || (isMap && len(servers) == 0) {
 			delete(m, "mcp_servers")
