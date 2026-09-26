@@ -82,7 +82,13 @@ func startWith(t *testing.T, bdb *bun.DB, cfg db.ServeConfig) *harness {
 		t.Fatal(err)
 	}
 	logs := &syncBuffer{}
-	logger := slog.New(slog.NewTextHandler(logs, nil))
+	// 日志同时写进数据目录的日志文件（像 serve 那样），logs list 才读得到。
+	logFile, err := os.OpenFile(filepath.Join(dataDir, db.LogsDir, db.LogFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { logFile.Close() })
+	logger := slog.New(slog.NewTextHandler(io.MultiWriter(logs, logFile), nil))
 	a, err := newApp(dataDir, bdb, logger, cfg)
 	if err != nil {
 		t.Fatal(err)

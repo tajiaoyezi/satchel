@@ -25,9 +25,6 @@ func DefaultLoginLimits() LoginLimits {
 	return LoginLimits{MaxAttempts: 5, Window: time.Hour, Lock: time.Hour, SkipLocalIP: true}
 }
 
-// limiterSweepInterval 是清理登录限流内存表的间隔：条目本来只在同一个键再被访问时才清，换着用户名猜的人会让表一直长。
-const limiterSweepInterval = 10 * time.Minute
-
 // 登录与第二步在安全事件里记的路径（与 REST 的会话入口一致）。
 const (
 	loginPath     = "/api/v1/session"
@@ -163,18 +160,10 @@ func (l *limiter) sweep(now time.Time) {
 	}
 }
 
-// Run 每 10 分钟清一次登录限流的内存表，直到 ctx 取消（随 serve 起停；m1-06 的定时任务接上之后改挂到那里）。
-func (s *Service) Run(ctx context.Context) {
-	t := time.NewTicker(limiterSweepInterval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			s.limiter.sweep(s.now())
-		}
-	}
+// Sweep 清一次登录限流的内存表（login_limit_sweep 任务每 10 分钟调一次）：条目本来只在同一个键再被访问时才清，
+// 换着用户名猜的人会让表一直长。
+func (s *Service) Sweep() {
+	s.limiter.sweep(s.now())
 }
 
 // succeed 清零这个来源 IP 与这个账号的计数（整个登录成功、或当场验证通过时）。

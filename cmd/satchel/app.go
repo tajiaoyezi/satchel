@@ -25,6 +25,7 @@ import (
 	coresecurity "github.com/satchel/satchel/internal/core/security"
 	"github.com/satchel/satchel/internal/core/sessions"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
+	"github.com/satchel/satchel/internal/core/taskruns"
 	coretokens "github.com/satchel/satchel/internal/core/tokens"
 	"github.com/satchel/satchel/internal/core/users"
 	mwaudit "github.com/satchel/satchel/internal/middleware/audit"
@@ -34,9 +35,12 @@ import (
 	"github.com/satchel/satchel/internal/projection/cli"
 	"github.com/satchel/satchel/internal/projection/mcp"
 	"github.com/satchel/satchel/internal/projection/rest"
+	"github.com/satchel/satchel/internal/projection/scheduler"
 	"github.com/satchel/satchel/internal/projection/web"
 	svcaudit "github.com/satchel/satchel/internal/service/audit"
 	"github.com/satchel/satchel/internal/service/auth"
+	svclogs "github.com/satchel/satchel/internal/service/logs"
+	"github.com/satchel/satchel/internal/service/schedule"
 	svcsecurity "github.com/satchel/satchel/internal/service/security"
 	svcsettings "github.com/satchel/satchel/internal/service/settings"
 	svctokens "github.com/satchel/satchel/internal/service/tokens"
@@ -56,18 +60,20 @@ var entryRoutes = []gate.Route{
 	{Pattern: "/", Entry: gate.EntryPanel},
 }
 
-// app 是装配好的主控：执行链、HTTP 处理器与要关的资源。gate、guard、identity 留着给端到端测试换时钟与验证服务。
+// app 是装配好的主控：执行链、HTTP 处理器、内置任务与要关的资源。gate、guard、identity 留着给端到端测试换时钟与验证服务。
 type app struct {
-	table    *command.Table
-	runner   command.Runner
-	handler  http.Handler
-	mounts   []string
-	db       *bun.DB
-	dataDir  string
-	logger   *slog.Logger
-	gate     *gate.Gate
-	guard    *svcsecurity.Service
-	identity *auth.Service
+	table     *command.Table
+	runner    command.Runner
+	handler   http.Handler
+	mounts    []string
+	db        *bun.DB
+	dataDir   string
+	logger    *slog.Logger
+	gate      *gate.Gate
+	guard     *svcsecurity.Service
+	identity  *auth.Service
+	sched     *scheduler.Scheduler
+	schedules *schedule.Service
 }
 
 // newApp 装配各层。bdb 已打开且已迁移；数据目录已存在；cfg 是 serve 的配置（这里用自救开关与允许跨域的来源）。
@@ -95,6 +101,14 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		return nil, err
 	}
 	settings := svcsettings.New(settingsRepo)
+	// 内置任务的运行记录：上次主控停止时还在跑的记录先收尾，再装配任务（master-scheduler）。
+	schedules := schedule.New(taskruns.New(bdb), logger)
+	if err := schedules.MarkInterrupted(context.Background()); err != nil {
+		return nil, err
+	}
+	sched := scheduler.New(scheduler.Tasks(scheduler.Deps{DB: bdb, Auth: identity, Audit: audits, Security: guard, Schedule: schedules, Logger: logger}),
+		schedules, logger)
+	schedules.SetTasks(sched.Infos())
 
 	bindings := command.Bindings{
 		"whoami":     func(ctx context.Context, _ *command.Invocation) (any, error) { return v1.IdentityFrom(ctx), nil },
@@ -113,6 +127,12 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		bindings[name] = h
 	}
 	for name, h := range guard.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range svclogs.New(dataDir).Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range schedules.Bindings() {
 		bindings[name] = h
 	}
 	if err := table.CheckBindings(bindings); err != nil {
@@ -169,7 +189,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	// → SameOrigin（管住所有浏览器发来的写请求：REST、/mcp、会话入口）→ mux。
 	handler := gates.Wrap(rest.CORS(cfg.AllowedOrigins, authn.Middleware(identity, tokens, guard, rest.SameOrigin(mux))))
 	return &app{table: table, runner: runner, handler: handler, mounts: patterns, db: bdb, dataDir: dataDir, logger: logger,
-		gate: gates, guard: guard, identity: identity}, nil
+		gate: gates, guard: guard, identity: identity, sched: sched, schedules: schedules}, nil
 }
 
 // notFoundPath 是顶层没有登记的路径的回应（四字段的 not_found）。
@@ -216,7 +236,8 @@ func (a *app) listen(listenAddr string) (tcp, unix net.Listener, err error) {
 	return tcp, unix, nil
 }
 
-// serve 在两个监听上跑同一套处理器，直到 ctx 取消；然后优雅停止（等进行中的请求，上限 shutdownTimeout）、关库、删 socket。
+// serve 在两个监听上跑同一套处理器、开始内置任务，直到 ctx 取消；然后优雅停止（HTTP 与内置任务同时停，各自最多等
+// shutdownTimeout）、补写没写进库的任务记录、关库、删 socket。
 func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 	srv := &http.Server{
 		Handler:           a.handler,
@@ -224,9 +245,6 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          slog.NewLogLogger(a.logger.Handler(), slog.LevelWarn),
 	}
-	// 内存里过期的封禁与计数、登录限流的计数定期清理，随 serve 停下（m1-06 的定时任务接上之后改挂到那里）。
-	go a.guard.Run(ctx)
-	go a.identity.Run(ctx)
 	errCh := make(chan error, 2)
 	for _, ln := range []net.Listener{tcp, unix} {
 		go func(ln net.Listener) {
@@ -235,6 +253,7 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 			}
 		}(ln)
 	}
+	a.sched.Start(ctx)
 	a.logger.Info("主控已启动", "listen", tcp.Addr().String(), "socket", unix.Addr().String())
 	var serveErr error
 	select {
@@ -244,10 +263,21 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 	a.logger.Info("开始优雅停止", "timeout", shutdownTimeout)
 	stopCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	// 内置任务与 HTTP 同时停：不排在 HTTP 后面，免得 HTTP 用完时限后任务一点时间都没有；都在关库之前停下。
+	schedDone := make(chan struct{})
+	go func() {
+		a.sched.Stop(stopCtx)
+		close(schedDone)
+	}()
 	if err := srv.Shutdown(stopCtx); err != nil {
 		a.logger.Warn("优雅停止超时，仍在进行的请求被中断", "error", err)
 		_ = srv.Close()
 	}
+	<-schedDone
+	// 请求都停了，占着写锁的事务也就没了：把结束时没改成功的 running 行再写一次。
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), 5*time.Second)
+	a.schedules.Flush(flushCtx)
+	cancelFlush()
 	if err := a.db.Close(); err != nil {
 		a.logger.Warn("关闭数据库失败", "error", err)
 	}
@@ -257,11 +287,6 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 		return v1.Wrap(v1.CodeInternal, "HTTP 服务异常退出", serveErr)
 	}
 	return nil
-}
-
-// newLogger 建 serve 的日志：文本、写 stderr、级别按配置（m1-06 再接文件与内存环）。
-func newLogger(level slog.Level) *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 }
 
 // listenAddrOf 给日志与测试用：拿到 TCP 实际绑定的地址（随机端口时才知道）。

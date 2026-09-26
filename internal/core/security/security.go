@@ -11,6 +11,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/satchel/satchel/internal/base/model"
+	"github.com/satchel/satchel/internal/base/store"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -134,6 +135,15 @@ func (r *Repo) CountEvents(ctx context.Context, f EventFilter) (int, error) {
 	n, err := applyEventFilter(r.db.NewSelect().Model((*model.SecurityEvent)(nil)), f).Count(ctx)
 	if err != nil {
 		return 0, v1.Wrap(v1.CodeDatabase, "统计安全事件失败", err)
+	}
+	return n, nil
+}
+
+// DeleteEventsBefore 删掉 at 早于 cutoff 的安全事件，返回删掉的条数（security_event_cleanup 任务调；只追加的表只有按保留期的清理会删行）。
+func (r *Repo) DeleteEventsBefore(ctx context.Context, cutoff time.Time) (int, error) {
+	n, err := store.PruneBefore(ctx, r.db, "security_events", "at", cutoff, store.PruneBatch)
+	if err != nil {
+		return n, v1.Wrap(v1.CodeDatabase, "清理安全事件失败", err)
 	}
 	return n, nil
 }

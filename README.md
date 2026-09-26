@@ -26,7 +26,7 @@ go build ./cmd/satchel
 | `SATCHEL_DATA_DIR` | 数据目录（等价于 `--data-dir`） | `/var/lib/satchel` |
 | `SATCHEL_CONFIG` | 配置文件路径（等价于 `serve --config`） | `<数据目录>/config.yaml` |
 | `SATCHEL_LISTEN` | TCP 监听地址，对应 `config.yaml` 的 `listen` | `0.0.0.0:12889` |
-| `SATCHEL_LOG_LEVEL` | 日志级别 `debug` / `info` / `warn` / `error`，对应 `log_level` | `info` |
+| `SATCHEL_LOG_LEVEL` | 日志级别 `debug` / `info` / `warn` / `error`，对应 `log_level`；日志同时写 stderr 与 `<数据目录>/logs/satchel.log`，见「日志与定时任务」 | `info` |
 | `SATCHEL_DATABASE_DRIVER` 等 | 数据库连接，见「数据库」一节 | SQLite |
 | `SATCHEL_OUTPUT` | 设为 `json` 时 CLI 默认 JSON 输出（等价于 `--json`） | 文本 |
 | `SATCHEL_SERVER` | CLI 要连的远程主控地址（等价于 `--server`），见「令牌与远程接入」 | 本机 socket |
@@ -34,7 +34,7 @@ go build ./cmd/satchel
 | `SATCHEL_FORCE_PUBLIC_ACCESS` | 「关闭公网访问」的自救开关：`1` / `true` / `yes` / `on` 时本进程跳过这一道门（只在 `serve` 启动时读，不改设置），见「门与登录防护」 | 关 |
 | `SATCHEL_ALLOWED_ORIGINS` | 允许跨域调用的网页来源，逗号分隔的 `http(s)://` origin 或单独一个 `*`；只给带令牌的调用用，不带 cookie | 只允许同源 |
 
-主控同时监听 TCP 与数据目录下的 unix socket `satchel.sock`（0600）。**身份只从连接判定**，按顺序取第一个：请求带了 `Authorization` 头就只看令牌——`Bearer <有效令牌>` 是令牌身份，别的一律是无效凭据、`unauthenticated`，不再往下看（见「令牌与远程接入」）；经 socket 进来、对端是 root 或运行主控的那个 OS 用户 → 本机管理员（全部权限，socket 上带的 cookie 不看）；TCP 上带有效会话 cookie → 登录的用户（管理员全部权限，普通用户只有 `read` + `operate`、没有危险类）；其余一律没有身份。没有身份能到的只有：`GET /api/v1/healthz`、`/public/<file>`（数据目录 `public/` 里的文件，目录不列、`..` 出不去）、初始化向导的 `setup status` / `setup init`，以及下面的四个会话入口。经 TCP 的请求在判定身份之前先过三道门（见「门与登录防护」），经 socket 的不受影响。收到 SIGINT / SIGTERM 后停止接受新连接、等进行中的请求最多 10 秒、关库、删 socket、退出码 0。
+主控同时监听 TCP 与数据目录下的 unix socket `satchel.sock`（0600）。**身份只从连接判定**，按顺序取第一个：请求带了 `Authorization` 头就只看令牌——`Bearer <有效令牌>` 是令牌身份，别的一律是无效凭据、`unauthenticated`，不再往下看（见「令牌与远程接入」）；经 socket 进来、对端是 root 或运行主控的那个 OS 用户 → 本机管理员（全部权限，socket 上带的 cookie 不看）；TCP 上带有效会话 cookie → 登录的用户（管理员全部权限，普通用户只有 `read` + `operate`、没有危险类）；其余一律没有身份。没有身份能到的只有：`GET /api/v1/healthz`、`/public/<file>`（数据目录 `public/` 里的文件，目录不列、`..` 出不去）、初始化向导的 `setup status` / `setup init`，以及下面的四个会话入口。经 TCP 的请求在判定身份之前先过三道门（见「门与登录防护」），经 socket 的不受影响。收到 SIGINT / SIGTERM 后停止接受新连接、等进行中的请求与正在跑的内置任务（两者合计最多 10 秒）、关库、删 socket、退出码 0。
 
 ### 初始化、登录与账号
 
@@ -100,10 +100,38 @@ go build ./cmd/satchel
   - **隐藏登录入口**（`probe_disguise_block_login`，mmwx 的「阻止登录」）：只作用在探针伪装页上，伪装页随 M7；本版本里它只存不生效，登录照常。
 - **登录限流**（`login_rate_max_attempts` / `login_rate_window_minutes` / `login_rate_lock_minutes`，默认 1 小时内 5 次、锁 1 小时）：猜密码按来源 IP 与账号名两个维度分别计数，达到上限的那一次之后锁定，锁定期内登录与当场验证直接 `rate_limited`（HTTP 429，退出码 1，`state.until` 是解锁时间），不再比对密码。与 mmwx 不同：两步登录时密码对了不清零，第二步错了照计，整个登录成功才清零；当场验证的密码或验证码比对不上也计入（只缺第二因素不计）；账号已停用时密码对了也算一次失败。同时发来的一批尝试最多只有上限那么多次会去比对密码，其余直接 `rate_limited`。`skip_local_ip`（默认开）时本地与内网地址不计 IP 维度，账号维度照计。有人故意猜错你的用户名会把你的网页登录锁一阵子，这时在主控本机用 CLI 不受影响。
 - **令牌猜测的封禁**（`brute_force_enabled` / `brute_force_max_failures` / `brute_force_window_minutes` / `brute_force_block_minutes`，默认 24 小时内 5 次、封 24 小时）：经 TCP 的请求带了无效的 `Authorization` 头，按来源 IP 计一次，达到上限自动封禁这个 IP，写进 `ip_bans`，重启后恢复。被封的 IP **只有带 `Authorization` 头的请求**被拒（`forbidden`），网页会话与登录照常（猜密码由登录限流管）——所以一个配着已吊销令牌、不停重试的 AI 客户端不会把你的网页也封掉。`skip_local_ip` 开着时本地与内网地址不计也不封。关掉 `brute_force_enabled` 只停自动封禁，已有的封禁照常生效（mmwx 关掉会让全部封禁失效）。手动：`satchel security ban <ip> [--permanent]` 与 `security unban <ip>` 是人类专属命令，`security bans list` 列出生效中的封禁（都只对管理员开放）。
-- **安全事件**：登录与当场验证比对不上（`login_fail` / `login_locked`、`verify_fail` / `verify_locked`）、令牌校验失败（`probe`）、自动封禁（`ban`）、手动封禁（`ban_manual`）、解封（`unban`）各记一条，含来源 IP、路径或命令名、账号名与「第几次 / 上限」。`satchel security events list [--kind …] [--ip …]` 按时间倒序看（只对管理员开放）。保留期与清理随 m1-06。
+- **安全事件**：登录与当场验证比对不上（`login_fail` / `login_locked`、`verify_fail` / `verify_locked`）、令牌校验失败（`probe`）、自动封禁（`ban`）、手动封禁（`ban_manual`）、解封（`unban`）各记一条，含来源 IP、路径或命令名、账号名与「第几次 / 上限」。`satchel security events list [--kind …] [--ip …]` 按时间倒序看（只对管理员开放）。保留 90 天，见「日志与定时任务」。
 - **Turnstile 登录验证码**：`turnstile_site_key`（非空时至少 20 个字符）与 `turnstile_secret_key` 两个都填才启用。启用后网页登录要带 `turnstile_token`，主控先向 Cloudflare 核对：没带或没过是 `bad_request`（不算一次猜密码），连不上 Cloudflare 是 `unavailable`。登录页用不要身份的 `GET /api/v1/session/captcha` 取 `enabled` 与 `site_key`（不含 secret key）。第二步、当场验证与经 socket 的登录不要验证码。「测试配置」随 m1-10 的设置页。
 - **跨域（CORS）**：默认只允许同源（mmwx 默认对所有来源放开）。`SATCHEL_ALLOWED_ORIGINS` 列出的来源拿到 `Access-Control-Allow-Origin` 等头、预检直接 204；永远不发 `Access-Control-Allow-Credentials`，所以跨域只给自己拿着令牌的网页用，会话 cookie 不跨域。
 - **被挡在门外时**：在主控本机经 socket 用 CLI 改回来，例如 `satchel settings gates set --set master_local_only=false --set silent_mode=false --resource-version <N> --verify-user <管理员>`，或 `satchel security unban <ip> --verify-user <管理员>`；静默模式也可以重启主控后在开放期里进去；连本机 shell 都不方便时，以 `SATCHEL_FORCE_PUBLIC_ACCESS=1` 重启主控只跳过「关闭公网访问」这一道门（进来之后关掉设置、再去掉这个变量）。
+
+### 日志与定时任务
+
+- **日志文件**：`serve` 的日志同时写 stderr（`docker logs` 看的是它）与 `<数据目录>/logs/satchel.log`（0600），两处内容相同，是 `log/slog` 的文本格式，级别按 `log_level`。当前文件到 50 MB 时改名成 `satchel-<时间>.log` 另开一个新的，旧文件最多留 3 个，所以日志总量大约在 200 MB 以内。属性名含 `password`、`secret` 或以 `token` 结尾的值写成 `***`（兜底；令牌与密码本来就不进日志）。日志文件打不开（例如数据目录只读）时 `serve` 启动失败。
+- **看日志**（只对管理员开放，令牌要 `read`）：
+  ```sh
+  satchel logs list                          # 从新到旧，只扫当前文件末尾 50000 行，走分页
+  satchel logs list --level warn             # warn 及更高的（mmwx 只取这一级）
+  satchel logs list --grep 审计写入失败       # 原文里含这段文本的行，区分大小写；这段文本在审计里打码
+  satchel logs files list                    # 当前文件与轮转下来的旧文件
+  satchel logs list --file satchel-2026-09-25T08-00-00.000.log   # 看某个旧文件
+  ```
+  每一项拆成 `time`、`level`、`msg` 与 `attrs`，拆不开的行给 `raw`。文件一直在追加，两次翻页之间有新日志时页与页会错开几行；要稳定的视图就看已经轮转下来的旧文件。不能手动删日志文件（删日志等于抹掉证据）。
+- **内置定时任务**：主控启动一分钟后第一次运行，之后按间隔运行；同一个任务不会同时跑两份；以系统身份直接调业务层，不写审计。
+
+  | 任务 | 间隔 | 做什么 |
+  |---|---|---|
+  | `session_cleanup` | 1 小时 | 删掉过期的会话（登录时不再顺带清理） |
+  | `audit_cleanup` | 1 小时 | 删掉 180 天以前的审计记录 |
+  | `security_event_cleanup` | 1 小时 | 删掉 90 天以前的安全事件 |
+  | `task_run_cleanup` | 1 小时 | 删掉 7 天以前的任务运行记录 |
+  | `ban_sweep` | 10 分钟 | 清掉内存里已失效的封禁与过期的令牌猜测计数 |
+  | `login_limit_sweep` | 10 分钟 | 清掉内存里过期的登录限流计数 |
+  | `db_checkpoint` | 5 分钟 | 只在 SQLite 下：把 WAL 写回主库（TRUNCATE，库忙时退回 PASSIVE） |
+  | `db_health` | 1 分钟 | SQLite 跑 `quick_check`，PostgreSQL 检查连通性；变坏时记一条 error 日志，恢复时记一条 info 日志 |
+
+  三个保留期是常量，不能配置。需要长期留存审计的，定期用 `satchel audit list --json` 导出到别处。
+- **看任务**（只对管理员开放）：`satchel schedule list` 列出任务、间隔与最近一次运行的结果；`satchel schedule runs list [--task <名字>] [--status running|ok|error]` 按 id 倒序（写入的先后）列出运行记录。每次运行开始时记一行 `running`，结束时改成 `ok` 或 `error`，带耗时与一句结果。间隔短于一小时的任务（两个内存清理、检查点、健康检查）开始时不记，成功的记录每小时最多一条；失败每次都记，失败之后的第一次成功也记。主控停止时，内置任务与 HTTP 同时停，被打断的那次记成 `error` 并写明是主控停止；结束时没写进库的记录（例如 SQLite 的写锁被请求占着）在关库前再写一次，仍没写上的下次启动时改成 `error`。三张表的清理按 id 往后扫，碰到保留期以内的行就停：时钟回拨、或有一行时间在未来时，它后面更早的行这一轮不会删。
 
 ## REST 与 MCP
 
@@ -143,7 +171,7 @@ Docker Compose：仓库根的 `docker-compose.yml` 与 `.env.example`（`cp .env
 
 主控默认用 SQLite（数据目录下的 `satchel.db`），可选 PostgreSQL（数据目录下的 `database.json` 写 `driver: postgres`，或用环境变量 `SATCHEL_DATABASE_*` 覆盖）。数据目录由 `--data-dir` 或环境变量 `SATCHEL_DATA_DIR` 指定，默认 `/var/lib/satchel`。
 
-数据目录的布局是固定的，名字都是 `internal/base/db` 里的常量：`database.json`（数据库配置）、`config.yaml`（主控配置，可不存在）、`satchel.db`（SQLite 库文件）、`master.key`（主控通信密钥）、`satchel.sock`（主控运行时的 unix socket）、`subscribes/`（订阅文件）、`rule_templates/`（规则模板）、`public/`（`/public/` 对外提供的静态文件）。`db migrate` 与 `serve` 会把目录和三个子目录一起建出来（0700），postgres 模式也一样——库在别处，但主控密钥、订阅文件、规则模板、静态文件仍在这里；`db status` 是只读命令，不建目录。备份的内容表按这份布局取（socket 与 `public/` 不进备份）。
+数据目录的布局是固定的，名字都是 `internal/base/db` 里的常量：`database.json`（数据库配置）、`config.yaml`（主控配置，可不存在）、`satchel.db`（SQLite 库文件）、`master.key`（主控通信密钥）、`satchel.sock`（主控运行时的 unix socket）、`subscribes/`（订阅文件）、`rule_templates/`（规则模板）、`public/`（`/public/` 对外提供的静态文件）、`logs/`（`serve` 的日志文件）。`db migrate` 与 `serve` 会把目录和四个子目录一起建出来（0700），postgres 模式也一样——库在别处，但主控密钥、订阅文件、规则模板、静态文件与日志仍在这里；`db status` 是只读命令，不建目录。备份的内容表按这份布局取（socket、`public/` 与 `logs/` 不进备份）。
 
 ```sh
 ./satchel db migrate --data-dir ./data   # 执行迁移，然后比对库结构与注册表

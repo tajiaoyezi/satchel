@@ -187,7 +187,7 @@ func TestRestore(t *testing.T) {
 		// 清理：到期的封禁与过了窗口的计数从内存里清掉。
 		s.RecordProbe(ctx, "198.51.100.99", "/mcp")
 		c.advance(2 * time.Hour)
-		s.sweep()
+		s.Sweep()
 		s.mu.Lock()
 		_, hasBan := s.bans["198.51.100.7"]
 		_, hasPerm := s.bans["203.0.113.9"]
@@ -196,7 +196,7 @@ func TestRestore(t *testing.T) {
 			t.Fatalf("清理后到期的应当没了、永久的还在：到期 %v 永久 %v", hasBan, hasPerm)
 		}
 		c.advance(24 * time.Hour)
-		s.sweep()
+		s.Sweep()
 		s.mu.Lock()
 		_, hasProbe := s.probes["198.51.100.99"]
 		s.mu.Unlock()
@@ -313,6 +313,26 @@ func TestEventWriteFailureOnlyLogs(t *testing.T) {
 		}
 		if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), "写安全事件失败") {
 			t.Fatalf("应当有 error 级别的日志：%s", logs.String())
+		}
+	})
+}
+
+// master-scheduler「本站的内置任务」的 security_event_cleanup：90 天以前的删掉，以内的留着。
+func TestPruneEvents(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		s, c := newService(t, bdb)
+		repo := core.New(bdb)
+		for _, at := range []time.Time{c.now().Add(-91 * 24 * time.Hour), c.now().Add(-91 * 24 * time.Hour), c.now().Add(-89 * 24 * time.Hour)} {
+			if err := repo.InsertEvent(ctx, core.Event{At: at, IP: "198.51.100.7", Kind: core.KindProbe}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if n, err := s.PruneEvents(ctx); err != nil || n != 2 {
+			t.Fatalf("应当删掉 2 条，得到 %d %v", n, err)
+		}
+		if left, _ := repo.CountEvents(ctx, core.EventFilter{}); left != 1 {
+			t.Fatalf("应当剩 1 条，得到 %d", left)
 		}
 	})
 }

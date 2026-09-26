@@ -17,8 +17,8 @@ import (
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
-// sweepInterval 是清理内存里过期计数与封禁的间隔（照 mmwx）。
-const sweepInterval = 10 * time.Minute
+// EventRetention 是安全事件的保留期（master-scheduler「本站的内置任务」的 security_event_cleanup）。
+const EventRetention = 90 * 24 * time.Hour
 
 // Config 是令牌猜测防护的参数，来自系统设置门这一组（brute_force_* 与 skip_local_ip）。
 type Config struct {
@@ -169,21 +169,14 @@ func (s *Service) Restore(ctx context.Context) error {
 	return nil
 }
 
-// Run 每 10 分钟清一次内存里到期的封禁与过了窗口的计数，直到 ctx 取消（m1-06 的定时任务接上之后改挂到那里）。
-func (s *Service) Run(ctx context.Context) {
-	t := time.NewTicker(sweepInterval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			s.sweep()
-		}
-	}
+// PruneEvents 删掉保留期以前的安全事件，返回删掉的条数（security_event_cleanup 任务调）。
+func (s *Service) PruneEvents(ctx context.Context) (int, error) {
+	_, now := s.config()
+	return s.repo.DeleteEventsBefore(ctx, now.Add(-EventRetention))
 }
 
-func (s *Service) sweep() {
+// Sweep 清一次内存里到期的封禁与过了窗口的计数，不碰库（ban_sweep 任务每 10 分钟调一次）。
+func (s *Service) Sweep() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()

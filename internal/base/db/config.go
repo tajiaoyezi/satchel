@@ -36,14 +36,17 @@ const (
 	ConfigYAMLFile = "config.yaml"
 	SocketFile     = "satchel.sock"
 	// SubscribesDir 是订阅文件目录，RuleTemplatesDir 是规则模板目录，PublicDir 是 /public/ 对外提供的静态文件目录；
-	// 都在数据目录下（第 08 章的数据目录布局与备份内容表；socket 与 public/ 不进备份）。
+	// LogsDir 是 serve 的日志目录，LogFile 是其中当前在写的日志文件（master-logs）；
+	// 都在数据目录下（第 08 章的数据目录布局与备份内容表；socket、public/ 与 logs/ 不进备份）。
 	SubscribesDir    = "subscribes"
 	RuleTemplatesDir = "rule_templates"
 	PublicDir        = "public"
+	LogsDir          = "logs"
+	LogFile          = "satchel.log"
 )
 
 // DataSubDirs 是数据目录下要随目录一起创建的子目录。
-var DataSubDirs = []string{SubscribesDir, RuleTemplatesDir, PublicDir}
+var DataSubDirs = []string{SubscribesDir, RuleTemplatesDir, PublicDir, LogsDir}
 
 // Config 是 database.json 的内容；环境变量 SATCHEL_DATABASE_* 逐项覆盖它。
 type Config struct {
@@ -69,7 +72,7 @@ func DataDir(flag string) string {
 }
 
 // EnsureDataDir 创建数据目录与它的子目录（DataSubDirs），权限 0700。会写的命令（迁移、serve）两种驱动都调它：
-// postgres 模式下库在别处，但主控密钥、订阅文件、规则模板仍在数据目录里。读配置与只读命令不调它。
+// postgres 模式下库在别处，但主控密钥、订阅文件、规则模板、静态文件与日志仍在数据目录里。读配置与只读命令不调它。
 func EnsureDataDir(dir string) error {
 	for _, d := range append([]string{dir}, subDirs(dir)...) {
 		if err := os.MkdirAll(d, 0o700); err != nil {

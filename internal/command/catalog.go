@@ -18,6 +18,10 @@ var GroupSummaries = map[string]string{
 	"security":               "安全：安全事件与 IP 封禁（封禁与解封要当场验证）",
 	"token":                  "API 令牌：签发、列出、改权限、吊销（签发、改权限、吊销要当场验证）",
 	"mcp":                    "MCP 接入：stdio 垫片、把 AI runtime 接上主控、看谁在连",
+	"logs":                   "主控的系统日志（只对管理员开放）",
+	"logs files":             "数据目录 logs/ 下的日志文件",
+	"schedule":               "内置定时任务与它们的运行记录（只对管理员开放）",
+	"schedule runs":          "内置定时任务每次运行的记录",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -33,7 +37,31 @@ func catalogCommands() []*Command {
 	all = append(all, settingsCommands()...)
 	all = append(all, tokenCommands()...)
 	all = append(all, securityCommands()...)
+	all = append(all, opsCommands()...)
 	return all
+}
+
+// opsCommands 是 m1-06 的系统日志与内置定时任务命令（master-logs、master-scheduler），都只对管理员开放（处理函数里判）。
+func opsCommands() []*Command {
+	return []*Command{
+		{Path: []string{"logs", "list"}, Summary: "从新到旧列出主控日志文件里的行（只扫文件末尾 50000 行）", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "level", Type: TypeString, Description: "只看这个级别及更高的：debug、info、warn、error"},
+				{Name: "grep", Type: TypeString, Secret: true, Description: "只看原文里含这段文本的行（区分大小写；可能是在找令牌或密码，审计里打码）"},
+				{Name: "file", Type: TypeString, Description: "看 logs files list 里列出的某个文件，默认是当前文件"},
+			},
+			Columns: []string{"time", "level", "msg"}},
+		{Path: []string{"logs", "files", "list"}, Summary: "列出日志文件：当前文件与轮转下来的旧文件", Class: ClassRead, List: true,
+			Columns: []string{"name", "size", "modified", "active"}},
+		{Path: []string{"schedule", "list"}, Summary: "列出内置定时任务：间隔与最近一次运行的结果", Class: ClassRead, List: true,
+			Columns: []string{"name", "interval", "last_started_at", "last_status", "summary"}},
+		{Path: []string{"schedule", "runs", "list"}, Summary: "按 id 倒序（写入的先后）列出内置定时任务的运行记录", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "task", Type: TypeString, Description: "只看这个任务（精确匹配，如 audit_cleanup）"},
+				{Name: "status", Type: TypeString, Description: "只看这个状态：running、ok、error"},
+			},
+			Columns: []string{"id", "task", "started_at", "duration_ms", "status", "detail"}},
+	}
 }
 
 // securityCommands 是 m1-05 的安全事件与 IP 封禁命令（master-login-protection）。封禁的创建与解除属第 05 章七组的「门」：

@@ -105,7 +105,7 @@ func TestEnsureDataDir(t *testing.T) {
 	if err := EnsureDataDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []string{dir, filepath.Join(dir, SubscribesDir), filepath.Join(dir, RuleTemplatesDir), filepath.Join(dir, PublicDir)} {
+	for _, d := range []string{dir, filepath.Join(dir, SubscribesDir), filepath.Join(dir, RuleTemplatesDir), filepath.Join(dir, PublicDir), filepath.Join(dir, LogsDir)} {
 		info, err := os.Stat(d)
 		if err != nil {
 			t.Fatal(err)
@@ -117,8 +117,8 @@ func TestEnsureDataDir(t *testing.T) {
 			t.Fatalf("%s 权限应当是 0700，得到 %o", d, perm)
 		}
 	}
-	if len(DataSubDirs) != 3 {
-		t.Fatalf("数据目录只有三个子目录，得到 %v", DataSubDirs)
+	if len(DataSubDirs) != 4 {
+		t.Fatalf("数据目录只有四个子目录，得到 %v", DataSubDirs)
 	}
 }
 

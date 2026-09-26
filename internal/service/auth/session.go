@@ -65,10 +65,6 @@ func (s *Service) Login(ctx context.Context, username, password string, remember
 		s.failed(ctx, username, loginPath, coresecurity.KindLoginFail, coresecurity.KindLoginLocked)
 		return nil, v1.New(v1.CodeForbidden, "账号已停用").WithNext("联系管理员启用")
 	}
-	if _, err := s.sessions.DeleteExpired(ctx, s.now()); err != nil {
-		s.released(ctx, username)
-		return nil, err
-	}
 	if a.TOTPEnabled {
 		s.released(ctx, username)
 		pending, err := s.issuePending(a.Username, rememberMe)
@@ -145,6 +141,11 @@ func (s *Service) IssueSession(ctx context.Context, username string, rememberMe 
 		return "", time.Time{}, err
 	}
 	return token, expires, nil
+}
+
+// PruneSessions 删掉已过期的会话，返回删掉的条数（session_cleanup 任务每小时调一次；过期的会话本来就视同不存在）。
+func (s *Service) PruneSessions(ctx context.Context) (int, error) {
+	return s.sessions.DeleteExpired(ctx, s.now())
 }
 
 // Logout 删掉一条会话（按明文令牌）；没有也算成功。

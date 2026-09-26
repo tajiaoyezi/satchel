@@ -24,6 +24,7 @@ func TestCatalog(t *testing.T) {
 		"whoami": ClassRead, "audit list": ClassRead, "explain": ClassRead, "setup status": ClassRead, "account show": ClassRead,
 		"settings show": ClassRead, "settings snapshots list": ClassRead, "token list": ClassRead, "mcp status": ClassRead,
 		"security events list": ClassRead, "security bans list": ClassRead,
+		"logs list": ClassRead, "logs files list": ClassRead, "schedule list": ClassRead, "schedule runs list": ClassRead,
 		"setup init": ClassAction, "account set-password": ClassAction, "account totp setup": ClassAction, "account totp confirm": ClassAction,
 		"account totp disable": ClassAction, "account recovery-codes regenerate": ClassAction,
 		"token create": ClassAction, "token update": ClassAction, "token revoke": ClassAction,
@@ -43,7 +44,7 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 的类别应当是 %s，得到 %s", name, class, c.Class)
 		}
 	}
-	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list"} {
+	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list"} {
 		if c, _ := table.Lookup(name); !c.List {
 			t.Errorf("%s 应当是列表命令", name)
 		}

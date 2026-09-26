@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"runtime"
 	"syscall"
 
 	"github.com/satchel/satchel/internal/base/db"
+	"github.com/satchel/satchel/internal/base/logging"
 	"github.com/satchel/satchel/internal/command"
 	"github.com/satchel/satchel/internal/projection/cli"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
@@ -27,11 +30,16 @@ func serveCommand(ctx context.Context, inv *command.Invocation) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	logger := newLogger(cfg.SlogLevel())
 	bdb, err := cli.OpenForWrite(ctx, dataDir)
 	if err != nil {
 		return nil, err
 	}
+	logger, logFile, err := setupLogging(cfg, dataDir)
+	if err != nil {
+		bdb.Close()
+		return nil, err
+	}
+	defer logFile.Close()
 	if applied, err := db.Migrate(ctx, bdb); err != nil {
 		bdb.Close()
 		return nil, err
@@ -52,4 +60,15 @@ func serveCommand(ctx context.Context, inv *command.Invocation) (any, error) {
 		return nil, err
 	}
 	return map[string]any{"stopped": true}, nil
+}
+
+// setupLogging 建 serve 的日志（master-logs「serve 的日志输出」）：stderr 加 logs/satchel.log，并设成进程的默认 logger，
+// 让直接调 slog 包函数的代码也走同一个输出与级别。数据目录（含 logs/）要先建好。
+func setupLogging(cfg db.ServeConfig, dataDir string) (*slog.Logger, io.Closer, error) {
+	logger, closer, err := logging.New(cfg.SlogLevel(), dataDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	slog.SetDefault(logger)
+	return logger, closer, nil
 }

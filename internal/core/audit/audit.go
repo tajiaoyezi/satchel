@@ -100,3 +100,12 @@ func applyFilter(q *bun.SelectQuery, f Filter) *bun.SelectQuery {
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
+
+// DeleteBefore 删掉 at 早于 cutoff 的记录，返回删掉的条数（audit_cleanup 任务调；append-only 表只有按保留期的清理会删行）。
+func (r *Repo) DeleteBefore(ctx context.Context, cutoff time.Time) (int, error) {
+	n, err := store.PruneBefore(ctx, r.db, "audit_logs", "at", cutoff, store.PruneBatch)
+	if err != nil {
+		return n, v1.Wrap(v1.CodeDatabase, "清理审计记录失败", err)
+	}
+	return n, nil
+}

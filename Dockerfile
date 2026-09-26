@@ -30,7 +30,7 @@ COPY --from=builder /out/satchel /usr/local/bin/satchel
 COPY docker-entrypoint.sh /usr/local/bin/satchel-entrypoint
 RUN chmod 0755 /usr/local/bin/satchel /usr/local/bin/satchel-entrypoint
 
-# 数据目录布局见 storage-dual-database：database.json、config.yaml、satchel.db、master.key、satchel.sock、subscribes/、rule_templates/、public/。
+# 数据目录布局见 storage-dual-database：database.json、config.yaml、satchel.db、master.key、satchel.sock、subscribes/、rule_templates/、public/、logs/。
 ENV SATCHEL_DATA_DIR=/var/lib/satchel
 # 主控监听地址（master-serve）；compose 透传同名变量可改。健康检查从它取端口。
 ENV SATCHEL_LISTEN=0.0.0.0:12889

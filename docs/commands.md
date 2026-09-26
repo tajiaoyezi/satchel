@@ -15,7 +15,11 @@
 | `account totp setup` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/totp/setup` |
 | `audit list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/audit` |
 | `explain` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/explain/{target}` |
+| `logs files list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/logs/files` |
+| `logs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/logs` |
 | `mcp status` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/mcp/status` |
+| `schedule list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/schedule` |
+| `schedule runs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/schedule/runs` |
 | `security ban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/ban/{ip}` |
 | `security bans list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/security/bans` |
 | `security events list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/security/events` |

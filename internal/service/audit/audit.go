@@ -22,6 +22,9 @@ type Entry struct {
 	Result     string
 }
 
+// Retention 是审计记录的保留期（master-scheduler「本站的内置任务」的 audit_cleanup）。
+const Retention = 180 * 24 * time.Hour
+
 // Service 持有仓储。
 type Service struct {
 	repo *core.Repo
@@ -41,6 +44,11 @@ func (s *Service) Record(ctx context.Context, e Entry) error {
 		At: e.At, Actor: e.Actor, ActorKind: e.ActorKind, TokenID: e.TokenID,
 		Command: e.Command, ArgsDigest: e.ArgsDigest, PlanID: e.PlanID, Result: e.Result,
 	})
+}
+
+// Prune 删掉保留期以前的审计记录，返回删掉的条数（audit_cleanup 任务调）。
+func (s *Service) Prune(ctx context.Context) (int, error) {
+	return s.repo.DeleteBefore(ctx, time.Now().Add(-Retention))
 }
 
 // List 按时间倒序取一页（keyset 游标是最后一条的 id）。

@@ -16,10 +16,10 @@ var otherPrograms = map[string]string{
 
 // storage-dual-database「名字只有一处」：数据目录里的子目录与文件名只在定义常量的这一处出现，别处不许写死字面量。
 // 扫整个仓库的 Go 源码（含测试），只放过本文件与 config.go（以及上面 otherPrograms 里的同名文件）。database.json 与 satchel.db
-// 不在清单里：它们在错误文案的断言里以字面量出现是合理的（点名文件的 reason）。
+// 不在清单里：它们在错误文案的断言里以字面量出现是合理的（点名文件的 reason）；logs 也不在：它同时是命令组的名字（logs list）。
 func TestLayoutNamesDefinedOnce(t *testing.T) {
 	root := filepath.Join("..", "..", "..")
-	names := []string{SubscribesDir, RuleTemplatesDir, PublicDir, MasterKeyFile, SocketFile, ConfigYAMLFile}
+	names := []string{SubscribesDir, RuleTemplatesDir, PublicDir, MasterKeyFile, SocketFile, ConfigYAMLFile, LogFile}
 	re := regexp.MustCompile(`"(` + strings.Join(escapeAll(names), "|") + `)"`)
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
