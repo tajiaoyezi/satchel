@@ -58,9 +58,9 @@ func TestOpsEndToEnd(t *testing.T) {
 		for _, task := range tasks {
 			names = append(names, task["name"].(string))
 		}
-		want := []string{"audit_cleanup", "ban_sweep", "db_health", "login_limit_sweep", "security_event_cleanup", "session_cleanup", "task_run_cleanup"}
+		want := []string{"audit_cleanup", "backup_local", "ban_sweep", "db_health", "job_cleanup", "login_limit_sweep", "security_event_cleanup", "session_cleanup", "task_run_cleanup"}
 		if db.DialectOf(bdb) == schema.SQLite {
-			want = []string{"audit_cleanup", "ban_sweep", "db_checkpoint", "db_health", "login_limit_sweep", "security_event_cleanup", "session_cleanup", "task_run_cleanup"}
+			want = []string{"audit_cleanup", "backup_local", "ban_sweep", "db_checkpoint", "db_health", "job_cleanup", "login_limit_sweep", "security_event_cleanup", "session_cleanup", "task_run_cleanup"}
 		}
 		if !reflect.DeepEqual(names, want) {
 			t.Fatalf("任务清单应当是 %v，得到 %v", want, names)

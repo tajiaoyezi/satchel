@@ -8,6 +8,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -31,8 +32,18 @@ type explainInput struct {
 	Target string `json:"target,omitempty" jsonschema:"命令路径（如 \"audit list\"）或 kind 名（如 Task）；不给则列出全部命令与 kind"`
 }
 
+// 长任务在 satchel_run 里的等法（master-jobs）：每半秒查一次，最多等 60 秒，到时返回当时的 job。
+const (
+	jobPoll    = 500 * time.Millisecond
+	jobMaxWait = 60 * time.Second
+)
+
 // NewHandler 建 /mcp 的 Streamable HTTP 处理器。opts 是主控进程内装配好的 CLI 选项：Remote 返回执行链本身、ServerSide 为 true。
+// 长任务的等法按上面的常量；opts 里已经给了（测试调小）就用给的。
 func NewHandler(opts cli.Options) http.Handler {
+	if opts.JobMaxWait == 0 {
+		opts.JobPoll, opts.JobMaxWait = jobPoll, jobMaxWait
+	}
 	server := sdk.NewServer(&sdk.Implementation{Name: "satchel", Version: buildinfo.Version}, &sdk.ServerOptions{
 		Instructions: "Satchel 主控的 MCP 接口。satchel_run 跑一条 satchel 命令（与 CLI 同构，输出恒为 JSON），satchel_explain 看命令与 kind 的说明；不预载工具定义，需要时先 explain。",
 	})
@@ -145,6 +156,10 @@ func precheck(opts cli.Options, args []string) error {
 	if cmd.HumanOnly {
 		return v1.Newf(v1.CodeHumanRequired, "%s 是只有人能做的操作，MCP 上不可用", cmd.Name()).
 			WithNext("在网页或主控本机的 CLI 上由管理员本人执行")
+	}
+	// 下载与上传的是文件本身：MCP 的输出恒为 JSON 文本、输入只有命令数组，放不下文件（上传类的 --file 在上面已按文件路径拒绝）。
+	if cmd.Shape == command.ShapeDownload || cmd.Shape == command.ShapeUpload {
+		return v1.Newf(v1.CodeBadRequest, "%s 收发的是文件本身，只能经 CLI 或网页做，MCP 上不可用", cmd.Name())
 	}
 	return nil
 }

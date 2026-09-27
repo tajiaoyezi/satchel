@@ -167,3 +167,29 @@ func (r *Repo) SetRecoveryCodes(ctx context.Context, id int64, codes []string, e
 	oldRaw, _ := json.Marshal(expectedOld)
 	return r.store.UpdateHuman(ctx, model, []string{"recovery_codes"}, store.Cond{Column: "recovery_codes", Value: string(oldRaw)})
 }
+
+// ResetRecoveryCodes 在事务 tx 里给所有账号换恢复码（master-backup「恢复之后的收尾」）：开了两步验证的账号用 gen 生成一批
+// （返回明文与哈希，哈希写库），没开的清空。返回账号名到明文。
+func (r *Repo) ResetRecoveryCodes(ctx context.Context, tx bun.Tx, gen func() (plain, hashes []string, err error)) (map[string][]string, error) {
+	var rows []model.User
+	if err := tx.NewSelect().Model(&rows).Column("id", "username", "totp_enabled").OrderExpr("id ASC").Scan(ctx); err != nil {
+		return nil, v1.Wrap(v1.CodeDatabase, "读取账号失败", err)
+	}
+	ts := r.store.WithTx(tx)
+	out := map[string][]string{}
+	for _, row := range rows {
+		hashes := []string{}
+		if row.TotpEnabled {
+			plain, h, err := gen()
+			if err != nil {
+				return nil, err
+			}
+			out[row.Username], hashes = plain, h
+		}
+		raw, _ := json.Marshal(hashes)
+		if err := ts.UpdateHuman(ctx, &model.User{ID: row.ID, RecoveryCodes: raw}, []string{"recovery_codes"}); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}

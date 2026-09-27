@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -52,6 +53,15 @@ func (c *Client) Run(ctx context.Context, inv *command.Invocation) (any, error) 
 	if err != nil {
 		return nil, c.unavailable(err)
 	}
+	if cmd.Shape == command.ShapeDownload && resp.StatusCode == http.StatusOK {
+		// 下载类命令成功时 body 是文件本身：交给调用方流式写到本地，由它关。
+		name := ""
+		if _, params, err := mime.ParseMediaType(resp.Header.Get("Content-Disposition")); err == nil {
+			name = params["filename"]
+		}
+		return &command.File{Name: name, ContentType: resp.Header.Get("Content-Type"), Size: resp.ContentLength,
+			Open: func() (io.ReadCloser, error) { return resp.Body, nil }}, nil
+	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
@@ -87,7 +97,7 @@ func (c *Client) request(ctx context.Context, cmd *command.Command, inv *command
 		}
 		path = strings.Replace(path, "{"+a.Name+"}", url.PathEscape(val), 1)
 	}
-	if route.Method == http.MethodGet {
+	if route.Method == http.MethodGet || cmd.Shape == command.ShapeUpload {
 		q := url.Values{}
 		for name, v := range inv.Flags {
 			for _, s := range stringValues(v) {
@@ -105,6 +115,15 @@ func (c *Client) request(ctx context.Context, cmd *command.Command, inv *command
 		u := c.conn.BaseURL() + path
 		if enc := q.Encode(); enc != "" {
 			u += "?" + enc
+		}
+		if cmd.Shape == command.ShapeUpload {
+			// 上传类命令：请求体是文件本身，flag 走查询参数（master-rest-api）。
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, inv.Body)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Content-Type", "application/zip")
+			return req, nil
 		}
 		return http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	}

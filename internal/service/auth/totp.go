@@ -58,6 +58,11 @@ func (s *Service) checkTOTP(username, secret, code string) bool {
 // 恢复码：8 枚，各 8 个小写十六进制字符；库里存 SHA-256 十六进制。
 const recoveryCodeCount = 8
 
+// GenerateRecoveryCodes 生成一批恢复码：明文与库里存的哈希（恢复备份之后给开了两步验证的账号换新时，service/backup 经注入使用）。
+func GenerateRecoveryCodes() (plain, hashes []string, err error) {
+	return generateRecoveryCodes()
+}
+
 func generateRecoveryCodes() (plain, hashes []string, err error) {
 	for i := 0; i < recoveryCodeCount; i++ {
 		buf := make([]byte, 4)

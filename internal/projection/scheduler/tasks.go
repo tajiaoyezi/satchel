@@ -12,12 +12,17 @@ import (
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/service/audit"
 	"github.com/satchel/satchel/internal/service/auth"
+	svcbackup "github.com/satchel/satchel/internal/service/backup"
+	"github.com/satchel/satchel/internal/service/jobs"
 	"github.com/satchel/satchel/internal/service/schedule"
 	"github.com/satchel/satchel/internal/service/security"
 )
 
 // healthTimeout 是 db_health 单次的时限（照 mmwx）。
 const healthTimeout = 30 * time.Second
+
+// backupFresh：backups/ 里最新一份不到这么久，backup_local 就跳过（频繁重启不会每次多一份、挤掉有用的旧备份）。
+const backupFresh = 20 * time.Hour
 
 // Deps 是本站内置任务要用的 service 与库。
 type Deps struct {
@@ -26,6 +31,8 @@ type Deps struct {
 	Audit    *audit.Service
 	Security *security.Service
 	Schedule *schedule.Service
+	Backup   *svcbackup.Service
+	Jobs     *jobs.Service
 	Logger   *slog.Logger
 }
 
@@ -48,6 +55,10 @@ func Tasks(d Deps) []Task {
 			Run: swept(d.Security.Sweep)},
 		{Info: schedule.TaskInfo{Name: "login_limit_sweep", Summary: "清掉内存里过期的登录限流计数", Every: 10 * time.Minute},
 			Run: swept(d.Auth.Sweep)},
+		{Info: schedule.TaskInfo{Name: "backup_local", Summary: "在本机 backups/ 生成一份整库备份（最新一份不到 20 小时就跳过；最多留 7 份）", Every: 24 * time.Hour},
+			Run: backupLocal(d.Backup)},
+		{Info: schedule.TaskInfo{Name: "job_cleanup", Summary: "删掉 7 天以前、已经结束的长任务", Every: time.Hour},
+			Run: pruned(d.Jobs.Prune)},
 	}
 	if db.DialectOf(d.DB) == schema.SQLite {
 		tasks = append(tasks, Task{Info: schedule.TaskInfo{Name: "db_checkpoint", Summary: "把 SQLite 的 WAL 写回主库", Every: 5 * time.Minute},
@@ -65,6 +76,27 @@ func Tasks(d Deps) []Task {
 	tasks = append(tasks, Task{Info: schedule.TaskInfo{Name: "db_health", Summary: "检查数据库健康（SQLite 跑 quick_check，PostgreSQL 检查连通性）", Every: time.Minute},
 		Run: healthCheck(func(ctx context.Context) error { return db.QuickCheck(ctx, d.DB) }, logger)})
 	return tasks
+}
+
+// backupLocal 是 backup_local（master-scheduler「本站的内置任务」）：最新一份不到 backupFresh、或已有备份或恢复在进行时跳过。
+func backupLocal(b *svcbackup.Service) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		age, ok, err := b.LatestAge()
+		if err != nil {
+			return "", err
+		}
+		if ok && age < backupFresh {
+			return fmt.Sprintf("最新一份备份在 %s 前，不到 %s，跳过", age.Round(time.Minute), backupFresh), nil
+		}
+		info, skipped, err := b.TryCreateLocal(ctx)
+		if err != nil {
+			return "", err
+		}
+		if skipped {
+			return "已有备份或恢复在进行，跳过", nil
+		}
+		return "生成 " + info.Name, nil
+	}
 }
 
 // pruned 把一个「删掉 N 条」的清理函数包成任务。

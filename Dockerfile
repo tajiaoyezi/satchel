@@ -21,16 +21,23 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build \
 
 # 运行阶段：主控要装和管 nginx（同机节点复用这份 nginx），所以以 nginx 官方镜像为底；进程用 root 跑。
 FROM nginx:mainline-bookworm
+# PostgreSQL 驱动下的备份与恢复要 pg_dump 与 psql，主版本不低于服务器（master-backup）；compose 里的 PostgreSQL 是 18，
+# Debian 自带的是 15，所以从 PostgreSQL 官方的 apt 源装 postgresql-client-18。
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         tzdata \
         wget \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && wget -qO /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client-18 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/satchel /usr/local/bin/satchel
 COPY docker-entrypoint.sh /usr/local/bin/satchel-entrypoint
 RUN chmod 0755 /usr/local/bin/satchel /usr/local/bin/satchel-entrypoint
 
-# 数据目录布局见 storage-dual-database：database.json、config.yaml、satchel.db、master.key、satchel.sock、subscribes/、rule_templates/、public/、logs/。
+# 数据目录布局见 storage-dual-database：database.json、config.yaml、satchel.db、master.key、satchel.sock、subscribes/、rule_templates/、public/、logs/、backups/、recovery-codes/。
 ENV SATCHEL_DATA_DIR=/var/lib/satchel
 # 主控监听地址（master-serve）；compose 透传同名变量可改。健康检查从它取端口。
 ENV SATCHEL_LISTEN=0.0.0.0:12889

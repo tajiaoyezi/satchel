@@ -6,8 +6,10 @@ package rest
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/satchel/satchel/internal/command"
@@ -87,6 +89,10 @@ func commandHandler(c *command.Command, route command.REST, nargs int, runner co
 			}
 			setSessionCookie(w, r, token, expires)
 		}
+		if f, ok := result.(*command.File); ok {
+			writeFile(w, f)
+			return
+		}
 		WriteResult(w, result)
 	})
 }
@@ -104,7 +110,32 @@ func decode(c *command.Command, r *http.Request, nargs int) (*command.Invocation
 	if r.Method == http.MethodGet {
 		return inv, decodeQuery(c, r, inv)
 	}
+	if c.Shape == command.ShapeUpload {
+		// 上传类命令：请求体就是文件本身，flag 走查询参数；大小上限由命令自己数（master-backup：4 GiB）。
+		if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || (mt != "application/zip" && mt != "application/octet-stream") {
+			return nil, v1.New(v1.CodeBadRequest, "这条命令的请求体是文件本身，Content-Type 必须是 application/zip 或 application/octet-stream")
+		}
+		inv.Body = r.Body
+		return inv, decodeQuery(c, r, inv)
+	}
 	return inv, decodeBody(c, r, inv)
+}
+
+// writeFile 写下载类命令的结果：文件字节，带 Content-Disposition；文件打不开时仍是四字段错误。
+func writeFile(w http.ResponseWriter, f *command.File) {
+	rc, err := f.Open()
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("Content-Type", f.ContentType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": f.Name}))
+	if f.Size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(f.Size, 10))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, rc)
 }
 
 func fileFlagError(name string) *v1.Error {
@@ -204,6 +235,9 @@ func decodeBody(c *command.Command, r *http.Request, inv *command.Invocation) er
 				inv.Verify.User = s
 			}
 			continue
+		}
+		if name == command.NoWaitFlag && c.Shape == command.ShapeJob {
+			continue // REST 本来就不等：受理即返回 job，--no-wait 只对 CLI 与 MCP 有意义
 		}
 		if name == "confirm" && c.Danger != "" {
 			// 非字符串的 confirm 视为缺失（master-identity-and-authz「confirm 是字符串」），由 authz 报 confirm_required。

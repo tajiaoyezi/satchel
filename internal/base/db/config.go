@@ -36,17 +36,21 @@ const (
 	ConfigYAMLFile = "config.yaml"
 	SocketFile     = "satchel.sock"
 	// SubscribesDir 是订阅文件目录，RuleTemplatesDir 是规则模板目录，PublicDir 是 /public/ 对外提供的静态文件目录；
-	// LogsDir 是 serve 的日志目录，LogFile 是其中当前在写的日志文件（master-logs）；
-	// 都在数据目录下（第 08 章的数据目录布局与备份内容表；socket、public/ 与 logs/ 不进备份）。
-	SubscribesDir    = "subscribes"
-	RuleTemplatesDir = "rule_templates"
-	PublicDir        = "public"
-	LogsDir          = "logs"
-	LogFile          = "satchel.log"
+	// LogsDir 是 serve 的日志目录，LogFile 是其中当前在写的日志文件（master-logs）；BackupsDir 是本机备份目录，
+	// RecoveryCodesDir 放恢复之后新恢复码的明文，RestorePendingFile 是待恢复标记（master-backup）；
+	// 都在数据目录下（第 08 章的数据目录布局与备份内容表；socket、public/、logs/、backups/、recovery-codes/ 不进备份）。
+	SubscribesDir      = "subscribes"
+	RuleTemplatesDir   = "rule_templates"
+	PublicDir          = "public"
+	LogsDir            = "logs"
+	LogFile            = "satchel.log"
+	BackupsDir         = "backups"
+	RecoveryCodesDir   = "recovery-codes"
+	RestorePendingFile = "restore-pending.json"
 )
 
 // DataSubDirs 是数据目录下要随目录一起创建的子目录。
-var DataSubDirs = []string{SubscribesDir, RuleTemplatesDir, PublicDir, LogsDir}
+var DataSubDirs = []string{SubscribesDir, RuleTemplatesDir, PublicDir, LogsDir, BackupsDir, RecoveryCodesDir}
 
 // Config 是 database.json 的内容；环境变量 SATCHEL_DATABASE_* 逐项覆盖它。
 type Config struct {

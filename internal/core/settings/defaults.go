@@ -139,4 +139,5 @@ var defaults = map[string]any{
 	"primary_admin_username":                "",
 	"pending_outbound_address_replacements": json.RawMessage(`{}`),
 	"probe_quality_alert_states":            json.RawMessage(`{}`),
+	"last_restore":                          json.RawMessage(`null`), // 还没恢复过
 }

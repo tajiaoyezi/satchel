@@ -24,6 +24,8 @@ jobs:
       # 双库都要跑：缺 PostgreSQL 直接失败，不许静默跳过。
       SATCHEL_TEST_PG_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
       SATCHEL_TEST_REQUIRE_PG: "1"
+      # PostgreSQL 的备份与恢复测试要 pg_dump 与 psql（主版本不低于服务器的 16）：缺了直接失败，不许静默跳过。
+      SATCHEL_TEST_REQUIRE_PG_TOOLS: "1"
     steps:
       - uses: actions/checkout@v7
 
@@ -52,6 +54,11 @@ jobs:
             echo "生成物与注册表不一致，请运行 go generate ./internal/base/schema/ 并提交"
             exit 1
           fi
+
+      - name: PostgreSQL 客户端
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          pg_dump --version && psql --version
 
       - name: go test
         run: go test ./...

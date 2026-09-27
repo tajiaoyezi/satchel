@@ -14,7 +14,14 @@
 | `account totp disable` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/totp/disable` |
 | `account totp setup` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/totp/setup` |
 | `audit list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/audit` |
+| `backup create` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/backup/create` |
+| `backup download` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/backup/download/{name}` |
+| `backup list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/backup` |
+| `backup restore` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/backup/restore/{name}` |
+| `backup upload` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/backup/upload` |
 | `explain` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/explain/{target}` |
+| `job get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/job/get/{job}` |
+| `job list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/job` |
 | `logs files list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/logs/files` |
 | `logs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/logs` |
 | `mcp status` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/mcp/status` |
@@ -31,12 +38,24 @@
 | `settings show` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/settings/show` |
 | `settings snapshots list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/settings/snapshots` |
 | `setup init` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/init` |
+| `setup restore` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/restore` |
 | `setup status` | read | read | — | — | 否 | 是 | 否 | `GET /api/v1/setup/status` |
 | `token create` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/create` |
 | `token list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/token` |
 | `token revoke` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/revoke/{id}` |
 | `token update` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/update/{id}` |
 | `whoami` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/whoami` |
+
+## 执行形状
+
+长任务受理后立刻返回 job（CLI 默认跟到结束，`--no-wait` 不等；MCP 最多等 60 秒），之后用 `job get` 查；上传类命令的 REST 请求体是文件本身（CLI 的 `--file`），flag 走查询参数；下载类命令成功时回文件字节（CLI 写到 `--output`），MCP 上不可用。
+
+| 命令 | 执行形状 |
+|---|---|
+| `backup create` | 长任务 |
+| `backup download` | 下载 |
+| `backup upload` | 上传 |
+| `setup restore` | 上传 |
 
 ## 本地命令（不经主控，只在 CLI 里）
 

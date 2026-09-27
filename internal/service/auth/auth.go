@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/satchel/satchel/internal/command"
 	coresecurity "github.com/satchel/satchel/internal/core/security"
 	"github.com/satchel/satchel/internal/core/sessions"
 	"github.com/satchel/satchel/internal/core/users"
@@ -34,6 +35,10 @@ type Service struct {
 	turnstile *turnstile
 	events    *coresecurity.Repo
 	logger    *slog.Logger
+	// setupRestoreHandler 是初始化向导恢复备份的处理（service/backup 提供，装配根注入）。
+	setupRestoreHandler command.Handler
+	// setupGuard 是 setup init 之前的检查（service/backup 提供，装配根注入）。
+	setupGuard func() error
 
 	mu       sync.Mutex
 	pending  map[string]pendingEntry

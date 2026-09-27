@@ -47,7 +47,7 @@ var mmwxSettingKeys = []string{
 }
 
 // satchelSettingKeys 是 Satchel 新增、mmwx 没有的 key：反向代理的登记（第 06 章）。
-var satchelSettingKeys = []string{"trusted_proxies"}
+var satchelSettingKeys = []string{"trusted_proxies", "last_restore"}
 
 // 不搬的 22 个：并入 ApiToken、License 不适用（含探针页的许可徽章开关）、无调用方、PRO 官方探测源、mmwx 已废弃、
 // 一次性数据修复标记、Reality 域名共享池（第 10 章：需要中心服务器，不做）。
@@ -98,8 +98,8 @@ func TestSettingsCatalogCoversMMWX(t *testing.T) {
 			t.Errorf("目录里的 key %s 在 mmwx 里不存在，也不在 Satchel 新增的清单里", k)
 		}
 	}
-	if len(mmwxSettingKeys) != 114 || len(droppedSettingKeys) != 22 || len(catalog) != 93 {
-		t.Errorf("mmwx 114 个、不搬 22 个、目录 93 个（92 个来自 mmwx 加 %d 个 Satchel 新增），得到 %d / %d / %d", len(satchelSettingKeys), len(mmwxSettingKeys), len(droppedSettingKeys), len(catalog))
+	if len(mmwxSettingKeys) != 114 || len(droppedSettingKeys) != 22 || len(catalog) != 94 {
+		t.Errorf("mmwx 114 个、不搬 22 个、目录 94 个（92 个来自 mmwx 加 %d 个 Satchel 新增），得到 %d / %d / %d", len(satchelSettingKeys), len(mmwxSettingKeys), len(droppedSettingKeys), len(catalog))
 	}
 }
 
@@ -116,7 +116,7 @@ func TestSettingsCatalogTiers(t *testing.T) {
 			t.Errorf("key %s 与 system_config 的列同名", k.Name)
 		}
 	}
-	want := map[Class]int{ClassHuman: 18, ClassMasterSelf: 9, ClassSpec: 58, ClassReadOnly: 1, ClassStatus: 7}
+	want := map[Class]int{ClassHuman: 18, ClassMasterSelf: 9, ClassSpec: 58, ClassReadOnly: 1, ClassStatus: 8}
 	for class, n := range want {
 		if counts[class] != n {
 			t.Errorf("%s 档应当 %d 个 key，得到 %d", class, n, counts[class])

@@ -183,3 +183,25 @@ func ContentHash(canonical []byte) string {
 	sum := sha256.Sum256(canonical)
 	return hex.EncodeToString(sum[:])
 }
+
+// WriteStatus 在 q（库或事务）里写运行态档的 key：这是主控自己写的值，不算设置写，不抬版本、不存快照（resource-model）；
+// 只收运行态档的 key，别的一律 field_not_applyable。
+func (r *Repo) WriteStatus(ctx context.Context, q bun.IDB, values map[string]any) error {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for name, v := range values {
+		f, ok := r.fields[name]
+		if !ok || f.Column || f.Class != schema.ClassStatus {
+			return v1.Newf(v1.CodeFieldNotApplyable, "%s 不是运行态的 key，不能经 WriteStatus 写", name)
+		}
+		text, err := Encode(f.Type, v)
+		if err != nil {
+			return err
+		}
+		entry := &model.SystemSettingEntry{Key: name, Value: text, UpdatedAt: now}
+		if _, err := q.NewInsert().Model(entry).On("CONFLICT (key) DO UPDATE").
+			Set("value = EXCLUDED.value").Set("updated_at = EXCLUDED.updated_at").Exec(ctx); err != nil {
+			return v1.Wrap(v1.CodeDatabase, "写系统设置的运行态失败", err)
+		}
+	}
+	return nil
+}

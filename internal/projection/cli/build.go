@@ -91,6 +91,10 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 		leaf.Flags().StringVar(&verifyCode, command.VerifyCodeFlag, "", "当场验证的第二因素：验证器当前的码或一枚恢复码（不给会在终端里问）")
 		leaf.Flags().StringVar(&verifyUser, command.VerifyUserFlag, "", "当场验证要验的管理员账号（本机管理员必填；登录的用户只能验自己）")
 	}
+	var noWait bool
+	if c.Shape == command.ShapeJob {
+		leaf.Flags().BoolVar(&noWait, command.NoWaitFlag, false, "只输出受理时的 job，不等它结束（之后用 job get 查）")
+	}
 	if c.List {
 		leaf.Flags().IntVar(&page.Limit, "limit", command.DefaultLimit, fmt.Sprintf("每页条数（1 到 %d）", command.MaxLimit))
 		leaf.Flags().StringVar(&page.Cursor, "cursor", "", "上一页返回的 nextCursor")
@@ -147,9 +151,35 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 				}
 			}
 		}
+		// 上传与下载：本地文件在发请求之前打开或检查，--file / --output 本身不发给主控。
+		var output string
+		switch c.Shape {
+		case command.ShapeUpload:
+			f, err := openUpload(inv)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+		case command.ShapeDownload:
+			if output, err = checkOutput(inv); err != nil {
+				return err
+			}
+		}
 		result, err := execute(cmd.Context(), c, inv, opts, runner)
 		if err != nil {
 			return err
+		}
+		switch c.Shape {
+		case command.ShapeJob:
+			if !noWait {
+				if result, err = followJob(cmd.Context(), result, runner, opts); err != nil {
+					return err
+				}
+			}
+		case command.ShapeDownload:
+			if result, err = saveDownload(result, output); err != nil {
+				return err
+			}
 		}
 		return render(cmd.OutOrStdout(), c, result, opts, o)
 	}

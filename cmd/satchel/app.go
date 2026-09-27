@@ -12,16 +12,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/uptrace/bun"
 
+	archive "github.com/satchel/satchel/internal/base/backup"
+	"github.com/satchel/satchel/internal/base/buildinfo"
 	"github.com/satchel/satchel/internal/base/captcha"
 	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/base/store"
 	"github.com/satchel/satchel/internal/command"
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
+	corejobs "github.com/satchel/satchel/internal/core/jobs"
 	coresecurity "github.com/satchel/satchel/internal/core/security"
 	"github.com/satchel/satchel/internal/core/sessions"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
@@ -39,6 +43,8 @@ import (
 	"github.com/satchel/satchel/internal/projection/web"
 	svcaudit "github.com/satchel/satchel/internal/service/audit"
 	"github.com/satchel/satchel/internal/service/auth"
+	svcbackup "github.com/satchel/satchel/internal/service/backup"
+	"github.com/satchel/satchel/internal/service/jobs"
 	svclogs "github.com/satchel/satchel/internal/service/logs"
 	"github.com/satchel/satchel/internal/service/schedule"
 	svcsecurity "github.com/satchel/satchel/internal/service/security"
@@ -74,13 +80,29 @@ type app struct {
 	identity  *auth.Service
 	sched     *scheduler.Scheduler
 	schedules *schedule.Service
+	jobs      *jobs.Service
+	backups   *svcbackup.Service
+
+	// stopMu 与 stopServe：发起恢复之后让 serve 优雅停止（serve 开始时设）。
+	stopMu    sync.Mutex
+	stopServe context.CancelFunc
+}
+
+// requestStop 让正在跑的 serve 优雅停止：已经在处理的请求（含发起恢复的那一个）照常把回应发完。
+func (a *app) requestStop() {
+	a.stopMu.Lock()
+	defer a.stopMu.Unlock()
+	if a.stopServe != nil {
+		a.stopServe()
+	}
 }
 
 // newApp 装配各层。bdb 已打开且已迁移；数据目录已存在；cfg 是 serve 的配置（这里用自救开关与允许跨域的来源）。
 func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig) (*app, error) {
 	table := command.Catalog()
 	st := store.New(bdb, schema.Default())
-	audits := svcaudit.New(coreaudit.New(bdb, st))
+	auditRepo := coreaudit.New(bdb, st)
+	audits := svcaudit.New(auditRepo)
 	// 安全事件与封禁：service/security 管令牌猜测的计数与封禁（authn 计数、门查封禁），service/auth 直接写登录的安全事件。
 	events := coresecurity.New(bdb)
 	guard := svcsecurity.New(events, logger)
@@ -106,8 +128,33 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	if err := schedules.MarkInterrupted(context.Background()); err != nil {
 		return nil, err
 	}
-	sched := scheduler.New(scheduler.Tasks(scheduler.Deps{DB: bdb, Auth: identity, Audit: audits, Security: guard, Schedule: schedules, Logger: logger}),
-		schedules, logger)
+	// 长任务：上次主控停止时还没结束的先标为失败（master-jobs）。参数摘要用横切层 audit 的同一套打码。
+	jobsSvc := jobs.New(corejobs.New(bdb, st), table, mwaudit.Digest, logger)
+	if err := jobsSvc.MarkInterrupted(context.Background()); err != nil {
+		return nil, err
+	}
+	// 整库备份与恢复（master-backup）：PostgreSQL 的 pg_dump / psql 用数据目录里的数据库配置连库。
+	dbCfg, err := db.LoadConfig(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	driver, pg := db.DriverSQLite, (*archive.PGConn)(nil)
+	if db.DialectOf(bdb) == schema.Postgres {
+		driver, pg = db.DriverPostgres, archive.PGConnFromConfig(dbCfg)
+	}
+	var a *app
+	backups := svcbackup.New(svcbackup.Deps{DataDir: dataDir, DB: bdb, Driver: driver, PG: pg, Version: buildinfo.Version,
+		Users: accounts, Settings: settingsRepo, Audit: auditRepo, Logger: logger,
+		StartJob: func(ctx context.Context, inv *command.Invocation, run func(context.Context) (any, error), done func()) (any, error) {
+			return jobsSvc.Start(ctx, inv, run, done)
+		},
+		RequestStop:   func() { a.requestStop() },
+		GenerateCodes: auth.GenerateRecoveryCodes,
+	})
+	identity.SetSetupRestore(backups.SetupRestore)
+	identity.SetSetupGuard(backups.SetupGuard)
+	sched := scheduler.New(scheduler.Tasks(scheduler.Deps{DB: bdb, Auth: identity, Audit: audits, Security: guard, Schedule: schedules,
+		Backup: backups, Jobs: jobsSvc, Logger: logger}), schedules, logger)
 	schedules.SetTasks(sched.Infos())
 
 	bindings := command.Bindings{
@@ -133,6 +180,12 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		bindings[name] = h
 	}
 	for name, h := range schedules.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range jobsSvc.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range backups.Bindings() {
 		bindings[name] = h
 	}
 	if err := table.CheckBindings(bindings); err != nil {
@@ -188,8 +241,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	// 顺序（从外到内）：门（来源 → 关闭公网访问 → 静默模式 → 封禁）→ CORS → authn（判身份，无效凭据计一次令牌校验失败）
 	// → SameOrigin（管住所有浏览器发来的写请求：REST、/mcp、会话入口）→ mux。
 	handler := gates.Wrap(rest.CORS(cfg.AllowedOrigins, authn.Middleware(identity, tokens, guard, rest.SameOrigin(mux))))
-	return &app{table: table, runner: runner, handler: handler, mounts: patterns, db: bdb, dataDir: dataDir, logger: logger,
-		gate: gates, guard: guard, identity: identity, sched: sched, schedules: schedules}, nil
+	a = &app{table: table, runner: runner, handler: handler, mounts: patterns, db: bdb, dataDir: dataDir, logger: logger,
+		gate: gates, guard: guard, identity: identity, sched: sched, schedules: schedules, jobs: jobsSvc, backups: backups}
+	return a, nil
 }
 
 // notFoundPath 是顶层没有登记的路径的回应（四字段的 not_found）。
@@ -239,6 +293,12 @@ func (a *app) listen(listenAddr string) (tcp, unix net.Listener, err error) {
 // serve 在两个监听上跑同一套处理器、开始内置任务，直到 ctx 取消；然后优雅停止（HTTP 与内置任务同时停，各自最多等
 // shutdownTimeout）、补写没写进库的任务记录、关库、删 socket。
 func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
+	// 发起恢复之后由 requestStop 取消这个 ctx，与收到 SIGTERM 走同一条优雅停止的路。
+	ctx, cancelServe := context.WithCancel(ctx)
+	defer cancelServe()
+	a.stopMu.Lock()
+	a.stopServe = cancelServe
+	a.stopMu.Unlock()
 	srv := &http.Server{
 		Handler:           a.handler,
 		ConnContext:       authn.ConnContext,
@@ -263,10 +323,14 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 	a.logger.Info("开始优雅停止", "timeout", shutdownTimeout)
 	stopCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	// 内置任务与 HTTP 同时停：不排在 HTTP 后面，免得 HTTP 用完时限后任务一点时间都没有；都在关库之前停下。
+	// 内置任务、长任务与 HTTP 同时停：不排在 HTTP 后面，免得 HTTP 用完时限后它们一点时间都没有；都在关库之前停下。
 	schedDone := make(chan struct{})
 	go func() {
-		a.sched.Stop(stopCtx)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); a.sched.Stop(stopCtx) }()
+		go func() { defer wg.Done(); a.jobs.Stop(stopCtx) }()
+		wg.Wait()
 		close(schedDone)
 	}()
 	if err := srv.Shutdown(stopCtx); err != nil {

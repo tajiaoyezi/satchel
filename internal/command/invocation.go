@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,8 @@ type Invocation struct {
 	Page *Page
 	// Verify 是人类专属命令的当场验证值；不在 Flags 里，永不进审计摘要。没给为 nil。
 	Verify *Verification
+	// Body 只在上传类命令上有：REST 的请求体（文件本身，已套上这条命令的大小上限）。
+	Body io.Reader
 }
 
 // Verification 是第 05 章七组的当场验证：密码、第二因素（TOTP 或恢复码）、要验的管理员账号（本机管理员必填）。

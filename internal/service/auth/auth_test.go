@@ -403,8 +403,17 @@ func TestSetupAndAccountCommands(t *testing.T) {
 		ctx := context.Background()
 		b := s.Bindings()
 		st, _ := b["setup status"](ctx, &command.Invocation{})
-		if ss := st.(SetupStatus); ss.Initialized || !ss.Paths["create_admin"].Available || ss.Paths["restore_backup"].Available || ss.Paths["import_mmwx"].Available {
+		if ss := st.(SetupStatus); ss.Initialized || !ss.Paths["create_admin"].Available || !ss.Paths["restore_backup"].Available || ss.Paths["import_mmwx"].Available {
 			t.Fatalf("空库状态：%+v", ss)
+		}
+		// setup restore：空库交给注入的处理；有用户后一律 conflict、不交给它（master-setup-wizard「setup restore」）。
+		restored := 0
+		s.SetSetupRestore(func(context.Context, *command.Invocation) (any, error) {
+			restored++
+			return map[string]any{"restarting": true}, nil
+		})
+		if _, err := b["setup restore"](ctx, &command.Invocation{}); err != nil || restored != 1 {
+			t.Fatalf("空库的 setup restore 应当交给恢复处理：%v %d", err, restored)
 		}
 		for _, bad := range []map[string]any{{"username": "Ad", "password": password}, {"username": "admin", "password": "short"}, {"username": "", "password": password}} {
 			if _, err := b["setup init"](ctx, &command.Invocation{Flags: bad}); err == nil || v1.AsError(err).Code != v1.CodeBadRequest {
@@ -415,8 +424,11 @@ func TestSetupAndAccountCommands(t *testing.T) {
 		if err != nil || res.(SetupResult).Username != "admin" || res.(SetupResult).Role != v1.RoleAdmin {
 			t.Fatalf("setup init：%v %v", res, err)
 		}
+		if _, err := b["setup restore"](ctx, &command.Invocation{}); v1.AsError(err).Code != v1.CodeConflict || restored != 1 {
+			t.Fatalf("有用户后 setup restore 应当 conflict 且不交给恢复处理：%v %d", err, restored)
+		}
 		st, _ = b["setup status"](ctx, &command.Invocation{})
-		if ss := st.(SetupStatus); !ss.Initialized || ss.Paths["create_admin"].Available {
+		if ss := st.(SetupStatus); !ss.Initialized || ss.Paths["create_admin"].Available || ss.Paths["restore_backup"].Available {
 			t.Fatalf("初始化后状态：%+v", ss)
 		}
 		if _, err := b["setup init"](ctx, &command.Invocation{Flags: map[string]any{"username": "again", "password": password}}); err == nil || v1.AsError(err).Code != v1.CodeConflict {

@@ -109,3 +109,12 @@ func (r *Repo) DeleteBefore(ctx context.Context, cutoff time.Time) (int, error) 
 	}
 	return n, nil
 }
+
+// InsertTx 在事务 tx 里写一条记录（恢复之后的收尾要与恢复码、last_restore 同一个事务）。
+func (r *Repo) InsertTx(ctx context.Context, tx bun.Tx, rec Record) error {
+	row := &model.AuditLog{
+		At: rec.At, Actor: rec.Actor, ActorKind: string(rec.ActorKind), TokenID: rec.TokenID,
+		Command: rec.Command, ArgsDigest: rec.ArgsDigest, PlanID: rec.PlanID, Result: rec.Result,
+	}
+	return r.store.WithTx(tx).Insert(ctx, row)
+}

@@ -131,5 +131,7 @@ func settingsKeys() []Column {
 		col("primary_admin_username", TypeText).cls(ClassStatus),
 		col("pending_outbound_address_replacements", TypeJSON).cls(ClassStatus),
 		col("probe_quality_alert_states", TypeJSON).cls(ClassStatus),
+		// Satchel 新增：最近一次恢复的来源、备份名、时间、结果与恢复码文件路径，恢复之后由主控写（master-backup）
+		col("last_restore", TypeJSON).cls(ClassStatus),
 	}
 }

@@ -3,6 +3,7 @@ package command
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -222,6 +223,32 @@ type REST struct {
 	Path   string
 }
 
+// Shape 是命令的执行形状（master-command-table、master-jobs、master-backup）：普通命令是空。
+// 长任务受理后立刻返回 job；上传类命令的 REST 请求体是文件本身（来自唯一的 file 类型 flag --file）；
+// 下载类命令成功时的结果是文件本身（*File，CLI 写到唯一的 file 类型 flag --output）。
+type Shape string
+
+const (
+	ShapeJob      Shape = "job"
+	ShapeUpload   Shape = "upload"
+	ShapeDownload Shape = "download"
+)
+
+// UploadFlag 与 DownloadFlag 是上传类、下载类命令那个唯一的 file 类型 flag 的名字；NoWaitFlag 是长任务自动带的保留 flag。
+const (
+	UploadFlag   = "file"
+	DownloadFlag = "output"
+	NoWaitFlag   = "no-wait"
+)
+
+// File 是下载类命令的结果：REST 把它流式写出，CLI 写到本地文件。
+type File struct {
+	Name        string
+	ContentType string
+	Size        int64
+	Open        func() (io.ReadCloser, error)
+}
+
 // Command 是命令表里的一条记录。
 type Command struct {
 	// Path 是命令路径的各段，如 ["audit","list"]。
@@ -249,6 +276,8 @@ type Command struct {
 	Columns []string
 	// REST 非空时覆盖默认映射。
 	REST *REST
+	// Shape 是执行形状；空是普通命令。
+	Shape Shape
 }
 
 // Name 是命令路径各段用空格连起来的名字，也是 Bindings 与审计记录里的 command。
@@ -316,6 +345,7 @@ func (c *Command) RequiredArgs() int {
 var (
 	segmentRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$|^__[a-z]+$`)
 	nameRe    = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	argNameRe = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 )
 
 // validate 检查单条记录自身的规则；跨记录的规则（路径唯一、前缀）在 Table 里查。
@@ -338,7 +368,8 @@ func (c *Command) validate() error {
 	seen := map[string]bool{}
 	sawOptional := false
 	for _, a := range c.Args {
-		if !nameRe.MatchString(a.Name) {
+		// 位置参数名还是 REST 路径模板里的通配名（ServeMux 只认 Go 标识符），所以不许有连字符。
+		if !argNameRe.MatchString(a.Name) {
 			return fmt.Errorf("命令 %q 的位置参数名 %q 不合法", name, a.Name)
 		}
 		if seen[a.Name] {
@@ -421,6 +452,9 @@ func (c *Command) validate() error {
 	if c.HumanOnly && (c.Class == ClassRead || c.Class == ClassLocal) {
 		return fmt.Errorf("命令 %q 是人类专属，类别不能是 read 或 local", name)
 	}
+	if err := c.validateShape(); err != nil {
+		return err
+	}
 	if c.REST != nil {
 		if c.REST.Method != "GET" && c.REST.Method != "POST" {
 			return fmt.Errorf("命令 %q 的 REST 方法 %q 只能是 GET 或 POST", name, c.REST.Method)
@@ -435,6 +469,44 @@ func (c *Command) validate() error {
 	return nil
 }
 
+// validateShape 检查执行形状的约束：只标在 action、非列表的命令上；上传类恰好一个 file 类型的 --file、不能是人类专属
+// （请求体被文件占了，当场验证的密码放不进去）；下载类恰好一个 file 类型的 --output。普通命令的 file 类型 flag 照旧是
+// 「CLI 读出内容内联发给主控」（M2 的 plan -f），不受这里限制。
+func (c *Command) validateShape() error {
+	name := c.Name()
+	files := c.FileFlags()
+	switch c.Shape {
+	case "":
+		return nil
+	case ShapeJob, ShapeUpload, ShapeDownload:
+	default:
+		return fmt.Errorf("命令 %q 的执行形状 %q 不认识", name, c.Shape)
+	}
+	if c.Class != ClassAction || c.List {
+		return fmt.Errorf("命令 %q 标了执行形状 %s，只能是 action 类别、非列表的命令", name, c.Shape)
+	}
+	want := ""
+	switch c.Shape {
+	case ShapeUpload:
+		if c.HumanOnly {
+			return fmt.Errorf("命令 %q 是上传类，不能是人类专属：请求体被文件占了，当场验证的密码放不进去", name)
+		}
+		want = UploadFlag
+	case ShapeDownload:
+		want = DownloadFlag
+	}
+	if want == "" {
+		if len(files) > 0 {
+			return fmt.Errorf("命令 %q 是长任务，不能登记 file 类型的 flag %s", name, files[0])
+		}
+		return nil
+	}
+	if len(files) != 1 || files[0] != want {
+		return fmt.Errorf("命令 %q 是%s类，要恰好一个 file 类型的 flag --%s，得到 %v", name, map[Shape]string{ShapeUpload: "上传", ShapeDownload: "下载"}[c.Shape], want, files)
+	}
+	return nil
+}
+
 func (c *Command) argByName(name string) (Arg, bool) {
 	for _, a := range c.Args {
 		if a.Name == name {
@@ -445,8 +517,8 @@ func (c *Command) argByName(name string) (Arg, bool) {
 }
 
 // reservedFlags 是投影层自己加的 flag，命令不许再登记：--json、--data-dir 是 CLI 的全局 flag，
-// --confirm 随危险类自动加，--limit / --cursor 随列表命令自动加，verify-* 随人类专属自动加，--server / --token 是 m1-04 的客户端 flag。
-var reservedFlags = map[string]bool{"json": true, "data-dir": true, "confirm": true, "limit": true, "cursor": true, "server": true, "token": true, "help": true,
+// --confirm 随危险类自动加，--limit / --cursor 随列表命令自动加，verify-* 随人类专属自动加，--no-wait 随长任务自动加，--server / --token 是 m1-04 的客户端 flag。
+var reservedFlags = map[string]bool{"json": true, "data-dir": true, "confirm": true, "limit": true, "cursor": true, "server": true, "token": true, "help": true, NoWaitFlag: true,
 	VerifyPasswordFlag: true, VerifyCodeFlag: true, VerifyUserFlag: true}
 
 // localSelfRegistered 是本地命令可以自己登记的保留 flag 名。

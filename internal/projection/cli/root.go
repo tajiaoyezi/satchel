@@ -14,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -41,6 +42,10 @@ type Options struct {
 	ServerSide bool
 	// Prompt 从终端读一个不回显的值（密码、验证码）；nil 时用真终端。没有终端时 MUST 返回 ErrNoTerminal，不等待。
 	Prompt func(label string) (string, error)
+	// JobPoll 是跟长任务时每次查 job get 的间隔；JobMaxWait 是最多等多久，0 表示等到结束（master-jobs：CLI 每秒一次、
+	// 一直等；MCP 每半秒一次、最多 60 秒）。
+	JobPoll    time.Duration
+	JobMaxWait time.Duration
 }
 
 // ErrNoTerminal 表示 stdin 不是终端：要从终端读的值拿不到，命令直接拒绝、不等待。
@@ -63,7 +68,7 @@ func terminalPrompt(label string) (string, error) {
 
 // DefaultOptions 是 satchel 二进制的默认装配（不含 serve，它要 cmd/satchel 才能装）。
 func DefaultOptions() Options {
-	opts := Options{Table: command.Catalog(), Local: command.Bindings{}, Renderers: map[string]Renderer{}, Prompt: terminalPrompt}
+	opts := Options{Table: command.Catalog(), Local: command.Bindings{}, Renderers: map[string]Renderer{}, Prompt: terminalPrompt, JobPoll: time.Second}
 	registerBuiltins(&opts)
 	return opts
 }

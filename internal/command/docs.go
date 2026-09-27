@@ -34,6 +34,15 @@ func GenerateDocs(t *Table) []byte {
 		fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | `%s %s` |\n",
 			c.Name(), c.Class, info.Scope, dash(string(c.Danger)), dash(confirm), yesNo(c.HumanOnly), yesNo(c.Anonymous), yesNo(c.List), info.REST.Method, info.REST.Path)
 	}
+	b.WriteString("\n## 执行形状\n\n")
+	b.WriteString("长任务受理后立刻返回 job（CLI 默认跟到结束，`--no-wait` 不等；MCP 最多等 60 秒），之后用 `job get` 查；")
+	b.WriteString("上传类命令的 REST 请求体是文件本身（CLI 的 `--file`），flag 走查询参数；下载类命令成功时回文件字节（CLI 写到 `--output`），MCP 上不可用。\n\n")
+	b.WriteString("| 命令 | 执行形状 |\n|---|---|\n")
+	for _, c := range t.Remote() {
+		if c.Shape != "" {
+			fmt.Fprintf(&b, "| `%s` | %s |\n", c.Name(), map[Shape]string{ShapeJob: "长任务", ShapeUpload: "上传", ShapeDownload: "下载"}[c.Shape])
+		}
+	}
 	b.WriteString("\n## 本地命令（不经主控，只在 CLI 里）\n\n")
 	b.WriteString("| 命令 | 说明 |\n|---|---|\n")
 	for _, c := range t.Local() {

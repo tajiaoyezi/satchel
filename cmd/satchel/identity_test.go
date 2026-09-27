@@ -165,7 +165,7 @@ func TestIdentityEndToEnd(t *testing.T) {
 			Available bool `json:"available"`
 		}
 		_ = json.Unmarshal(fields["paths"], &paths)
-		if status != 200 || string(fields["initialized"]) != "false" || !paths["create_admin"].Available || paths["restore_backup"].Available || paths["import_mmwx"].Available {
+		if status != 200 || string(fields["initialized"]) != "false" || !paths["create_admin"].Available || !paths["restore_backup"].Available || paths["import_mmwx"].Available {
 			t.Fatalf("空库的 setup status：%d %v", status, fields)
 		}
 		// 密码不合规、用户名不合规都是 400，不建账号。

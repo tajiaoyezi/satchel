@@ -22,6 +22,8 @@ var GroupSummaries = map[string]string{
 	"logs files":             "数据目录 logs/ 下的日志文件",
 	"schedule":               "内置定时任务与它们的运行记录（只对管理员开放）",
 	"schedule runs":          "内置定时任务每次运行的记录",
+	"job":                    "长任务：受理后在主控里接着跑的命令，按 job id 查结果（只对管理员开放）",
+	"backup":                 "整库备份与恢复（只对管理员开放；下载与恢复要当场验证）",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -38,7 +40,31 @@ func catalogCommands() []*Command {
 	all = append(all, tokenCommands()...)
 	all = append(all, securityCommands()...)
 	all = append(all, opsCommands()...)
+	all = append(all, backupCommands()...)
 	return all
+}
+
+// backupCommands 是 m1-07 的长任务与整库备份命令（master-jobs、master-backup）。本机生成与上传备份只要求管理员；
+// 「把备份下载到主控之外」与「恢复备份」是第 05 章七组的整库操作：人类专属，要当场验证，令牌与 MCP 一律做不了。
+func backupCommands() []*Command {
+	name := Arg{Name: "name", Description: "backup list 里的备份名，如 satchel-backup-20260925T081500Z.zip"}
+	return []*Command{
+		{Path: []string{"job", "get"}, Summary: "查一个长任务：状态、开始与结束时间、退出码、结果", Class: ClassRead,
+			Args: []Arg{{Name: "job", Description: "受理时返回的 job_id，如 job-0123456789abcdef"}}},
+		{Path: []string{"job", "list"}, Summary: "按 id 倒序列出长任务", Class: ClassRead, List: true,
+			Flags:   []Flag{{Name: "status", Type: TypeString, Description: "只看这个状态：queued、running、done、failed、unknown"}},
+			Columns: []string{"job_id", "kind", "status", "created_at", "finished_at", "exit_code"}},
+		{Path: []string{"backup", "create"}, Summary: "在主控本机的 backups/ 生成一份整库备份（长任务；最多留 7 份）", Class: ClassAction, Shape: ShapeJob},
+		{Path: []string{"backup", "list"}, Summary: "列出主控本机 backups/ 里的备份，从新到旧", Class: ClassRead, List: true,
+			Columns: []string{"name", "size", "created_at", "driver"}},
+		{Path: []string{"backup", "upload"}, Summary: "把本地的一份备份传到主控的 backups/（先校验；最大 4 GiB）", Class: ClassAction, Shape: ShapeUpload,
+			Flags: []Flag{{Name: UploadFlag, Type: TypeFile, Description: "本地备份文件的路径"}}},
+		{Path: []string{"backup", "download"}, Summary: "把一份备份下载到本地（人类专属：当场验证；备份里有主控通信密钥与全部数据）", Class: ClassAction,
+			Shape: ShapeDownload, HumanOnly: true, Args: []Arg{name},
+			Flags: []Flag{{Name: DownloadFlag, Type: TypeFile, Description: "写到本地的这个路径（已存在就拒绝，权限 0600）"}}},
+		{Path: []string{"backup", "restore"}, Summary: "用一份备份恢复整个主控（人类专属：当场验证；主控随后重启，在启动时换库）", Class: ClassAction,
+			HumanOnly: true, Args: []Arg{name}},
+	}
 }
 
 // opsCommands 是 m1-06 的系统日志与内置定时任务命令（master-logs、master-scheduler），都只对管理员开放（处理函数里判）。
@@ -195,6 +221,8 @@ func identityCommands() []*Command {
 				{Name: "password", Type: TypePassword, Description: "密码（至少 8 个字符；CLI 上从终端读两遍）"},
 				{Name: "email", Type: TypeString, Description: "邮箱（可选）"},
 			}},
+		{Path: []string{"setup", "restore"}, Summary: "空库上用一份备份恢复整个主控（已有用户一律拒绝；主控随后重启）", Class: ClassAction,
+			Anonymous: true, Shape: ShapeUpload, Flags: []Flag{{Name: UploadFlag, Type: TypeFile, Description: "本地备份文件的路径"}}},
 		{Path: []string{"account", "show"}, Summary: "显示自己账号的状态：角色、两步验证、剩余恢复码、活动会话数", Class: ClassRead},
 		{Path: []string{"account", "set-password"}, Summary: "改自己的密码（人类专属：当场验证；其它会话作废）", Class: ClassAction, HumanOnly: true,
 			Flags: []Flag{{Name: "new-password", Type: TypePassword, Description: "新密码（至少 8 个字符；CLI 上从终端读两遍）"}}},

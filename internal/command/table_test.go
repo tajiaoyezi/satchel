@@ -25,6 +25,8 @@ func TestCatalog(t *testing.T) {
 		"settings show": ClassRead, "settings snapshots list": ClassRead, "token list": ClassRead, "mcp status": ClassRead,
 		"security events list": ClassRead, "security bans list": ClassRead,
 		"logs list": ClassRead, "logs files list": ClassRead, "schedule list": ClassRead, "schedule runs list": ClassRead,
+		"job get": ClassRead, "job list": ClassRead, "backup list": ClassRead,
+		"backup create": ClassAction, "backup upload": ClassAction, "backup download": ClassAction, "backup restore": ClassAction, "setup restore": ClassAction,
 		"setup init": ClassAction, "account set-password": ClassAction, "account totp setup": ClassAction, "account totp confirm": ClassAction,
 		"account totp disable": ClassAction, "account recovery-codes regenerate": ClassAction,
 		"token create": ClassAction, "token update": ClassAction, "token revoke": ClassAction,
@@ -44,10 +46,24 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 的类别应当是 %s，得到 %s", name, class, c.Class)
 		}
 	}
-	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list"} {
+	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list"} {
 		if c, _ := table.Lookup(name); !c.List {
 			t.Errorf("%s 应当是列表命令", name)
 		}
+	}
+	// m1-07 的执行形状、人类专属与不要身份。
+	for name, shape := range map[string]Shape{"backup create": ShapeJob, "backup upload": ShapeUpload, "setup restore": ShapeUpload, "backup download": ShapeDownload} {
+		if c, _ := table.Lookup(name); c.Shape != shape {
+			t.Errorf("%s 的执行形状应当是 %s，得到 %q", name, shape, c.Shape)
+		}
+	}
+	for _, name := range []string{"backup download", "backup restore"} {
+		if c, _ := table.Lookup(name); !c.HumanOnly {
+			t.Errorf("%s 应当是人类专属", name)
+		}
+	}
+	if c, _ := table.Lookup("setup restore"); !c.Anonymous {
+		t.Error("setup restore 应当不要身份")
 	}
 	for _, name := range []string{"settings set", "settings gates set"} {
 		if c, _ := table.Lookup(name); func() bool {
@@ -87,7 +103,7 @@ func TestCatalog(t *testing.T) {
 	if c, _ := table.Lookup("version"); func() bool { _, ok := c.Scope(); return ok }() {
 		t.Error("version 是本地命令，不该有 scope")
 	}
-	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup,security ban,security unban,settings gates set,settings master-url set,token create,token revoke,token update" {
+	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup,backup download,backup restore,security ban,security unban,settings gates set,settings master-url set,token create,token revoke,token update" {
 		t.Errorf("人类专属命令清单不对：%v", table.HumanOnly())
 	}
 	for _, name := range []string{"setup status", "setup init"} {
@@ -145,6 +161,14 @@ func TestTableRules(t *testing.T) {
 		{"非本地命令自己登记 verify-user", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Flags: []Flag{{Name: VerifyUserFlag, Type: TypeString}}}}, "保留"},
 		{"本地命令也不能登记 verify-password", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassLocal, Flags: []Flag{{Name: VerifyPasswordFlag, Type: TypeString}}}}, "保留"},
 		{"不许登记 force", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassMasterSettings, Flags: []Flag{{Name: "force", Type: TypeBool}}}}, "权限类"},
+		// 三种执行形状的约束（m1-07）。
+		{"read 的长任务", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassRead, Shape: ShapeJob}}, "action"},
+		{"人类专属的上传", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Shape: ShapeUpload, HumanOnly: true,
+			Flags: []Flag{{Name: UploadFlag, Type: TypeFile}}}}, "人类专属"},
+		{"没有 output 的下载", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Shape: ShapeDownload}}, "--output"},
+		{"上传没有 file", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Shape: ShapeUpload, Flags: []Flag{{Name: "path", Type: TypeFile}}}}, "--file"},
+		{"不认识的形状", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Shape: "stream"}}, "不认识"},
+		{"长任务撞名 no-wait", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Shape: ShapeJob, Flags: []Flag{{Name: NoWaitFlag, Type: TypeBool}}}}, "保留"},
 		{"本地命令也不许登记 force", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassLocal, Flags: []Flag{{Name: "force", Type: TypeBool}}}}, "force"},
 	}
 	for _, tc := range cases {

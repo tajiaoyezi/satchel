@@ -34,11 +34,11 @@ go build ./cmd/satchel
 | `SATCHEL_FORCE_PUBLIC_ACCESS` | 「关闭公网访问」的自救开关：`1` / `true` / `yes` / `on` 时本进程跳过这一道门（只在 `serve` 启动时读，不改设置），见「门与登录防护」 | 关 |
 | `SATCHEL_ALLOWED_ORIGINS` | 允许跨域调用的网页来源，逗号分隔的 `http(s)://` origin 或单独一个 `*`；只给带令牌的调用用，不带 cookie | 只允许同源 |
 
-主控同时监听 TCP 与数据目录下的 unix socket `satchel.sock`（0600）。**身份只从连接判定**，按顺序取第一个：请求带了 `Authorization` 头就只看令牌——`Bearer <有效令牌>` 是令牌身份，别的一律是无效凭据、`unauthenticated`，不再往下看（见「令牌与远程接入」）；经 socket 进来、对端是 root 或运行主控的那个 OS 用户 → 本机管理员（全部权限，socket 上带的 cookie 不看）；TCP 上带有效会话 cookie → 登录的用户（管理员全部权限，普通用户只有 `read` + `operate`、没有危险类）；其余一律没有身份。没有身份能到的只有：`GET /api/v1/healthz`、`/public/<file>`（数据目录 `public/` 里的文件，目录不列、`..` 出不去）、初始化向导的 `setup status` / `setup init`，以及下面的四个会话入口。经 TCP 的请求在判定身份之前先过三道门（见「门与登录防护」），经 socket 的不受影响。收到 SIGINT / SIGTERM 后停止接受新连接、等进行中的请求与正在跑的内置任务（两者合计最多 10 秒）、关库、删 socket、退出码 0。
+主控同时监听 TCP 与数据目录下的 unix socket `satchel.sock`（0600）。**身份只从连接判定**，按顺序取第一个：请求带了 `Authorization` 头就只看令牌——`Bearer <有效令牌>` 是令牌身份，别的一律是无效凭据、`unauthenticated`，不再往下看（见「令牌与远程接入」）；经 socket 进来、对端是 root 或运行主控的那个 OS 用户 → 本机管理员（全部权限，socket 上带的 cookie 不看）；TCP 上带有效会话 cookie → 登录的用户（管理员全部权限，普通用户只有 `read` + `operate`、没有危险类）；其余一律没有身份。没有身份能到的只有：`GET /api/v1/healthz`、`/public/<file>`（数据目录 `public/` 里的文件，目录不列、`..` 出不去）、初始化向导的 `setup status` / `setup init` / `setup restore`，以及下面的四个会话入口。经 TCP 的请求在判定身份之前先过三道门（见「门与登录防护」），经 socket 的不受影响。收到 SIGINT / SIGTERM 后停止接受新连接、等进行中的请求、正在跑的内置任务与长任务（同时等，各自最多 10 秒）、关库、删 socket、退出码 0。
 
 ### 初始化、登录与账号
 
-- **初始化向导**：空库时先建第一个管理员。`satchel setup status` 报告是否已初始化与可走的路（本版本只有「建管理员」；恢复备份随 m1-07、导入 mmwx 随 M9）；`satchel setup init --username <名>`（可选 `--email`）在终端里读两遍密码，或在网页 / REST 上 `POST /api/v1/setup/init`，成功顺手下发会话 cookie。用户名 3 到 32 个字符、小写字母 / 数字 / `_` / `-`、以字母或数字开头；密码至少 8 个字符（bcrypt 存哈希）。库里已有用户后 `setup init` 是 `conflict`；两个并发的 init 只有一个成功。**初始化之前谁都能建这个管理员**（向导本来就不要身份），所以先在本机或内网完成 `setup init`，再把主控暴露到公网。
+- **初始化向导**：空库时先建第一个管理员。`satchel setup status` 报告是否已初始化与可走的路（空库时可以建管理员或恢复一份 Satchel 备份；导入 mmwx 随 M9）；`satchel setup init --username <名>`（可选 `--email`）在终端里读两遍密码，或在网页 / REST 上 `POST /api/v1/setup/init`，成功顺手下发会话 cookie。用户名 3 到 32 个字符、小写字母 / 数字 / `_` / `-`、以字母或数字开头；密码至少 8 个字符（bcrypt 存哈希）。库里已有用户后 `setup init` 是 `conflict`；两个并发的 init 只有一个成功。也可以不建管理员，直接 `satchel setup restore --file <备份.zip>`（或 `POST /api/v1/setup/restore`，请求体是备份文件本身）把一份备份恢复进空库，主控随后重启，见「备份与恢复」。**初始化之前谁都能建这个管理员、也能上传备份**（向导本来就不要身份），所以先在本机或内网完成初始化，再把主控暴露到公网。
 - **登录与会话**：`POST /api/v1/session`（`username` / `password` / 可选 `remember_me`；Turnstile 启用时还要 `turnstile_token`）成功后下发 cookie `satchel_session`（HttpOnly、SameSite=Strict、Path=/，经 HTTPS 到达时带 Secure：TLS 直连，或经登记的反代且标了 `X-Forwarded-Proto: https`）：默认 24 小时，记住我 30 天。令牌是随机串，库里只存它的 SHA-256；`DELETE /api/v1/session` 登出。浏览器发来的写请求（身份来自会话 cookie 的，以及没有身份的登录入口与向导；`/api/v1/…` 与 `/mcp` 都算）要过同源检查：`Origin` 的 host 等于主控地址；没 `Origin` 时 `Sec-Fetch-Site` 不能是跨站；两个头都没有的非浏览器客户端放行。经 socket 与有效令牌来的请求不受影响。账号停用是 `forbidden`；用户名或密码不对都是同一条 `unauthenticated`；猜错太多次被登录限流锁住时是 `rate_limited`（见「门与登录防护」）。
 - **两步验证与恢复码**：`satchel account totp setup` 给出密钥与 otpauth URL（扫进验证器），`account totp confirm --code <6 位>` 启用并一次性给出 8 枚恢复码（每枚 8 个十六进制字符，库里只存哈希）。开了两步验证后登录分两步：密码正确得到 5 分钟有效、只能用一次的 `pending` 票据，`POST /api/v1/session/two-factor`（`pending` + `code`）用验证器的码或一枚恢复码完成。同一个 TOTP 码 90 秒内只认一次；每枚恢复码只能成功一次（校验与作废在同一个数据库事务里，并发也只成功一次），用恢复码登录不会关掉两步验证；剩余不足两枚时登录结果与 `account show` 都有 `recovery_codes_low` 提示，`account recovery-codes regenerate` 重新生成 8 枚并作废旧的。`account totp disable` 关掉；已启用时再 `setup` 是 `conflict`，要换密钥先 disable。登录第二步验错一次，那张 5 分钟的 `pending` 票据就作废，要重新用密码登录。
 - **当场验证**：`account set-password` / `account totp setup` / `account totp confirm` / `account totp disable` / `account recovery-codes regenerate` 是人类专属命令：每次执行都要在同一个请求里带上自己的密码（`verify-password`）与——账号开了两步验证时——第二因素（`verify-code`），验一次用一次，不签发任何提升票据。CLI 上密码只从终端读（`--verify-password` 不是命令行参数，给了就是用法错误），`--verify-code` 可以作参数也可以终端输入（恢复码建议终端输入，写在命令行上会留在 shell 历史与进程列表里）；stdin 不是终端时直接以 `human_required` 拒绝、不等待。本机管理员不是账号，要用 `--verify-user <管理员用户名>` 指明验谁；登录的用户只能验自己。REST 上这三个值放在 JSON 体里，它们永不进审计摘要。`account set-password --new-password`（终端读两遍）改完作废该账号其它全部会话、保留当前这一个。
@@ -128,10 +128,31 @@ go build ./cmd/satchel
   | `ban_sweep` | 10 分钟 | 清掉内存里已失效的封禁与过期的令牌猜测计数 |
   | `login_limit_sweep` | 10 分钟 | 清掉内存里过期的登录限流计数 |
   | `db_checkpoint` | 5 分钟 | 只在 SQLite 下：把 WAL 写回主库（TRUNCATE，库忙时退回 PASSIVE） |
+  | `backup_local` | 24 小时 | 在 `backups/` 生成一份整库备份；最新一份不到 20 小时、或已有备份或恢复在进行时跳过（见「备份与恢复」） |
+  | `job_cleanup` | 1 小时 | 删掉 7 天以前、已经结束的长任务 |
   | `db_health` | 1 分钟 | SQLite 跑 `quick_check`，PostgreSQL 检查连通性；变坏时记一条 error 日志，恢复时记一条 info 日志 |
 
   三个保留期是常量，不能配置。需要长期留存审计的，定期用 `satchel audit list --json` 导出到别处。
 - **看任务**（只对管理员开放）：`satchel schedule list` 列出任务、间隔与最近一次运行的结果；`satchel schedule runs list [--task <名字>] [--status running|ok|error]` 按 id 倒序（写入的先后）列出运行记录。每次运行开始时记一行 `running`，结束时改成 `ok` 或 `error`，带耗时与一句结果。间隔短于一小时的任务（两个内存清理、检查点、健康检查）开始时不记，成功的记录每小时最多一条；失败每次都记，失败之后的第一次成功也记。主控停止时，内置任务与 HTTP 同时停，被打断的那次记成 `error` 并写明是主控停止；结束时没写进库的记录（例如 SQLite 的写锁被请求占着）在关库前再写一次，仍没写上的下次启动时改成 `error`。三张表的清理按 id 往后扫，碰到保留期以内的行就停：时钟回拨、或有一行时间在未来时，它后面更早的行这一轮不会删。
+
+### 备份与恢复
+
+- **备份里有什么**：一个 ZIP，含 `manifest.json`（格式、时间、驱动、已应用的迁移、主控版本）、数据库（SQLite 是 `VACUUM INTO` 导出的一致拷贝，PostgreSQL 是 `pg_dump` 导出的当前 schema 的纯 SQL；两者都不带会话，恢复后所有人要重新登录）、`database.json`、`config.yaml`、`master.key`（主控通信密钥，恢复后节点不用重新配对）、`subscribes/` 与 `rule_templates/`。socket、`public/`、`logs/`、`backups/`、`recovery-codes/` 不进备份。
+- **本机备份**：放在数据目录的 `backups/`（0700，每份 0600），最多留 7 份（手动的、上传的、恢复前自动生成的都算）。内置任务 `backup_local` 每天生成一份。
+- **命令**（都只对管理员开放）：
+  ```sh
+  satchel backup create                    # 长任务：CLI 跟到结束；--no-wait 只拿 job，之后 satchel job get <job_id>
+  satchel backup list
+  satchel backup upload --file ./b.zip     # 把一份备份传进 backups/（先校验；最大 4 GiB）
+  satchel backup download <名字> --output ./b.zip   # 人类专属：当场验证（备份里有主控密钥与全部数据）
+  satchel backup restore <名字> --verify-user <管理员>  # 人类专属：当场验证；主控随后重启
+  ```
+  同一时刻只能有一次备份、上传或恢复，其余的是 `conflict`。上传与下载收发的是文件本身，MCP 上做不了；备份解压后超过 16 GiB 一律拒绝。校验不过（打不开、清单不认识、比本主控新、含不允许的路径）是 `bad_request`；**不支持跨驱动恢复**（SQLite 的备份恢复到 PostgreSQL 或反过来），是 `conflict`——在同驱动的主控上恢复后再用在线迁移换驱动。
+- **恢复要重启**：`backup restore` 只校验、写待恢复标记 `restore-pending.json`、回应之后优雅退出，由 systemd（`Restart=always`）或 compose（`restart: unless-stopped`）拉起；**直接在前台跑 `satchel serve` 的要手动再启动**。下次启动时，在打开库之前先存一份 `before-restore-<时间>.zip`（这次恢复的后悔药），再换库：SQLite 换文件；PostgreSQL 用 `psql` 在一个事务里删掉整个 schema 再导入，出错整个回滚——**恢复会把整个 schema 换成备份里的样子**，不在备份里的对象也会被删。`master.key`、`subscribes/`、`rule_templates/` 一并换成备份里的；`database.json` 与 `config.yaml` 保持这台机器当前的。换下来的旧文件在 `backups/replaced-<时间>-<随机后缀>/`，不自动删。恢复失败时原样用旧库启动。换到一半主控被杀也没关系：停放目录先写进了待恢复标记，重启会接着做完；万一撤回也失败、库文件不在原处，主控会拒绝启动并指出原件在哪个目录，而不是在空库上跑起来。
+- **恢复之后恢复码全部换新**：库回到过去，已经用掉的恢复码会重新变成可用，所以恢复后全部作废，开了两步验证的账号各生成一批新的，明文在数据目录的 `recovery-codes/recovery-codes-<时间>.txt`（0600，路径也写进日志）。拿到码登录后请删掉这个文件。两步验证的密钥也回到了备份那一刻，备份之后换过验证器的人用这里的恢复码登录，再重新绑定。结果在 `settings show` 的运行态 `last_restore` 里，恢复后的库里也有一条审计。
+- **坏库自动恢复**（只限 SQLite）：启动时先跑 `quick_check`，库确定损坏就从 `backups/` 里最新一份能用的备份自动恢复，坏的库文件留在 `backups/corrupt-<时间>-<随机后缀>/`；没有可用的备份时拒绝启动——把一份同驱动的备份放进 `backups/` 再启动即可。自动恢复失败时坏库回到原处，同一次失败不会反复重试（数据目录里的 `restore-pending.json` 记着失败原因，处理好之后删掉它再启动）。PostgreSQL 连不上就不启动，不自动恢复。
+- **PostgreSQL 的客户端工具**：备份要 `pg_dump`（主版本不低于服务器），恢复要 `psql`；找不到或版本太低时报 `unavailable` 并给出安装命令（例如 `apt install postgresql-client-18`，Debian 系先加 PostgreSQL 官方的 apt 源），主控不会自己装。Docker 镜像已预装 18。
+- **长任务**：跑得久的命令（本版本只有 `backup create`）受理后立刻返回 job，工作在主控里接着跑；`satchel job get <job_id>` 与 `satchel job list [--status ...]` 查看（只对管理员开放），MCP 的 `satchel_run` 最多等 60 秒，到时返回当时的 job。主控重启时没跑完的 job 标为 `failed`。
 
 ## REST 与 MCP
 
@@ -171,7 +192,7 @@ Docker Compose：仓库根的 `docker-compose.yml` 与 `.env.example`（`cp .env
 
 主控默认用 SQLite（数据目录下的 `satchel.db`），可选 PostgreSQL（数据目录下的 `database.json` 写 `driver: postgres`，或用环境变量 `SATCHEL_DATABASE_*` 覆盖）。数据目录由 `--data-dir` 或环境变量 `SATCHEL_DATA_DIR` 指定，默认 `/var/lib/satchel`。
 
-数据目录的布局是固定的，名字都是 `internal/base/db` 里的常量：`database.json`（数据库配置）、`config.yaml`（主控配置，可不存在）、`satchel.db`（SQLite 库文件）、`master.key`（主控通信密钥）、`satchel.sock`（主控运行时的 unix socket）、`subscribes/`（订阅文件）、`rule_templates/`（规则模板）、`public/`（`/public/` 对外提供的静态文件）、`logs/`（`serve` 的日志文件）。`db migrate` 与 `serve` 会把目录和四个子目录一起建出来（0700），postgres 模式也一样——库在别处，但主控密钥、订阅文件、规则模板、静态文件与日志仍在这里；`db status` 是只读命令，不建目录。备份的内容表按这份布局取（socket、`public/` 与 `logs/` 不进备份）。
+数据目录的布局是固定的，名字都是 `internal/base/db` 里的常量：`database.json`（数据库配置）、`config.yaml`（主控配置，可不存在）、`satchel.db`（SQLite 库文件）、`master.key`（主控通信密钥）、`satchel.sock`（主控运行时的 unix socket）、`subscribes/`（订阅文件）、`rule_templates/`（规则模板）、`public/`（`/public/` 对外提供的静态文件）、`logs/`（`serve` 的日志文件）、`backups/`（本机备份）、`recovery-codes/`（恢复之后新恢复码的明文）。`db migrate` 与 `serve` 会把目录和六个子目录一起建出来（0700），postgres 模式也一样——库在别处，但主控密钥、订阅文件、规则模板、静态文件、日志与本机备份仍在这里；`db status` 是只读命令，不建目录。备份的内容表见「备份与恢复」（socket、`public/`、`logs/`、`backups/`、`recovery-codes/` 不进备份）。
 
 ```sh
 ./satchel db migrate --data-dir ./data   # 执行迁移，然后比对库结构与注册表

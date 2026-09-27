@@ -13,6 +13,7 @@ func (s *Service) Bindings() command.Bindings {
 	return command.Bindings{
 		"setup status":                      s.setupStatus,
 		"setup init":                        s.setupInit,
+		"setup restore":                     s.setupRestore,
 		"account show":                      s.accountShow,
 		"account set-password":              s.accountSetPassword,
 		"account totp setup":                s.totpSetup,
@@ -42,9 +43,29 @@ func (s *Service) setupStatus(ctx context.Context, _ *command.Invocation) (any, 
 	initialized := n > 0
 	return SetupStatus{Initialized: initialized, Paths: map[string]SetupPath{
 		"create_admin":   {Available: !initialized},
-		"restore_backup": {Available: false, Note: "恢复 Satchel 备份随 m1-07 交付"},
+		"restore_backup": {Available: !initialized},
 		"import_mmwx":    {Available: false, Note: "导入 mmwx 备份随 M9 交付"},
 	}}, nil
+}
+
+// SetSetupRestore 装上初始化向导恢复备份的处理（service/backup 提供：收文件、校验、写待恢复标记、重启）。
+// 业务层的模块之间不互相引用，由装配根注入。
+func (s *Service) SetSetupRestore(h command.Handler) { s.setupRestoreHandler = h }
+
+// setupRestore 是 setup restore（master-setup-wizard）：库里已有用户一律 conflict、不读请求体；空库交给注入的恢复处理。
+func (s *Service) setupRestore(ctx context.Context, inv *command.Invocation) (any, error) {
+	n, err := s.users.Count(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if n > 0 {
+		return nil, v1.New(v1.CodeConflict, "主控已经初始化过（库里有用户），初始化向导不能再恢复备份").
+			WithNext("管理员用 backup upload 与 backup restore 恢复（要当场验证）")
+	}
+	if s.setupRestoreHandler == nil {
+		return nil, v1.New(v1.CodeInternal, "初始化向导的恢复没有装配")
+	}
+	return s.setupRestoreHandler(ctx, inv)
 }
 
 // SetupResult 是 setup init 的输出。
@@ -53,7 +74,15 @@ type SetupResult struct {
 	Role     v1.Role `json:"role"`
 }
 
+// SetSetupGuard 装上 setup init 之前的检查（service/backup 的 SetupGuard：向导正在从备份恢复时不能同时建管理员）。
+func (s *Service) SetSetupGuard(g func() error) { s.setupGuard = g }
+
 func (s *Service) setupInit(ctx context.Context, inv *command.Invocation) (any, error) {
+	if s.setupGuard != nil {
+		if err := s.setupGuard(); err != nil {
+			return nil, err
+		}
+	}
 	username := strings.TrimSpace(inv.String("username", ""))
 	if err := ValidateUsername(username); err != nil {
 		return nil, err

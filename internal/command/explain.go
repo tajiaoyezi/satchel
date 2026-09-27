@@ -32,6 +32,8 @@ type CommandInfo struct {
 	Args      []ArgInfo  `json:"args"`
 	Flags     []FlagInfo `json:"flags"`
 	REST      *RESTInfo  `json:"rest,omitempty"`
+	// Shape 是执行形状：job、upload、download，普通命令为空。
+	Shape Shape `json:"shape,omitempty"`
 	// Reserved 是投影层随类别自动加的 flag：列表命令的 limit / cursor，危险命令的 confirm。
 	Reserved []string `json:"reserved_flags"`
 }
@@ -121,7 +123,7 @@ func overview(t *Table) Overview {
 func Describe(c *Command) CommandInfo {
 	info := CommandInfo{
 		Name: c.Name(), Summary: c.Summary, Class: c.Class, Danger: string(c.Danger), Confirm: c.Confirm,
-		HumanOnly: c.HumanOnly, Anonymous: c.Anonymous, List: c.List, Offline: c.Offline, Args: []ArgInfo{}, Flags: []FlagInfo{}, Reserved: []string{},
+		HumanOnly: c.HumanOnly, Anonymous: c.Anonymous, List: c.List, Offline: c.Offline, Args: []ArgInfo{}, Flags: []FlagInfo{}, Reserved: []string{}, Shape: c.Shape,
 	}
 	if scope, ok := c.Scope(); ok {
 		info.Scope = string(scope)
@@ -141,6 +143,9 @@ func Describe(c *Command) CommandInfo {
 	}
 	if c.Danger != "" {
 		info.Reserved = append(info.Reserved, "confirm")
+	}
+	if c.Shape == ShapeJob {
+		info.Reserved = append(info.Reserved, NoWaitFlag)
 	}
 	if c.HumanOnly {
 		info.Reserved = append(info.Reserved, VerifyFlags...)
