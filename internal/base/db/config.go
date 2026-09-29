@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net"
 	"net/url"
@@ -138,18 +139,49 @@ func LoadConfig(dataDir string) (Config, error) {
 	return cfg, nil
 }
 
-// SaveConfig 把配置写到数据目录的 database.json，权限 0600。
+// SaveConfig 把配置写到数据目录的 database.json（0600）：先写同目录的临时文件并落盘，再改名，再把目录落盘。
+// 改名是原子的，所以任何时刻读到的要么是旧配置、要么是新配置（在线迁移的提交点就是这次改名，master-db-migration）。
 func SaveConfig(dataDir string, cfg Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 	path := filepath.Join(dataDir, ConfigFile)
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
-		return v1.Wrap(v1.CodeDatabase, "写入 "+path+" 失败", err)
+	fail := func(err error) error { return v1.Wrap(v1.CodeDatabase, "写入 "+path+" 失败", err) }
+	tmp, err := os.CreateTemp(dataDir, "."+ConfigFile+".*")
+	if err != nil {
+		return fail(err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err = tmp.Write(append(data, '\n')); err == nil {
+		err = tmp.Chmod(0o600)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	// 改名已经发生：之后目录落盘失败时新配置已经生效（下次启动就读它），不能当作「没写成」。
+	d, err := os.Open(dataDir)
+	if err == nil {
+		err = d.Sync()
+		d.Close()
+	}
+	if err != nil {
+		return fmt.Errorf("%w：%v", ErrConfigNotSynced, err)
 	}
 	return nil
 }
+
+// ErrConfigNotSynced 表示 SaveConfig 已经把新配置改名到位（它已经生效），只是目录没能落盘。调用方要把它当作「已经写成」。
+var ErrConfigNotSynced = errors.New("database.json 已经改名到位，但数据目录没能落盘")
 
 func (c *Config) applyEnv() error {
 	set := func(env string, dst *string) {
@@ -199,4 +231,19 @@ func (c Config) DSN() string {
 	default:
 		return SQLiteDSN(c.Path)
 	}
+}
+
+// dbEnvVars 是覆盖 database.json 的环境变量。
+var dbEnvVars = []string{"SATCHEL_DATABASE_DRIVER", "SATCHEL_DATABASE_PATH", "SATCHEL_DATABASE_HOST", "SATCHEL_DATABASE_PORT",
+	"SATCHEL_DATABASE_NAME", "SATCHEL_DATABASE_USER", "SATCHEL_DATABASE_PASSWORD", "SATCHEL_DATABASE_SSLMODE"}
+
+// EnvOverride 报告数据库配置有没有被 SATCHEL_DATABASE_* 环境变量覆盖（有任何一个非空就算）：覆盖时改 database.json 不生效，
+// 在线迁移据此拒绝（master-db-migration「迁移的前提」）。
+func EnvOverride() bool {
+	for _, k := range dbEnvVars {
+		if os.Getenv(k) != "" {
+			return true
+		}
+	}
+	return false
 }

@@ -103,6 +103,13 @@ func (s *Service) end() {
 	s.mu.Unlock()
 }
 
+// Begin 与 End 把「同一时刻只有一次备份、上传、恢复或迁移」交给在线迁移共用（master-db-migration「迁移的前提」）：
+// 业务层的模块之间不互相引用，由装配根把这两个方法注入给 service/database。what 写进冲突时的 reason。
+func (s *Service) Begin(what string) error { return s.begin(what) }
+
+// End 放开 Begin 占住的锁。
+func (s *Service) End() { s.end() }
+
 // Busy 报告此刻是否有备份或恢复在进行（backup_local 任务据此跳过）。
 func (s *Service) Busy() bool {
 	s.mu.Lock()

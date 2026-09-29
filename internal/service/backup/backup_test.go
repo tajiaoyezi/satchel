@@ -365,3 +365,26 @@ func TestUploadRespectsRestore(t *testing.T) {
 		t.Fatal("标记里点名的备份不应当被清理掉")
 	}
 }
+
+// master-db-migration「迁移的前提」：迁移占着锁时备份、上传、恢复都是 conflict，backup_local 跳过；放开后照常。
+func TestSharedLockWithMigration(t *testing.T) {
+	f := newFixture(t, sqliteDB(t))
+	if err := f.s.Begin("迁移"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"backup create", "backup upload", "backup restore"} {
+		if _, err := f.call(t, admin(), name, []string{"x.zip"}, strings.NewReader("x")); code(err) != v1.CodeConflict || !strings.Contains(v1.AsError(err).Reason, "迁移") {
+			t.Errorf("%s 应当 conflict 并说明在迁移：%v", name, err)
+		}
+	}
+	if _, skipped, _ := f.s.TryCreateLocal(context.Background()); !skipped {
+		t.Error("backup_local 应当跳过")
+	}
+	if err := f.s.Begin("迁移"); code(err) != v1.CodeConflict {
+		t.Error("第二次迁移应当 conflict")
+	}
+	f.s.End()
+	if _, err := f.call(t, admin(), "backup create", nil, nil); err != nil {
+		t.Fatalf("放开后应当照常：%v", err)
+	}
+}

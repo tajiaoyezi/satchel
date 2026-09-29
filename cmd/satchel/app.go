@@ -44,6 +44,7 @@ import (
 	svcaudit "github.com/satchel/satchel/internal/service/audit"
 	"github.com/satchel/satchel/internal/service/auth"
 	svcbackup "github.com/satchel/satchel/internal/service/backup"
+	svcdatabase "github.com/satchel/satchel/internal/service/database"
 	"github.com/satchel/satchel/internal/service/jobs"
 	svclogs "github.com/satchel/satchel/internal/service/logs"
 	"github.com/satchel/satchel/internal/service/schedule"
@@ -82,6 +83,8 @@ type app struct {
 	schedules *schedule.Service
 	jobs      *jobs.Service
 	backups   *svcbackup.Service
+	writeGate *db.WriteGate
+	databases *svcdatabase.Service
 
 	// stopMu 与 stopServe：发起恢复之后让 serve 优雅停止（serve 开始时设）。
 	stopMu    sync.Mutex
@@ -152,6 +155,17 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		GenerateCodes: auth.GenerateRecoveryCodes,
 	})
 	identity.SetSetupRestore(backups.SetupRestore)
+	// 数据库设置与在线迁移（master-db-migration）：迁移拿着 SQLite 写锁时打开「写入暂停」，执行链、会话入口、审计与令牌都看它。
+	writeGate := &db.WriteGate{}
+	tokens.SetWriteGate(writeGate)
+	guard.SetWriteGate(writeGate)
+	databases := svcdatabase.New(svcdatabase.Deps{DataDir: dataDir, DB: bdb, Config: dbCfg, Gate: writeGate, Registry: schema.Default(), Logger: logger,
+		Lock: backups.Begin, Unlock: backups.End,
+		StartJob: func(ctx context.Context, inv *command.Invocation, run func(context.Context) (any, error), done func()) (any, error) {
+			return jobsSvc.Start(ctx, inv, run, done)
+		},
+		RequestStop: func() { a.requestStop() },
+	})
 	identity.SetSetupGuard(backups.SetupGuard)
 	sched := scheduler.New(scheduler.Tasks(scheduler.Deps{DB: bdb, Auth: identity, Audit: audits, Security: guard, Schedule: schedules,
 		Backup: backups, Jobs: jobsSvc, Logger: logger}), schedules, logger)
@@ -188,11 +202,15 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	for name, h := range backups.Bindings() {
 		bindings[name] = h
 	}
+	for name, h := range databases.Bindings() {
+		bindings[name] = h
+	}
 	if err := table.CheckBindings(bindings); err != nil {
 		return nil, v1.Wrap(v1.CodeInternal, "命令表与处理函数的绑定不一致", err)
 	}
 	// 执行链：留痕在最外层，权限在里面，最里面按绑定分发；身份在 HTTP 层由 authn 放进 ctx。
-	runner := mwaudit.Wrap(audits, table, logger, authz.Wrap(table, identity.Verifier(), command.Dispatch(bindings)))
+	// 最外层是迁移期间的拦截（被拒的不写审计），再里面是留痕、权限、按绑定分发。
+	runner := gatedRunner(writeGate, mwaudit.WrapGated(audits, table, logger, writeGate, authz.Wrap(table, identity.Verifier(), command.Dispatch(bindings))))
 
 	// CLI 的选项在主控进程里也要一份：MCP 的 satchel_run 用它解析命令数组、用进程内的执行链执行。
 	opts := cli.DefaultOptions()
@@ -240,9 +258,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 
 	// 顺序（从外到内）：门（来源 → 关闭公网访问 → 静默模式 → 封禁）→ CORS → authn（判身份，无效凭据计一次令牌校验失败）
 	// → SameOrigin（管住所有浏览器发来的写请求：REST、/mcp、会话入口）→ mux。
-	handler := gates.Wrap(rest.CORS(cfg.AllowedOrigins, authn.Middleware(identity, tokens, guard, rest.SameOrigin(mux))))
+	handler := gates.Wrap(rest.CORS(cfg.AllowedOrigins, authn.Middleware(identity, tokens, guard, rest.SameOrigin(gatedSessions(writeGate, mux)))))
 	a = &app{table: table, runner: runner, handler: handler, mounts: patterns, db: bdb, dataDir: dataDir, logger: logger,
-		gate: gates, guard: guard, identity: identity, sched: sched, schedules: schedules, jobs: jobsSvc, backups: backups}
+		gate: gates, guard: guard, identity: identity, sched: sched, schedules: schedules, jobs: jobsSvc, backups: backups, writeGate: writeGate, databases: databases}
 	return a, nil
 }
 

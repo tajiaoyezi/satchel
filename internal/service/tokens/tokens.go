@@ -6,6 +6,7 @@ package tokens
 import (
 	"context"
 	"errors"
+	"github.com/satchel/satchel/internal/base/db"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -28,7 +29,11 @@ type Service struct {
 	users  *users.Repo
 	now    func() time.Time
 	logger *slog.Logger
+	gate   *db.WriteGate
 }
+
+// SetWriteGate 装上「写入暂停」开关：在线迁移拿着 SQLite 写锁时不更新最后使用时间（master-db-migration）。
+func (s *Service) SetWriteGate(g *db.WriteGate) { s.gate = g }
 
 // New 建服务；logger 为 nil 时用 slog.Default()。
 func New(repo *core.Repo, u *users.Repo, logger *slog.Logger) *Service {

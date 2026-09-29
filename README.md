@@ -154,6 +154,17 @@ go build ./cmd/satchel
 - **PostgreSQL 的客户端工具**：备份要 `pg_dump`（主版本不低于服务器），恢复要 `psql`；找不到或版本太低时报 `unavailable` 并给出安装命令（例如 `apt install postgresql-client-18`，Debian 系先加 PostgreSQL 官方的 apt 源），主控不会自己装。Docker 镜像已预装 18。
 - **长任务**：跑得久的命令（本版本只有 `backup create`）受理后立刻返回 job，工作在主控里接着跑；`satchel job get <job_id>` 与 `satchel job list [--status ...]` 查看（只对管理员开放），MCP 的 `satchel_run` 最多等 60 秒，到时返回当时的 job。主控重启时没跑完的 job 标为 `failed`。
 
+### 数据库设置与在线迁移
+
+- **看与试连**（只对管理员开放）：`satchel database show` 显示当前的驱动与连接参数（密码只报是否配了）以及是否被 `SATCHEL_DATABASE_*` 环境变量覆盖；`satchel database test --host <主机> --name <库名> --user <用户> [--port 5432] [--sslmode prefer]`（密码从终端读）只读地试连一个 PostgreSQL，报告版本、当前 schema 是否为空，以及这台主控上的 `pg_dump` / `psql` 够不够迁过去之后做备份。
+- **从 SQLite 在线迁移到 PostgreSQL**：`satchel database migrate --host … --name … --user … --verify-user <管理员>`，人类专属（当场验证），长任务（CLI 跟到结束，`--no-wait` 只拿 job）。
+  - 前提：当前是 SQLite；没有用 `SATCHEL_DATABASE_*` 环境变量配库（否则改 `database.json` 不生效）；没有备份、上传、恢复在进行；目标库连得上，且当前 schema 里一张表都没有。
+  - **迁移期间主控只能查 job**：别的命令、登录一律 `unavailable`，内置任务写不进库只记日志。用 `satchel job get <job_id>` 看进度（阶段、当前表、完成的表数、已拷的行数）。耗时与数据量成正比，建议在低峰时做。
+  - 过程：在目标库上建表 → 在一个事务里按外键顺序逐表拷贝、推进自增序列、逐表核对行数 → 提交 → 改写 `database.json`（这就是提交点）→ 几秒后主控退出，由服务管理器拉起并连 PostgreSQL。会话、令牌、两步验证、设置的版本都原样过去。
+  - 提交点之前任何一步失败：目标库回到空的，`database.json` 不变，主控照常用 SQLite。
+  - 迁移后 `satchel.db` 留在数据目录里但**不再是最新的**；以 PostgreSQL 为准。要回到 SQLite 只能手工把 `database.json` 改回去，迁移之后写进 PostgreSQL 的数据不会在 SQLite 里。
+  - 只支持 SQLite 到 PostgreSQL 一个方向。迁过去之后备份与恢复要 `pg_dump` 与 `psql`（见「备份与恢复」）。
+
 ## REST 与 MCP
 
 三个投影都从 `internal/command` 的命令表构造，一条命令登记进表就同时有 CLI 子命令、REST 路由与 MCP 可达；`docs/commands.md` 是由表生成的「命令 × scope 对照表」（`go generate ./internal/command/`，CI 守着一致）。

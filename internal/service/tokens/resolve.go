@@ -50,7 +50,7 @@ func (s *Service) ResolveToken(ctx context.Context, token string) (v1.Identity, 
 	}
 	scopes, danger := intersect(t.Grant, a.Role)
 	id := t.ID
-	if t.LastUsedAt == nil || now.Sub(*t.LastUsedAt) >= touchInterval {
+	if !s.gate.Suspended() && (t.LastUsedAt == nil || now.Sub(*t.LastUsedAt) >= touchInterval) {
 		// 写失败不影响这次请求：最后使用时间只是给人看的。写入不随请求取消。
 		if err := s.repo.TouchLastUsed(context.WithoutCancel(ctx), t.ID, now); err != nil {
 			s.logger.Warn("写令牌的最后使用时间失败", "error", err, "token_id", t.ID)

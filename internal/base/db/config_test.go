@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -136,5 +137,60 @@ func TestLoadConfigPostgresWithoutDataDir(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("LoadConfig 不该创建数据目录")
+	}
+}
+
+// SaveConfig 原子写入：0600、读得回、不留临时文件。
+func TestSaveConfigAtomic(t *testing.T) {
+	dir := t.TempDir()
+	want := Config{Driver: DriverPostgres, Host: "db.example", Port: 5432, Name: "satchel", User: "u", Password: "p", SSLMode: "require"}
+	if err := SaveConfig(dir, want); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(filepath.Join(dir, ConfigFile))
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("权限应当 0600，得到 %o", info.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("不应当留下临时文件：%v", entries)
+	}
+	got, err := LoadConfig(dir)
+	if err != nil || got.Driver != DriverPostgres || got.Host != "db.example" || got.Password != "p" {
+		t.Fatalf("读回：%+v %v", got, err)
+	}
+	if err := SaveConfig(filepath.Join(dir, "missing"), want); err == nil {
+		t.Fatal("目录不存在时应当失败")
+	}
+	var g *WriteGate
+	if g.Suspended() {
+		t.Fatal("nil 的开关当作关着")
+	}
+	g = &WriteGate{}
+	g.Suspend()
+	if !g.Suspended() {
+		t.Fatal("打开后应当挡着")
+	}
+	g.Resume()
+	if g.Suspended() {
+		t.Fatal("关掉后不挡")
+	}
+}
+
+// 审查第 2 条：改名之后目录落盘失败时返回 ErrConfigNotSynced（新配置已经生效），不是普通的失败。
+func TestSaveConfigDirSyncFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 不受目录权限限制")
+	}
+	dir := t.TempDir()
+	os.Chmod(dir, 0o300) // 能在里面建文件、改名，但打不开目录本身去落盘
+	defer os.Chmod(dir, 0o700)
+	err := SaveConfig(dir, Config{Driver: DriverPostgres, Host: "h"})
+	if !errors.Is(err, ErrConfigNotSynced) {
+		t.Fatalf("应当是 ErrConfigNotSynced：%v", err)
+	}
+	os.Chmod(dir, 0o700)
+	if got, _ := LoadConfig(dir); got.Driver != DriverPostgres {
+		t.Fatal("新配置应当已经生效")
 	}
 }

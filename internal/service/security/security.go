@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/ipaddr"
 	"github.com/satchel/satchel/internal/command"
 	core "github.com/satchel/satchel/internal/core/security"
@@ -49,7 +50,12 @@ type Service struct {
 	cfg    Config
 	probes map[string]*probeCount
 	bans   map[string]core.Ban
+	gate   *db.WriteGate
 }
+
+// SetWriteGate 装上「写入暂停」开关：在线迁移拿着 SQLite 写锁时（master-db-migration），令牌猜测的计数与封禁只更新内存、
+// 不写库（封禁与安全事件记日志），免得每个带无效令牌的请求都先等满 busy_timeout（审查第 5 条）。
+func (s *Service) SetWriteGate(g *db.WriteGate) { s.gate = g }
 
 // New 建服务；logger 为 nil 时用 slog.Default()。参数先用默认值，装配根在启动与每次设置写之后调 Configure。
 func New(repo *core.Repo, logger *slog.Logger) *Service {
@@ -125,7 +131,9 @@ func (s *Service) RecordProbe(ctx context.Context, ip, path string) {
 		s.record(ctx, core.Event{At: now, IP: ip, Kind: core.KindProbe, Path: path, Detail: fmt.Sprintf("%d/%d", count, cfg.MaxFailures)})
 		return
 	}
-	if err := s.repo.UpsertBan(ctx, *ban); err != nil {
+	if s.gate.Suspended() {
+		s.logger.Warn("数据库迁移期间自动封禁只在本进程内生效，不写库", "ip", ip)
+	} else if err := s.repo.UpsertBan(ctx, *ban); err != nil {
 		s.logger.Error("自动封禁写库失败，本进程内照样生效，重启后不再恢复", "ip", ip, "error", err)
 	}
 	s.logger.Warn("来源 IP 令牌校验失败次数达到上限，已自动封禁", "ip", ip, "fail_count", count, "until", ban.ExpiresAt)
@@ -194,6 +202,10 @@ func (s *Service) Sweep() {
 
 // record 写一条安全事件；失败只记 error 日志（安全事件是给人看的线索，不能反过来让请求失败）。
 func (s *Service) record(ctx context.Context, e core.Event) {
+	if s.gate.Suspended() {
+		s.logger.Info("数据库迁移期间安全事件只记日志", "kind", e.Kind, "ip", e.IP, "path", e.Path, "username", e.Username, "detail", e.Detail, "actor", e.Actor)
+		return
+	}
 	if err := s.repo.InsertEvent(ctx, e); err != nil {
 		s.logger.Error("写安全事件失败", "kind", e.Kind, "ip", e.IP, "path", e.Path, "username", e.Username, "detail", e.Detail, "actor", e.Actor, "error", err)
 	}

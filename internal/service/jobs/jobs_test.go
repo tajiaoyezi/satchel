@@ -178,3 +178,34 @@ func TestDoneWhenCannotStart(t *testing.T) {
 		}
 	})
 }
+
+// master-jobs「查看 job」：运行中报告的进度 job get 看得到；结束后没有。
+func TestProgress(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		s := newService(bdb)
+		defer s.Stop(context.Background())
+		reported, release := make(chan struct{}), make(chan struct{})
+		j, _ := s.Start(admin(), inv(), func(ctx context.Context) (any, error) {
+			core.Report(ctx, map[string]any{"phase": "copying", "tables_done": 3})
+			close(reported)
+			<-release
+			return "ok", nil
+		}, nil)
+		<-reported
+		out, err := call(t, admin(), s, "job get", []string{j.JobID}, nil)
+		if p, _ := out.(*core.Job).Progress.(map[string]any); err != nil || p["phase"] != "copying" {
+			t.Fatalf("运行中应当看得到进度：%+v %v", out, err)
+		}
+		list, _ := call(t, admin(), s, "job list", nil, nil)
+		if list.(*command.PageResult).Items[0].(*core.Job).Progress == nil {
+			t.Fatal("job list 也带进度")
+		}
+		close(release)
+		wait(t, s, j.JobID)
+		out, _ = call(t, admin(), s, "job get", []string{j.JobID}, nil)
+		if out.(*core.Job).Progress != nil {
+			t.Fatal("结束后不应当还有进度")
+		}
+		core.Report(context.Background(), "x") // 别的 ctx 上什么都不做
+	})
+}

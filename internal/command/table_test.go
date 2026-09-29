@@ -26,6 +26,7 @@ func TestCatalog(t *testing.T) {
 		"security events list": ClassRead, "security bans list": ClassRead,
 		"logs list": ClassRead, "logs files list": ClassRead, "schedule list": ClassRead, "schedule runs list": ClassRead,
 		"job get": ClassRead, "job list": ClassRead, "backup list": ClassRead,
+		"database show": ClassRead, "database test": ClassAction, "database migrate": ClassAction,
 		"backup create": ClassAction, "backup upload": ClassAction, "backup download": ClassAction, "backup restore": ClassAction, "setup restore": ClassAction,
 		"setup init": ClassAction, "account set-password": ClassAction, "account totp setup": ClassAction, "account totp confirm": ClassAction,
 		"account totp disable": ClassAction, "account recovery-codes regenerate": ClassAction,
@@ -103,7 +104,7 @@ func TestCatalog(t *testing.T) {
 	if c, _ := table.Lookup("version"); func() bool { _, ok := c.Scope(); return ok }() {
 		t.Error("version 是本地命令，不该有 scope")
 	}
-	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup,backup download,backup restore,security ban,security unban,settings gates set,settings master-url set,token create,token revoke,token update" {
+	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup,backup download,backup restore,database migrate,security ban,security unban,settings gates set,settings master-url set,token create,token revoke,token update" {
 		t.Errorf("人类专属命令清单不对：%v", table.HumanOnly())
 	}
 	for _, name := range []string{"setup status", "setup init"} {

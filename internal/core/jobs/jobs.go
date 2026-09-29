@@ -38,6 +38,8 @@ type Job struct {
 	Output          *string         `json:"output"`
 	OutputTruncated bool            `json:"output_truncated"`
 	CreatedAt       time.Time       `json:"created_at"`
+	// Progress 是运行中的长任务自己报告的进度（只在主控内存里，不入库；service/jobs 在返回时填上）。
+	Progress any `json:"progress,omitempty"`
 }
 
 // Finished 报告 job 是否已经结束。
@@ -172,4 +174,43 @@ func (r *Repo) DeleteFinishedBefore(ctx context.Context, cutoff time.Time) (int,
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// MarkDoneIn 在 q（在线迁移的目标库事务）里把一个 job 改成 done：迁移拷过去的这一行还是 running，重启后看到的应当是完成的。
+// 目标库不是本仓储管的库，所以直接写这一行，不经写入原语。
+func MarkDoneIn(ctx context.Context, q bun.IDB, jobID, output string, at time.Time) error {
+	_, err := q.NewUpdate().Model((*model.Job)(nil)).
+		Set("status = ?", StatusDone).Set("exit_code = ?", 0).Set("output = ?", output).Set("finished_at = ?", utc(at)).Set("updated_at = ?", utc(at)).
+		Where("job_id = ?", jobID).Exec(ctx)
+	if err != nil {
+		return v1.Wrap(v1.CodeDatabase, "在目标库里标记迁移完成失败", err)
+	}
+	return nil
+}
+
+// runKey 让长任务的工作 ctx 带上自己的 job_id 与报进度的函数（service/jobs 在 Start 时放进去）。放在仓储层，
+// 是为了让别的业务模块（如在线迁移）不必引用 service/jobs 就能报进度、知道自己是哪个 job。
+type runKey struct{}
+
+type runInfo struct {
+	id     string
+	report func(any)
+}
+
+// WithRun 给工作 ctx 带上 job_id 与报进度的函数。
+func WithRun(ctx context.Context, jobID string, report func(any)) context.Context {
+	return context.WithValue(ctx, runKey{}, runInfo{jobID, report})
+}
+
+// Report 报告当前长任务的进度（master-jobs「查看 job」的 progress）；ctx 不是长任务的工作 ctx 时什么都不做。
+func Report(ctx context.Context, v any) {
+	if r, ok := ctx.Value(runKey{}).(runInfo); ok && r.report != nil {
+		r.report(v)
+	}
+}
+
+// CurrentID 返回当前长任务的 job_id；ctx 不是长任务的工作 ctx 时是空。
+func CurrentID(ctx context.Context) string {
+	r, _ := ctx.Value(runKey{}).(runInfo)
+	return r.id
 }

@@ -41,6 +41,31 @@ type Service struct {
 	base   context.Context // 工作用的 ctx 从它派生，Stop 时取消
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	mu       sync.Mutex
+	progress map[string]any       // 运行中的 job 报告的进度，按 job_id；只在内存里
+	final    map[string]*core.Job // 已经结束、结局还没写进库的 job（在线迁移拿着 SQLite 写锁时写不进去），按 job_id
+}
+
+// setProgress 存一个运行中 job 报告的进度（经 core/jobs.Report 调到这里）。进度只在内存里，job 结束就删掉；
+// job get 与 job list 返回时带上。
+func (s *Service) setProgress(jobID string, v any) {
+	s.mu.Lock()
+	s.progress[jobID] = v
+	s.mu.Unlock()
+}
+
+// withProgress 给返回的 job 填上内存里的进度，以及已经结束、还没写进库的结局。
+func (s *Service) withProgress(j *core.Job) *core.Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.progress[j.JobID]; ok {
+		j.Progress = p
+	}
+	if f, ok := s.final[j.JobID]; ok && !j.Finished() {
+		j.Status, j.ExitCode, j.Output, j.OutputTruncated, j.FinishedAt = f.Status, f.ExitCode, f.Output, f.OutputTruncated, f.FinishedAt
+	}
+	return j
 }
 
 // New 建服务；logger 为 nil 时用 slog.Default()。
@@ -49,7 +74,7 @@ func New(repo *core.Repo, table *command.Table, digest Digest, logger *slog.Logg
 		logger = slog.Default()
 	}
 	base, cancel := context.WithCancel(context.Background())
-	return &Service{repo: repo, table: table, digest: digest, logger: logger, now: time.Now, base: base, cancel: cancel}
+	return &Service{repo: repo, table: table, digest: digest, logger: logger, now: time.Now, base: base, cancel: cancel, progress: map[string]any{}, final: map[string]*core.Job{}}
 }
 
 // Start 受理一个长任务：插一行 queued，在 goroutine 里跑 run，按结果改 done 或 failed；立刻返回受理时的 job。
@@ -80,7 +105,8 @@ func (s *Service) Start(ctx context.Context, inv *command.Invocation, run func(c
 		if done != nil {
 			defer done()
 		}
-		s.execute(v1.WithIdentity(s.base, id), job, run)
+		ctx := core.WithRun(v1.WithIdentity(s.base, id), job.JobID, func(v any) { s.setProgress(job.JobID, v) })
+		s.execute(ctx, job, run)
 	}()
 	return job, nil
 }
@@ -106,6 +132,10 @@ func (s *Service) execute(ctx context.Context, job *core.Job, run func(context.C
 		return
 	}
 	result, runErr := safeRun(ctx, run)
+	// 先删进度再写结局：看到 job 结束的人就不会再看到进度。
+	s.mu.Lock()
+	delete(s.progress, job.JobID)
+	s.mu.Unlock()
 	status, exit := core.StatusDone, int64(0)
 	var raw []byte
 	var err error
@@ -123,11 +153,21 @@ func (s *Service) execute(ctx context.Context, job *core.Job, run func(context.C
 	if len(output) > OutputLimit {
 		output, truncated = output[:OutputLimit], true
 	}
+	// 结局先放进内存，job get 立刻看得到；写进库之后再拿掉。写不进库（例如在线迁移成功后一直拿着 SQLite 的写锁，
+	// master-db-migration）时，跟着这个 job 的 CLI 与 MCP 仍能看到结局。
+	now := s.now()
+	s.mu.Lock()
+	s.final[job.JobID] = &core.Job{Status: status, ExitCode: &exit, Output: &output, OutputTruncated: truncated, FinishedAt: &now}
+	s.mu.Unlock()
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
 	defer cancel()
-	if err := s.repo.Finish(wctx, job.ID, core.StatusRunning, status, exit, output, truncated, s.now()); err != nil {
+	if err := s.repo.Finish(wctx, job.ID, core.StatusRunning, status, exit, output, truncated, now); err != nil {
 		s.logger.Error("写长任务的结局失败", "job_id", job.JobID, "status", status, "error", err)
+		return
 	}
+	s.mu.Lock()
+	delete(s.final, job.JobID)
+	s.mu.Unlock()
 }
 
 // safeRun 跑一次；panic 记成 internal 错误并写一条带调用栈的 error 日志。
@@ -191,7 +231,10 @@ func (s *Service) get(ctx context.Context, inv *command.Invocation) (any, error)
 	if err == core.ErrNotFound {
 		return nil, v1.Newf(v1.CodeNotFound, "没有长任务 %s", inv.Arg(0)).WithNext("用 job list 看有哪些")
 	}
-	return job, err
+	if err != nil {
+		return nil, err
+	}
+	return s.withProgress(job), nil
 }
 
 func (s *Service) list(ctx context.Context, inv *command.Invocation) (any, error) {
@@ -230,7 +273,7 @@ func (s *Service) list(ctx context.Context, inv *command.Invocation) (any, error
 		res.NextCursor = command.EncodeIDCursor(rows[len(rows)-1].ID)
 	}
 	for _, r := range rows {
-		res.Items = append(res.Items, r)
+		res.Items = append(res.Items, s.withProgress(r))
 	}
 	return res, nil
 }

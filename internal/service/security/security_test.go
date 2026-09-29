@@ -11,6 +11,7 @@ import (
 
 	"github.com/uptrace/bun"
 
+	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/db/dbtest"
 	"github.com/satchel/satchel/internal/command"
 	core "github.com/satchel/satchel/internal/core/security"
@@ -333,6 +334,30 @@ func TestPruneEvents(t *testing.T) {
 		}
 		if left, _ := repo.CountEvents(ctx, core.EventFilter{}); left != 1 {
 			t.Fatalf("应当剩 1 条，得到 %d", left)
+		}
+	})
+}
+
+// 审查第 5 条：「写入暂停」开着时，令牌猜测的计数与封禁照常在内存里走，但不写库。
+func TestProbeWhileSuspended(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		s, _ := newService(t, bdb)
+		gate := &db.WriteGate{}
+		gate.Suspend()
+		s.SetWriteGate(gate)
+		for i := 0; i < DefaultConfig().MaxFailures; i++ {
+			s.RecordProbe(ctx, "198.51.100.7", "/api/v1/whoami")
+		}
+		if _, banned := s.Banned("198.51.100.7"); !banned {
+			t.Fatal("内存里应当已经封禁")
+		}
+		repo := core.New(bdb)
+		if n, _ := repo.CountEvents(ctx, core.EventFilter{}); n != 0 {
+			t.Fatalf("不应当写安全事件：%d", n)
+		}
+		if n, _ := repo.CountActiveBans(ctx, time.Now()); n != 0 {
+			t.Fatalf("不应当写封禁：%d", n)
 		}
 	})
 }

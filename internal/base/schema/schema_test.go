@@ -165,3 +165,23 @@ func TestColumnChecks(t *testing.T) {
 		t.Fatalf("Checks 不对：%s", got)
 	}
 }
+
+// Ordered：全部表都在，每条外键指向的表排在前面。
+func TestOrdered(t *testing.T) {
+	reg := Default()
+	tables := reg.Ordered()
+	if len(tables) != len(reg.Tables()) {
+		t.Fatalf("应当全部 %d 张表都排进去，得到 %d", len(reg.Tables()), len(tables))
+	}
+	pos := map[string]int{}
+	for i, tb := range tables {
+		pos[tb.Name] = i
+	}
+	for _, tb := range tables {
+		for _, fk := range tb.ForeignKeys {
+			if fk.RefTable != tb.Name && pos[fk.RefTable] > pos[tb.Name] {
+				t.Errorf("%s 引用 %s，却排在它前面", tb.Name, fk.RefTable)
+			}
+		}
+	}
+}

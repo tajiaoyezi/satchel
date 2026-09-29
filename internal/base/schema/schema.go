@@ -491,6 +491,49 @@ func (r *Registry) Validate() error {
 	return fmt.Errorf("表注册表有 %d 处问题：\n  %s", len(problems), strings.Join(problems, "\n  "))
 }
 
+// Ordered 按外键依赖排好的表：被引用的表在引用它的表之前（自引用不算），同一层按名字排。
+// 注册表校验保证外键不成环，所以全部表都排得进去；在线迁移按它逐表拷贝、按它的逆序删表（master-db-migration）。
+func (r *Registry) Ordered() []*Table {
+	names := append([]string(nil), r.names...)
+	sort.Strings(names)
+	indeg := map[string]int{}
+	next := map[string][]string{}
+	for _, name := range names {
+		for _, fk := range r.tables[name].ForeignKeys {
+			if fk.RefTable == name {
+				continue
+			}
+			if _, ok := r.tables[fk.RefTable]; !ok {
+				continue
+			}
+			indeg[name]++
+			next[fk.RefTable] = append(next[fk.RefTable], name)
+		}
+	}
+	var ready, out []string
+	for _, name := range names {
+		if indeg[name] == 0 {
+			ready = append(ready, name)
+		}
+	}
+	for len(ready) > 0 {
+		sort.Strings(ready)
+		name := ready[0]
+		ready = ready[1:]
+		out = append(out, name)
+		for _, n := range next[name] {
+			if indeg[n]--; indeg[n] == 0 {
+				ready = append(ready, n)
+			}
+		}
+	}
+	tables := make([]*Table, 0, len(out))
+	for _, name := range out {
+		tables = append(tables, r.tables[name])
+	}
+	return tables
+}
+
 // cycle 返回拓扑排序排不进去的表名（外键成环的那些）。
 func (r *Registry) cycle() []string {
 	indeg := map[string]int{}

@@ -19,6 +19,9 @@
 | `backup list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/backup` |
 | `backup restore` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/backup/restore/{name}` |
 | `backup upload` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/backup/upload` |
+| `database migrate` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/database/migrate` |
+| `database show` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/database/show` |
+| `database test` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/database/test` |
 | `explain` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/explain/{target}` |
 | `job get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/job/get/{job}` |
 | `job list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/job` |
@@ -55,6 +58,7 @@
 | `backup create` | 长任务 |
 | `backup download` | 下载 |
 | `backup upload` | 上传 |
+| `database migrate` | 长任务 |
 | `setup restore` | 上传 |
 
 ## 本地命令（不经主控，只在 CLI 里）

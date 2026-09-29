@@ -24,6 +24,7 @@ var GroupSummaries = map[string]string{
 	"schedule runs":          "内置定时任务每次运行的记录",
 	"job":                    "长任务：受理后在主控里接着跑的命令，按 job id 查结果（只对管理员开放）",
 	"backup":                 "整库备份与恢复（只对管理员开放；下载与恢复要当场验证）",
+	"database":               "主控用的数据库：查看、试连 PostgreSQL、从 SQLite 在线迁移（只对管理员开放；迁移要当场验证）",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -41,7 +42,27 @@ func catalogCommands() []*Command {
 	all = append(all, securityCommands()...)
 	all = append(all, opsCommands()...)
 	all = append(all, backupCommands()...)
+	all = append(all, databaseCommands()...)
 	return all
+}
+
+// databaseCommands 是 m1-08 的数据库设置与在线迁移命令（master-db-migration）。迁移是第 05 章七组的「数据库切换与在线迁移」：
+// 人类专属，要当场验证，令牌与 MCP 一律做不了。
+func databaseCommands() []*Command {
+	target := []Flag{
+		{Name: "host", Type: TypeString, Description: "目标 PostgreSQL 的主机"},
+		{Name: "port", Type: TypeInt, Default: "5432", Description: "目标 PostgreSQL 的端口"},
+		{Name: "name", Type: TypeString, Description: "目标库名"},
+		{Name: "user", Type: TypeString, Description: "目标库的用户"},
+		{Name: "password", Type: TypePassword, Description: "目标库的密码（CLI 上从终端读）"},
+		{Name: "sslmode", Type: TypeString, Default: "prefer", Description: "disable、allow、prefer、require、verify-ca、verify-full 之一"},
+	}
+	return []*Command{
+		{Path: []string{"database", "show"}, Summary: "当前用的数据库：驱动、SQLite 的库文件或 PostgreSQL 的连接参数（不含密码）", Class: ClassRead},
+		{Path: []string{"database", "test"}, Summary: "只读地试连一个 PostgreSQL：版本、是否为空、这台主控的备份工具够不够用", Class: ClassAction, Flags: target},
+		{Path: []string{"database", "migrate"}, Summary: "把主控从 SQLite 在线迁移到一个空的 PostgreSQL（长任务；人类专属：当场验证；迁移期间只能查 job，成功后主控重启）",
+			Class: ClassAction, Shape: ShapeJob, HumanOnly: true, Flags: target},
+	}
 }
 
 // backupCommands 是 m1-07 的长任务与整库备份命令（master-jobs、master-backup）。本机生成与上传备份只要求管理员；

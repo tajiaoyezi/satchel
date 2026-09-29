@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/command"
 	svc "github.com/satchel/satchel/internal/service/audit"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
@@ -24,6 +25,12 @@ const DigestLimit = 4096
 
 // Wrap 给执行链套上留痕：next 返回后写记录，写失败只记日志、结果照常返回。
 func Wrap(rec Recorder, t *command.Table, logger *slog.Logger, next command.Runner) command.Runner {
+	return WrapGated(rec, t, logger, nil, next)
+}
+
+// WrapGated 同 Wrap，另看「写入暂停」开关：在线迁移拿着 SQLite 写锁时（master-db-migration），记录不写库，
+// 改成一条 info 日志（字段与审计记录相同），免得等满 busy_timeout 再失败（master-audit-log）。
+func WrapGated(rec Recorder, t *command.Table, logger *slog.Logger, gate *db.WriteGate, next command.Runner) command.Runner {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -46,6 +53,12 @@ func Wrap(rec Recorder, t *command.Table, logger *slog.Logger, next command.Runn
 		}
 		if err != nil {
 			entry.Result = string(v1.AsError(err).Code)
+		}
+		if gate.Suspended() {
+			logger.Info("数据库迁移期间审计只记日志",
+				"at", entry.At, "actor", entry.Actor, "actor_kind", entry.ActorKind, "token_id", derefID(entry.TokenID),
+				"command", entry.Command, "args_digest", entry.ArgsDigest, "result", entry.Result)
+			return result, err
 		}
 		// 命令已经跑完，记录不能因为客户端取消了请求而丢：写入用不带取消的 ctx。
 		if werr := rec.Record(context.WithoutCancel(ctx), entry); werr != nil {

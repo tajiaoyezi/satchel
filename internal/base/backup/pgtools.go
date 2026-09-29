@@ -100,3 +100,12 @@ func currentSchema(ctx context.Context, bdb *bun.DB) (string, error) {
 	}
 	return s, nil
 }
+
+// CheckClientTools 检查这台主控上 pg_dump 与 psql 是否存在、主版本不低于 major（database test 报告迁过去之后备份与恢复能不能用）。
+func CheckClientTools(ctx context.Context, major int) error {
+	if _, err := findTool(ctx, "pg_dump", "备份", major); err != nil {
+		return err
+	}
+	_, err := findPsql(ctx, major)
+	return err
+}
