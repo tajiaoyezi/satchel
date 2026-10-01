@@ -23,6 +23,7 @@ import (
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/base/selfupdate"
 	"github.com/satchel/satchel/internal/base/store"
+	"github.com/satchel/satchel/internal/command"
 	corejobs "github.com/satchel/satchel/internal/core/jobs"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
@@ -865,6 +866,64 @@ func (u *upgraded) users(t *testing.T, name string) int {
 	var n int
 	bdb.QueryRowContext(context.Background(), "SELECT count(*) FROM users WHERE username = ?", name).Scan(&n)
 	return n
+}
+
+// 归档前核对：刚升级上来的新版本在健康检查通过、标记改成 committed 之前暂停写入（这期间收下的写入会被回退丢掉），之后放开。
+func TestNewVersionWritesSuspendedUntilCommitted(t *testing.T) {
+	u := prepareUpgraded(t)
+	prev := commitUpgrade
+	type seen struct {
+		before, after bool
+		writeErr      error
+	}
+	got := make(chan seen, 1)
+	commitUpgrade = func(up *upgradeStart, ctx context.Context, a *app) error {
+		var s seen
+		s.before = a.writeGate.Suspended()
+		_, s.writeErr = a.runner.Run(v1.WithIdentity(ctx, v1.LocalAdmin("root")),
+			&command.Invocation{Path: []string{"settings", "set"}, Flags: map[string]any{"set": map[string]any{"branding_site_title": "x"}, "resource-version": 1}})
+		err := prev(up, ctx, a)
+		s.after = a.writeGate.Suspended()
+		got <- s
+		return err
+	}
+	t.Cleanup(func() { commitUpgrade = prev })
+	stop, _ := u.serve(t, "0.1.1", u.sqlite())
+	var s seen
+	select {
+	case s = <-got:
+	case <-time.After(15 * time.Second):
+		t.Fatalf("健康检查应当通过：%s", u.logs.String())
+	}
+	u.waitMarkerGone(t)
+	stop()
+	if !s.before || v1.AsError(s.writeErr).Code != v1.CodeUnavailable || !strings.Contains(v1.AsError(s.writeErr).Reason, "健康检查") {
+		t.Fatalf("健康检查通过之前应当暂停写入：suspended=%v err=%v", s.before, s.writeErr)
+	}
+	if s.after {
+		t.Fatal("committed 之后应当放开写入")
+	}
+}
+
+// 归档前核对：回退时，别的待恢复标记（例如新版本启动时库损坏、自动恢复留下的 restored 标记）要覆盖成这次回退的，
+// 否则旧版本看不到 pending、不会换回升级前的库。
+func TestRollbackOverwritesOtherRestoreMarker(t *testing.T) {
+	u := prepareUpgraded(t)
+	u.writeMarker(t, func(m *selfupdate.Marker) { m.Attempts = maxUpgradeStarts }) // 这次启动直接回退
+	if err := archive.WriteMarker(u.dataDir, &archive.Marker{Backup: u.backup, Source: archive.SourceAuto, Phase: archive.PhaseRestored}); err != nil {
+		t.Fatal(err)
+	}
+	_, done := u.serve(t, "0.1.1", u.sqlite())
+	if err := waitDone(t, done); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := archive.ReadMarker(u.dataDir)
+	if p == nil || p.Source != archive.SourceUpgradeRollback || p.Phase != archive.PhasePending || p.Backup != u.backup {
+		t.Fatalf("应当覆盖成这次回退的待恢复标记：%+v", p)
+	}
+	if ex := u.exec(); len(ex) != 1 || ex[0] != u.target {
+		t.Fatalf("应当 exec 旧二进制：%v", ex)
+	}
 }
 
 var _ io.Closer = nopCloser{}

@@ -45,7 +45,7 @@ func (s *Service) Bindings() command.Bindings {
 	}
 }
 
-// OnWrite 登记一个回调：四条写命令（set、rollback、master-url set、gates set）每次写成功之后，
+// OnWrite 登记一个回调：五条写命令（set、rollback、master-url set、gates set、update-cdn set）每次写成功之后，
 // 把写后的整份设置交给它。装配根在启动时登记，之后不再改。
 func (s *Service) OnWrite(fn func(*core.State)) {
 	s.onWrite = append(s.onWrite, fn)

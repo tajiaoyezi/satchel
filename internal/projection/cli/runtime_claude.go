@@ -17,7 +17,7 @@ import (
 const claudeVerify = "claude mcp get satchel"
 
 func claudeNotes() []string {
-	return []string{"重启 Claude Code 后生效（已开的会话不会重新读 settings.json 的 env）", "skills 随 m1-09 交付"}
+	return []string{"重启 Claude Code 后生效（已开的会话不会重新读 settings.json 的 env）", "skills 随 m1-10 交付"}
 }
 
 func claudeSettingsPath(env runtimeEnv) string {

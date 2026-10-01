@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -74,6 +75,12 @@ func serveWith(ctx context.Context, dataDir string, dbCfg db.Config, cfg db.Serv
 	if err := up.finish(ctx, a); err != nil {
 		a.db.Close()
 		return nil, up.withUpgradeHint(err)
+	}
+	// 刚升级上来、还没过健康检查的新版本：从开始监听起暂停写入（只放行查 job），过了健康检查、标记改成 committed 才放开——
+	// 这之前随时可能回退，回退换回升级前的库，这期间收下的写入会被丢掉（例如刚吊销的令牌又生效）。
+	if up != nil && up.isNew {
+		a.writeGate.Suspend(fmt.Sprintf("主控刚升级到 %s，正在做健康检查，这期间只能查长任务", up.m.ToVersion),
+			"稍等几秒：健康检查通过后放开，不过就自动回退到 "+up.m.FromVersion)
 	}
 	tcp, unix, err := a.listen(cfg.Listen)
 	if err != nil {

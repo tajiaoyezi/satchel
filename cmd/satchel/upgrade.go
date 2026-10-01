@@ -108,7 +108,9 @@ func (u *upgradeStart) rollback(reason string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if pending == nil || pending.Backup != m.Backup {
+	// 已有这次回退写下、还没执行的待恢复标记（回退中途崩溃后接着做）就不重写。别的待恢复标记都覆盖掉：例如新版本启动时库损坏、
+	// 自动恢复留下的（已是 restored）——不覆盖的话，旧版本看不到 pending，就不会换回升级前的库。
+	if pending == nil || pending.Source != archive.SourceUpgradeRollback || pending.Backup != m.Backup || pending.Phase != archive.PhasePending {
 		if err := archive.WriteMarker(u.dataDir, &archive.Marker{Backup: m.Backup, Source: archive.SourceUpgradeRollback, Actor: m.Actor,
 			RequestedAt: time.Now().UTC(), Phase: archive.PhasePending}); err != nil {
 			return "", err
@@ -273,7 +275,8 @@ func (u *upgradeStart) watchHealth(ctx context.Context, a *app, tcp net.Addr) {
 	}
 }
 
-// commit 是健康检查通过之后的收尾：标记改成 committed → 写 done → 删标记。每一步都可以重做。
+// commit 是健康检查通过之后的收尾：标记改成 committed → 放开写入 → 写 done → 删标记。每一步都可以重做。
+// 写入在新版本启动时就暂停了（serveWith），committed 落盘之后不会再回退，这才放开。
 // job 也可能已经被旧进程写成了 failed：替换之后放回旧二进制也失败时（service/update），旧进程先写了 failed、留着升级标记，
 // 重启之后起来的是新版本并通过了健康检查——升级其实成功了，按升级标记把它改写成 done。
 func (u *upgradeStart) commit(ctx context.Context, a *app) error {
@@ -286,6 +289,7 @@ func (u *upgradeStart) commit(ctx context.Context, a *app) error {
 		}
 		m.Phase = selfupdate.PhaseCommitted
 	}
+	a.writeGate.Resume()
 	if err := u.settle(ctx, a, update.Result{FromVersion: m.FromVersion, ToVersion: m.ToVersion, Backup: m.Backup}, nil, corejobs.StatusFailed); err != nil {
 		return err
 	}

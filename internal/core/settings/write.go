@@ -138,7 +138,7 @@ func (r *Repo) setColumn(rv reflect.Value, name string, v any) error {
 }
 
 // snapshotOf 生成写前快照的行：内容是日常运维档（spec）全部字段的 canonical JSON（见 Canonical），
-// 打码字段存原文；七组字段与主控自身类字段不进（后者随 m1-08 的第一条写命令再定）。
+// 打码字段存原文；七组字段与主控自身类字段不进（主控自身类只经带危险类的专门命令写，不存快照，回滚也就写不到它们：master-settings）。
 func (r *Repo) snapshotOf(before *State, source string) (*model.ConfigSnapshot, error) {
 	content := map[string]any{}
 	for name, f := range r.fields {

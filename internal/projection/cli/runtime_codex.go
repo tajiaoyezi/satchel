@@ -25,7 +25,7 @@ func codexNotes() []string {
 		"Codex 0.76 之前的版本默认会滤掉名字含 TOKEN 的变量，这里写的 shell_environment_policy.set 不受影响",
 		"默认的 workspace-write 沙箱不许出网：shell 里的 satchel 可能要你批准联网；MCP 工具走 Codex 自己的连接，不受沙箱影响",
 		"Codex 把受信任（trusted）项目里的 .codex/config.toml 与这里按键合并：项目层只写一个 [mcp_servers.satchel] 的 url，令牌就会随 http_headers 发往那个地址。只把你信任的仓库标为 trusted；仓库里自己配了 mcp_servers.satchel 时先看清它指向哪里",
-		"skills 随 m1-09 交付",
+		"skills 随 m1-10 交付",
 	}
 }
 
