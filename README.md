@@ -138,7 +138,7 @@ go build ./cmd/satchel
 ### 备份与恢复
 
 - **备份里有什么**：一个 ZIP，含 `manifest.json`（格式、时间、驱动、已应用的迁移、主控版本）、数据库（SQLite 是 `VACUUM INTO` 导出的一致拷贝，PostgreSQL 是 `pg_dump` 导出的当前 schema 的纯 SQL；两者都不带会话，恢复后所有人要重新登录）、`database.json`、`config.yaml`、`master.key`（主控通信密钥，恢复后节点不用重新配对）、`subscribes/` 与 `rule_templates/`。socket、`public/`、`logs/`、`backups/`、`recovery-codes/` 不进备份。
-- **本机备份**：放在数据目录的 `backups/`（0700，每份 0600），最多留 7 份（手动的、上传的、恢复前自动生成的都算）。内置任务 `backup_local` 每天生成一份。
+- **本机备份**：放在数据目录的 `backups/`（0700，每份 0600），最多留 7 份（手动的、上传的、恢复前与升级前自动生成的都算）。内置任务 `backup_local` 每天生成一份。
 - **命令**（都只对管理员开放）：
   ```sh
   satchel backup create                    # 长任务：CLI 跟到结束；--no-wait 只拿 job，之后 satchel job get <job_id>
@@ -147,12 +147,12 @@ go build ./cmd/satchel
   satchel backup download <名字> --output ./b.zip   # 人类专属：当场验证（备份里有主控密钥与全部数据）
   satchel backup restore <名字> --verify-user <管理员>  # 人类专属：当场验证；主控随后重启
   ```
-  同一时刻只能有一次备份、上传或恢复，其余的是 `conflict`。上传与下载收发的是文件本身，MCP 上做不了；备份解压后超过 16 GiB 一律拒绝。校验不过（打不开、清单不认识、比本主控新、含不允许的路径）是 `bad_request`；**不支持跨驱动恢复**（SQLite 的备份恢复到 PostgreSQL 或反过来），是 `conflict`——在同驱动的主控上恢复后再用在线迁移换驱动。
+  同一时刻只能有一次备份、上传或恢复，其余的是 `conflict`；在线迁移、自升级进行中，或数据目录里还留着升级标记 `upgrade-pending.json` 时也会被拒绝（写入暂停期间是 `unavailable`，其余时候是 `conflict`；内置的 `backup_local` 这时跳过）。上传与下载收发的是文件本身，MCP 上做不了；备份解压后超过 16 GiB 一律拒绝。校验不过（打不开、清单不认识、比本主控新、含不允许的路径）是 `bad_request`；**不支持跨驱动恢复**（SQLite 的备份恢复到 PostgreSQL 或反过来），是 `conflict`——在同驱动的主控上恢复后再用在线迁移换驱动。
 - **恢复要重启**：`backup restore` 只校验、写待恢复标记 `restore-pending.json`、回应之后优雅退出，由 systemd（`Restart=always`）或 compose（`restart: unless-stopped`）拉起；**直接在前台跑 `satchel serve` 的要手动再启动**。下次启动时，在打开库之前先存一份 `before-restore-<时间>.zip`（这次恢复的后悔药），再换库：SQLite 换文件；PostgreSQL 用 `psql` 在一个事务里删掉整个 schema 再导入，出错整个回滚——**恢复会把整个 schema 换成备份里的样子**，不在备份里的对象也会被删。`master.key`、`subscribes/`、`rule_templates/` 一并换成备份里的；`database.json` 与 `config.yaml` 保持这台机器当前的。换下来的旧文件在 `backups/replaced-<时间>-<随机后缀>/`，不自动删。恢复失败时原样用旧库启动。换到一半主控被杀也没关系：停放目录先写进了待恢复标记，重启会接着做完；万一撤回也失败、库文件不在原处，主控会拒绝启动并指出原件在哪个目录，而不是在空库上跑起来。
 - **恢复之后恢复码全部换新**：库回到过去，已经用掉的恢复码会重新变成可用，所以恢复后全部作废，开了两步验证的账号各生成一批新的，明文在数据目录的 `recovery-codes/recovery-codes-<时间>.txt`（0600，路径也写进日志）。拿到码登录后请删掉这个文件。两步验证的密钥也回到了备份那一刻，备份之后换过验证器的人用这里的恢复码登录，再重新绑定。结果在 `settings show` 的运行态 `last_restore` 里，恢复后的库里也有一条审计。
 - **坏库自动恢复**（只限 SQLite）：启动时先跑 `quick_check`，库确定损坏就从 `backups/` 里最新一份能用的备份自动恢复，坏的库文件留在 `backups/corrupt-<时间>-<随机后缀>/`；没有可用的备份时拒绝启动——把一份同驱动的备份放进 `backups/` 再启动即可。自动恢复失败时坏库回到原处，同一次失败不会反复重试（数据目录里的 `restore-pending.json` 记着失败原因，处理好之后删掉它再启动）。PostgreSQL 连不上就不启动，不自动恢复。
 - **PostgreSQL 的客户端工具**：备份要 `pg_dump`（主版本不低于服务器），恢复要 `psql`；找不到或版本太低时报 `unavailable` 并给出安装命令（例如 `apt install postgresql-client-18`，Debian 系先加 PostgreSQL 官方的 apt 源），主控不会自己装。Docker 镜像已预装 18。
-- **长任务**：跑得久的命令（本版本只有 `backup create`）受理后立刻返回 job，工作在主控里接着跑；`satchel job get <job_id>` 与 `satchel job list [--status ...]` 查看（只对管理员开放），MCP 的 `satchel_run` 最多等 60 秒，到时返回当时的 job。主控重启时没跑完的 job 标为 `failed`。
+- **长任务**：跑得久的命令（`backup create`、`database migrate`、`update apply`）受理后立刻返回 job，工作在主控里接着跑；`satchel job get <job_id>` 与 `satchel job list [--status ...]` 查看（只对管理员开放），MCP 的 `satchel_run` 最多等 60 秒，到时返回当时的 job。主控重启时没跑完的 job 标为 `failed`（`update apply` 的 job 例外：它由升级之后起来的进程按升级标记写成 `done` 或 `failed`）。
 
 ### 数据库设置与在线迁移
 
@@ -164,6 +164,27 @@ go build ./cmd/satchel
   - 提交点之前任何一步失败：目标库回到空的，`database.json` 不变，主控照常用 SQLite。
   - 迁移后 `satchel.db` 留在数据目录里但**不再是最新的**；以 PostgreSQL 为准。要回到 SQLite 只能手工把 `database.json` 改回去，迁移之后写进 PostgreSQL 的数据不会在 SQLite 里。
   - 只支持 SQLite 到 PostgreSQL 一个方向。迁过去之后备份与恢复要 `pg_dump` 与 `psql`（见「备份与恢复」）。
+
+### 升级主控与更新 CDN
+
+- **检查更新**：`satchel update check [--channel stable|prerelease]`（只对管理员开放）报出当前版本、所选渠道的最新版本、发布说明、版本信息从哪来（更新 CDN 或 GitHub），以及这台主控能不能自升级（`can_apply` 与原因）。
+- **升级**：`satchel update apply <版本号> --confirm <版本号>`，长任务（CLI 跟到结束）。它属于第 05 章危险操作的「主控自身类」：令牌要单独开这一类，每次都要带 `--confirm`。版本号必须等于 `update check` 看到的最新版本，不能降级、不能跳到中间版本。
+  - 过程：按更新 CDN → GitHub → gh-proxy 的顺序下载二进制与签名（二进制与签名必须来自同一个源，一个源不对就整对换下一个）→ 用正在运行的主控编进去的公钥验签 → 试跑新二进制确认版本号 → 暂停写入（这期间只能查 job）→ 生成 `before-upgrade-<时间>.zip` → 写升级标记 `upgrade-pending.json` → 把旧二进制留成 `satchel.bak`，原子替换 → 优雅停止后原地 exec 新二进制（PID 不变，手工前台跑的也行）。
+  - 新版本起来之后先经本机的 socket 请求一次自己的 `healthz`（不受「关闭公网访问」与反代登记影响），拿到 200，再确认 TCP 监听有回应（门的拒绝也算有回应），才算成功：job 写成 `done`，删掉升级标记。跟着的 CLI 在主控重启的那几秒里接着等（最多 2 分钟；经反向代理访问时，代理这几秒回的 502 / 503 / 504、Cloudflare 回源失败的 520–524 也当作在重启）。
+  - 同一个数据目录上只能跑一个主控：`serve` 整个运行期间锁着数据目录里的 `serve.lock`，第二个 `serve` 直接 `conflict`；原地重启时锁交给新进程，不会被插进来的实例抢走。
+  - **升级是一个事务**：新版本启动失败、健康检查不过、或者连续 3 次没能启动（崩溃后被服务管理器拉起；install.sh 装的 systemd 服务是 `Restart=always`，OpenRC 服务由 `supervise-daemon` 监管；收到停止信号不算一次）时，自动把 `satchel.bak` 放回去、用升级前的备份换回旧库（与「备份与恢复」同一套流程，**恢复码会全部换新**，明文在 `recovery-codes/` 里），旧版本起来后把 job 写成 `failed` 并带上原因。旧二进制与升级前的库总是一起回来。
+  - 下载、验签或试跑新二进制失败时什么都不动；暂停写入之后、exec 之前的任一步失败，撤回已经做过的（替换已经发生就放回旧二进制）、放开写入。放回旧二进制本身也失败时，写入保持暂停、升级标记留着，job 是 `failed`：重启主控，起来的是新版本就做健康检查（通过的话 job 改写成 `done`，不过就自动回退），是旧版本就只收尾。
+  - **自动回退不了的情况**：新二进制在读到升级标记之前就崩溃（例如运行时初始化失败），新代码根本没跑起来，自动回退不会发生。这时用旧二进制手工做一遍与自动回退相同的事：
+    1. 停掉主控，看数据目录里 `upgrade-pending.json` 的 `previous`（旧二进制，标准安装是 `/usr/local/bin/satchel.bak`）、`target`（`/usr/local/bin/satchel`）与 `backup`（升级前的备份名）。
+    2. `cp <previous> <target>` 放回旧二进制。
+    3. 在数据目录写 `restore-pending.json`（0600）：`{"backup": "<backup>", "source": "upgrade_rollback", "phase": "pending"}`。
+    4. 把 `upgrade-pending.json` 的 `phase` 改成 `rolling_back`，`error` 写上原因（例如「新版本启动即崩溃，手工回退」）。
+    5. 启动主控：旧版本先换回升级前的库（恢复码全部重发，明文在 `recovery-codes/`），再把 job 写成 `failed`、删掉两个标记。
+    不要只换回旧二进制就启动：新版本可能已经迁移过库（`attempts` 为 0 也不能说明没有，停止信号不计次），旧版本会因库结构比它新而起不来，或者带着新版本写过的库继续跑。
+  - **回退时换库失败**（例如备份坏了、磁盘满、找不到 `psql`、PostgreSQL 还没起来）：旧版本拒绝启动，而不是带着升级之后的库对外服务；两个标记都留着，处理好原因后把数据目录里 `restore-pending.json` 的 `phase` 改回 `pending` 再启动，主控会重试换库。升级前的备份确实坏了、修不回来时，有两条出路：把 `restore-pending.json` 的 `backup` 改成 `backups/` 里另一份能用的备份（`phase` 同样改回 `pending`），换回那一刻；或者重新装回新版本的二进制（从 Release 下载并验签），再删掉 `restore-pending.json` 与 `upgrade-pending.json`，带着升级之后的库继续跑新版本。
+  - **升级成功之后又换回了旧版本**（升级标记已是 `committed` 或已删）：旧版本面对的是升级之后的库，库结构比它新时会拒绝启动。推荐换回新版本；确实要回到旧版本，就按上面「自动回退不了」的步骤 2–5 恢复升级前的备份（升级之后的写入全部丢掉）。标记已删时：备份名到 `backups/` 里按 `before-upgrade-` 前缀找，旧二进制是目标路径加 `.bak`，步骤 4 跳过。注意升级前的备份只在升级标记还在时受保护，之后按 7 份轮换（`backup_local` 每天一份，大约一周后就没了），`.bak` 也只有一份（再升级一次就被覆盖）：隔得久了就回不去，只能留在新版本。
+  - 不能自升级的情况：Docker 部署（换镜像 tag：`docker compose pull && docker compose up -d`）、直接 `go build` 的开发版、非 Linux。
+- **更新 CDN**：`satchel settings update-cdn set <true|false> --resource-version <N> --confirm <true|false>`（主控自身类）打开或关掉。关掉之后检查更新与下载直接走 GitHub。**CDN 的域名现在还没有**（`internal/base/selfupdate` 里的 `CDNBase` 为空），开关开着也不走 CDN，`update check` 的 `cdn.reason` 会说明。启用步骤：在代码里填上域名 → 仓库配好 R2 的四个 secret（`R2_ACCOUNT_ID`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、`R2_BUCKET`）→ 设仓库变量 `UPDATE_CDN_ARMED=1` → 下一次发版时发布线把二进制、签名与 `version.json` 推上去。渠道的版本索引只会被更新的版本覆盖：要撤回一个有问题的版本，手工把 R2 上 `satchel/channels/<渠道>/version.json` 换成上一个版本的内容（重跑旧版本的发布线不会覆盖更新的索引）。同一渠道短时间内连发三个版本时，GitHub 可能取消中间那个的换索引，重跑它即可。
 
 ## REST 与 MCP
 
@@ -195,7 +216,7 @@ Docker Compose：仓库根的 `docker-compose.yml` 与 `.env.example`（`cp .env
 
 ## 发布
 
-打 tag 就是发版：`git tag v0.1.0 && git push origin v0.1.0`（tag 含 `-` 是 prerelease）。发布线（`.github/workflows/release.yml`）：`build` 六个平台自动跑 → `sign` 停在受保护环境 `release-signing` 等仓库拥有者批准，批准后用 `tools/sign` 给每个二进制签 Ed25519 分离签名（`<file>.sig`，64 字节）并用公钥验回、出 `checksums.txt` → `release` 建 GitHub Release（同 tag 已有 Release 即失败，不覆盖）→ `docker` 推多架构镜像（标签 `0.1.0`、`0.1`、`0`、`latest`；prerelease 是 `0.1.0-beta.1` 与 `beta`）。
+打 tag 就是发版：`git tag v0.1.0 && git push origin v0.1.0`（tag 含 `-` 是 prerelease）。发布线（`.github/workflows/release.yml`）：`build` 六个平台自动跑 → `sign` 停在受保护环境 `release-signing` 等仓库拥有者批准，批准后用 `tools/sign` 给每个二进制签 Ed25519 分离签名（`<file>.sig`，64 字节）并用公钥验回、出 `checksums.txt` → `release` 建 GitHub Release（同 tag 已有 Release 即失败，不覆盖）→ `docker` 推多架构镜像（标签 `0.1.0`、`0.1`、`0`、`latest`；prerelease 是 `0.1.0-beta.1` 与 `beta`）→ `publish-cdn` 把这次的二进制与签名推到更新 CDN（R2 的 `satchel/releases/<版本>/`）→ `publish-cdn-index` 再换渠道的版本索引 `satchel/channels/<stable|prerelease>/version.json`（同一渠道一个一个来，只在这次的版本更新时覆盖；渠道还没有索引时直接写入，读现有索引失败（不是「不存在」）就失败而不是盲目覆盖）；仓库变量 `UPDATE_CDN_ARMED=1` 才跑，没设就跳过。
 
 私钥只在环境 secret `RELEASE_SIGNING_PRIVATE_KEY` 里，环境上还要有变量 `RELEASE_SIGNING_ARMED=1`（签名 job 用它确认环境是人手建好、设了审批人的，不是 GitHub 自动建的）；公钥清单在 `pkg/release`（编进二进制）与 `install.sh` 各一份、测试钉住一致，三个二进制共用一把发布密钥；轮换先发一版带新旧两把、下一版再去掉旧的。`satchel-agent` 与 `satchel-plugins` 的发布线检出本仓库的固定 tag 跑同一份签名程序。受保护环境要「必需审批人」，GitHub 免费套餐只在公开仓库上提供，所以三个 Go 仓库是公开的。本地演练：`go run ./tools/sign keygen` 生成一对测试密钥，`RELEASE_SIGNING_PRIVATE_KEY=<私钥> go run ./tools/sign sign <file>`，验回要么把测试公钥经 ldflags 注入（`-X github.com/satchel/satchel/pkg/release.publicKeysCSV=<公钥>`）再 `verify`，要么直接用 openssl——源码里的正式公钥和你的测试私钥不成对，`verify` 会失败是正常的。
 

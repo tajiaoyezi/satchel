@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"regexp"
@@ -32,6 +33,9 @@ const (
 // stopDelay 是迁移成功之后过多久才让 serve 停止：留出时间让跟着这个 job 的 CLI（每秒查一次）与 MCP（每半秒）看到 done，
 // 不至于下一次查的时候主控已经停了、把成功报成连不上。这段时间拦截一直开着。变量只为测试能调小。
 var stopDelay = 3 * time.Second
+
+// drainTimeout 是暂停写入之后等已经进门的请求走完的上限。变量只为测试能调小。
+var drainTimeout = 30 * time.Second
 
 // Deps 是本服务要的东西。Lock、Unlock、StartJob、RequestStop 由装配根注入：业务层的模块之间不互相引用。
 type Deps struct {
@@ -286,8 +290,19 @@ func (s *Service) run(ctx context.Context, accepted <-chan struct{}, target *bun
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	// 从这里起挡住写入：进门的地方提前拒绝，SQLite 的写锁兜底。
-	s.d.Gate.Suspend()
+	// 从这里起挡住写入：进门的地方提前拒绝，SQLite 的写锁兜底。开关打开之前已经进门的命令先等它们走完，它们的写入与审计都进快照，
+	// 不会堵在写锁上等满 busy_timeout 失败。
+	s.d.Gate.Suspend("正在把数据库迁移到 PostgreSQL，这期间主控只能查长任务", "用 satchel job get <job_id> 看迁移进度；迁移结束后主控会重启")
+	dctx, cancel := context.WithTimeout(ctx, drainTimeout)
+	err = s.d.Gate.Drain(dctx)
+	cancel()
+	if err != nil {
+		s.d.Gate.Resume()
+		if ctx.Err() != nil {
+			return nil, ctx.Err() // 主控在停止
+		}
+		return nil, v1.Wrap(v1.CodeUnavailable, fmt.Sprintf("暂停写入之前进门的请求 %s 内没有走完", drainTimeout), err).WithNext("稍后重试")
+	}
 	committed := false
 	src, err := s.d.DB.BeginTx(ctx, nil) // DSN 带 _txlock=immediate：这就是 BEGIN IMMEDIATE，拿到写锁
 	if err != nil {

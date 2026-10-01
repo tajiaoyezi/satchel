@@ -48,6 +48,10 @@ const (
 	BackupsDir         = "backups"
 	RecoveryCodesDir   = "recovery-codes"
 	RestorePendingFile = "restore-pending.json"
+	// UpgradePendingFile 是自升级的升级标记（master-self-update）：在库之外，失败时要连库一起回退。
+	UpgradePendingFile = "upgrade-pending.json"
+	// ServeLockFile 是 serve 整个运行期间拿着的独占锁（flock）：同一个数据目录上只能有一个主控，自升级 exec 时锁交给新进程。
+	ServeLockFile = "serve.lock"
 )
 
 // DataSubDirs 是数据目录下要随目录一起创建的子目录。

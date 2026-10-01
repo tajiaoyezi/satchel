@@ -19,7 +19,7 @@ var otherPrograms = map[string]string{
 // 不在清单里：它们在错误文案的断言里以字面量出现是合理的（点名文件的 reason）；logs 与 recovery-codes 也不在：它们同时是命令组的名字（logs list、account recovery-codes regenerate）。
 func TestLayoutNamesDefinedOnce(t *testing.T) {
 	root := filepath.Join("..", "..", "..")
-	names := []string{SubscribesDir, RuleTemplatesDir, PublicDir, MasterKeyFile, SocketFile, ConfigYAMLFile, LogFile, RestorePendingFile, BackupsDir}
+	names := []string{SubscribesDir, RuleTemplatesDir, PublicDir, MasterKeyFile, SocketFile, ConfigYAMLFile, LogFile, RestorePendingFile, UpgradePendingFile, ServeLockFile, BackupsDir}
 	re := regexp.MustCompile(`"(` + strings.Join(escapeAll(names), "|") + `)"`)
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {

@@ -1,10 +1,12 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 var envVars = []string{
@@ -167,9 +169,9 @@ func TestSaveConfigAtomic(t *testing.T) {
 		t.Fatal("nil 的开关当作关着")
 	}
 	g = &WriteGate{}
-	g.Suspend()
-	if !g.Suspended() {
-		t.Fatal("打开后应当挡着")
+	g.Suspend("正在升级", "等一会儿")
+	if reason, next := g.Why(); !g.Suspended() || reason != "正在升级" || next != "等一会儿" {
+		t.Fatal("打开后应当挡着，并带上原因与下一步")
 	}
 	g.Resume()
 	if g.Suspended() {
@@ -193,4 +195,30 @@ func TestSaveConfigDirSyncFails(t *testing.T) {
 	if got, _ := LoadConfig(dir); got.Driver != DriverPostgres {
 		t.Fatal("新配置应当已经生效")
 	}
+}
+
+// 审查：开关打开之前进门的请求，Drain 等它们走完；开关开着时 Enter 不放行。
+func TestWriteGateDrain(t *testing.T) {
+	g := &WriteGate{}
+	if !g.Enter() {
+		t.Fatal("开关关着时应当能进门")
+	}
+	g.Suspend("正在升级", "")
+	if g.Enter() {
+		t.Fatal("开关开着时不应当再放行")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := g.Drain(ctx); err == nil {
+		t.Fatal("还有请求没走完，Drain 应当等到超时")
+	}
+	g.Leave()
+	if err := g.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var nilGate *WriteGate
+	if !nilGate.Enter() {
+		t.Fatal("nil 当作关着")
+	}
+	nilGate.Leave()
 }

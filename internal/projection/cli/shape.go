@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -97,6 +98,11 @@ func followJob(ctx context.Context, accepted any, runner command.Runner, opts Op
 	if poll <= 0 {
 		poll = time.Second
 	}
+	maxDown := opts.JobUnreachable
+	if maxDown <= 0 {
+		maxDown = 2 * time.Minute
+	}
+	var downSince time.Time // 从什么时候起连不上主控
 	for !finished(job) {
 		if !deadline.IsZero() && time.Now().After(deadline) {
 			return job, nil
@@ -107,9 +113,21 @@ func followJob(ctx context.Context, accepted any, runner command.Runner, opts Op
 		case <-time.After(poll):
 		}
 		got, err := runner.Run(ctx, &command.Invocation{Path: []string{"job", "get"}, Args: []string{str(job["job_id"])}, Flags: map[string]any{}})
+		if errors.Is(err, ErrUnreachable) {
+			// 主控在重启（如自升级）：接着查，从第一次连不上起最多 maxDown 这么久。
+			if downSince.IsZero() {
+				downSince = time.Now()
+			}
+			if time.Since(downSince) < maxDown {
+				continue
+			}
+			return nil, v1.Wrap(v1.CodeUnavailable, fmt.Sprintf("跟长任务时主控 %s 内一直连不上（或前面的代理一直报网关错误），不再等", maxDown), err).
+				WithNext("主控起来之后用 satchel job get " + str(job["job_id"]) + " 查结局")
+		}
 		if err != nil {
 			return nil, err
 		}
+		downSince = time.Time{}
 		if job, err = asJob(got); err != nil {
 			return nil, err
 		}

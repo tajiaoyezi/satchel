@@ -289,9 +289,14 @@ EOF
         cat > "/etc/init.d/${SERVICE_NAME}" <<EOF
 #!/sbin/openrc-run
 name="Satchel 主控"
+# supervise-daemon 监管：进程退出后重新拉起（从备份恢复、在线迁移、自升级回退都靠退出后被拉起）。
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=0
+# 停止时先发 SIGTERM、最多等 20 秒（serve 优雅停止最多 10 秒，再加收尾），还没退出再 SIGKILL；默认只等 5 秒就不管了。
+retry="TERM/20/KILL/5"
 command="${BIN_DIR}/${SERVICE_NAME}"
 command_args="serve"
-command_background=true
 command_user="root"
 pidfile="/run/${SERVICE_NAME}.pid"
 output_log="/var/log/${SERVICE_NAME}.log"
@@ -386,8 +391,10 @@ services:
   satchel:
     image: \${SATCHEL_IMAGE:-${IMAGE}:${tag}}
     container_name: satchel
-    # M0 没有 serve：容器跑完迁移就退出，所以只在失败时重试有限次；M1 交付 serve 后改回 unless-stopped。
-    restart: on-failure:5
+    # 主控以 0 退出后（从备份恢复、在线迁移之后）也要被拉起：unless-stopped。
+    restart: unless-stopped
+    # docker stop 默认只等 10 秒就 SIGKILL；serve 的优雅停止最多约 15 秒（请求与任务 10 秒，补写记录 5 秒）。
+    stop_grace_period: 25s
     network_mode: host
     environment:
       - SATCHEL_DATA_DIR=/var/lib/satchel

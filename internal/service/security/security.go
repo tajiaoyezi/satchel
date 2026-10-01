@@ -132,7 +132,7 @@ func (s *Service) RecordProbe(ctx context.Context, ip, path string) {
 		return
 	}
 	if s.gate.Suspended() {
-		s.logger.Warn("数据库迁移期间自动封禁只在本进程内生效，不写库", "ip", ip)
+		s.logger.Warn("写入暂停期间（迁移数据库或升级主控）自动封禁只在本进程内生效，不写库", "ip", ip)
 	} else if err := s.repo.UpsertBan(ctx, *ban); err != nil {
 		s.logger.Error("自动封禁写库失败，本进程内照样生效，重启后不再恢复", "ip", ip, "error", err)
 	}
@@ -202,8 +202,9 @@ func (s *Service) Sweep() {
 
 // record 写一条安全事件；失败只记 error 日志（安全事件是给人看的线索，不能反过来让请求失败）。
 func (s *Service) record(ctx context.Context, e core.Event) {
-	if s.gate.Suspended() {
-		s.logger.Info("数据库迁移期间安全事件只记日志", "kind", e.Kind, "ip", e.IP, "path", e.Path, "username", e.Username, "detail", e.Detail, "actor", e.Actor)
+	// 暂停写入之前就已进门的命令（security ban / unban）照常写，与它的业务写入、审计一起进备份或快照。
+	if s.gate.Suspended() && !db.Entered(ctx) {
+		s.logger.Info("写入暂停期间（迁移数据库或升级主控）安全事件只记日志", "kind", e.Kind, "ip", e.IP, "path", e.Path, "username", e.Username, "detail", e.Detail, "actor", e.Actor)
 		return
 	}
 	if err := s.repo.InsertEvent(ctx, e); err != nil {

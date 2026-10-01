@@ -11,6 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/satchel/satchel/internal/base/db"
+	"github.com/satchel/satchel/internal/base/selfupdate"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -157,6 +158,24 @@ func TestDBMigrateReportsSchemaDrift(t *testing.T) {
 	stdout, _, code = run(t, "db", "status", "--data-dir", dir)
 	if code != 0 || !strings.Contains(stdout, "不一致") || !strings.Contains(stdout, "colour") {
 		t.Fatalf("db status 应当在输出里列出差异：code=%d\n%s", code, stdout)
+	}
+}
+
+// 审查：数据目录里有升级标记时（多半是旧二进制面对新版本迁移过的库），结构不一致的提示换成升级的提示，不再提示删库。
+func TestDBMigrateDriftWithUpgradeMarker(t *testing.T) {
+	sqliteOnly(t)
+	dir := filepath.Join(t.TempDir(), "data")
+	if _, stderr, code := run(t, "db", "migrate", "--data-dir", dir); code != 0 {
+		t.Fatal(stderr)
+	}
+	rawSQL(t, dir, "ALTER TABLE tasks ADD COLUMN colour TEXT")
+	if err := selfupdate.WriteMarker(dir, &selfupdate.Marker{FromVersion: "0.1.0", ToVersion: "0.1.1", Phase: selfupdate.PhaseCommitted, Backup: "before-upgrade-x.zip"}); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := run(t, "db", "migrate", "--data-dir", dir, "--json")
+	e := decodeError(t, stderr)
+	if code != v1.ExitFailure || e.Code != v1.CodeSchemaMismatch || strings.Contains(e.Next, "删掉库") || !strings.Contains(e.Next, "不要删库") || !strings.Contains(e.Next, "before-upgrade-x.zip") {
+		t.Fatalf("有升级标记时不应当提示删库：%+v", e)
 	}
 }
 

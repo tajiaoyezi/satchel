@@ -27,6 +27,7 @@ func TestCatalog(t *testing.T) {
 		"logs list": ClassRead, "logs files list": ClassRead, "schedule list": ClassRead, "schedule runs list": ClassRead,
 		"job get": ClassRead, "job list": ClassRead, "backup list": ClassRead,
 		"database show": ClassRead, "database test": ClassAction, "database migrate": ClassAction,
+		"update check": ClassRead, "update apply": ClassAction, "settings update-cdn set": ClassMasterSettings,
 		"backup create": ClassAction, "backup upload": ClassAction, "backup download": ClassAction, "backup restore": ClassAction, "setup restore": ClassAction,
 		"setup init": ClassAction, "account set-password": ClassAction, "account totp setup": ClassAction, "account totp confirm": ClassAction,
 		"account totp disable": ClassAction, "account recovery-codes regenerate": ClassAction,
@@ -53,9 +54,15 @@ func TestCatalog(t *testing.T) {
 		}
 	}
 	// m1-07 的执行形状、人类专属与不要身份。
-	for name, shape := range map[string]Shape{"backup create": ShapeJob, "backup upload": ShapeUpload, "setup restore": ShapeUpload, "backup download": ShapeDownload} {
+	for name, shape := range map[string]Shape{"backup create": ShapeJob, "update apply": ShapeJob, "backup upload": ShapeUpload, "setup restore": ShapeUpload, "backup download": ShapeDownload} {
 		if c, _ := table.Lookup(name); c.Shape != shape {
 			t.Errorf("%s 的执行形状应当是 %s，得到 %q", name, shape, c.Shape)
+		}
+	}
+	// m1-09：升级与更新 CDN 开关是主控自身类，confirm 取位置参数。
+	for name, arg := range map[string]string{"update apply": "version", "settings update-cdn set": "enabled"} {
+		if c, _ := table.Lookup(name); c.Danger != v1.DangerMaster || c.Confirm == nil || c.Confirm.Kind != ConfirmObject || c.Confirm.Arg != arg {
+			t.Errorf("%s 应当是主控自身类、confirm 取 %s：%+v", name, arg, c)
 		}
 	}
 	for _, name := range []string{"backup download", "backup restore"} {

@@ -550,3 +550,29 @@ func TestMasterURL(t *testing.T) {
 		}
 	})
 }
+
+// master-self-update「更新 CDN 的开关」：只收 true / false，比对并抬版本，不存快照；普通用户不行。
+func TestUpdateCDNSet(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		f := setup(t, bdb)
+		res, err := f.run(f.admin, "settings update-cdn set", []string{"false"}, map[string]any{"resource-version": 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obj := typed(t, res); obj.Status.UpdateCdnEnabled || obj.Metadata.ResourceVersion != 2 || f.snapshots() != 0 {
+			t.Fatalf("关掉：%+v %+v 快照 %d", obj.Metadata, obj.Status.UpdateCdnEnabled, f.snapshots())
+		}
+		if _, err := f.run(f.admin, "settings update-cdn set", []string{"yes"}, map[string]any{"resource-version": 2}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("不是 true / false：%v", err)
+		}
+		if _, err := f.run(f.admin, "settings update-cdn set", []string{"true"}, map[string]any{"resource-version": 1}); v1.AsError(err).Code != v1.CodeVersionConflict {
+			t.Errorf("过期版本：%v", err)
+		}
+		if _, err := f.run(f.user, "settings update-cdn set", []string{"true"}, map[string]any{"resource-version": 2}); v1.AsError(err).Code != v1.CodeForbidden {
+			t.Errorf("普通用户：%v", err)
+		}
+		if got := f.show(); !(!got.Status.UpdateCdnEnabled && got.Metadata.ResourceVersion == 2) {
+			t.Fatalf("show：%+v", got.Status.UpdateCdnEnabled)
+		}
+	})
+}

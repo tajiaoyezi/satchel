@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/satchel/satchel/internal/base/captcha"
 	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/schema"
+	"github.com/satchel/satchel/internal/base/selfupdate"
 	"github.com/satchel/satchel/internal/base/store"
 	"github.com/satchel/satchel/internal/command"
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
@@ -51,7 +53,9 @@ import (
 	svcsecurity "github.com/satchel/satchel/internal/service/security"
 	svcsettings "github.com/satchel/satchel/internal/service/settings"
 	svctokens "github.com/satchel/satchel/internal/service/tokens"
+	svcupdate "github.com/satchel/satchel/internal/service/update"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
+	"github.com/satchel/satchel/pkg/release"
 )
 
 // shutdownTimeout 是优雅停止等进行中请求的上限（master-serve「优雅停止」）。
@@ -86,9 +90,42 @@ type app struct {
 	writeGate *db.WriteGate
 	databases *svcdatabase.Service
 
-	// stopMu 与 stopServe：发起恢复之后让 serve 优雅停止（serve 开始时设）。
-	stopMu    sync.Mutex
-	stopServe context.CancelFunc
+	// stopMu 与 stopServe：发起恢复之后让 serve 优雅停止（serve 开始时设）。execPath：自升级或回退时，停止之后要 exec 的二进制。
+	stopMu      sync.Mutex
+	stopServe   context.CancelFunc
+	stopPending bool  // serve 还没开始时就要求停止：serve 一开始就停
+	stopErr     error // failStop 给的原因：serve 停下之后以它退出
+	execPath    string
+}
+
+// failStop 让 serve 优雅停止，并在停下之后以 err 退出（非 0）。
+func (a *app) failStop(err error) {
+	a.stopMu.Lock()
+	a.stopErr = err
+	a.stopMu.Unlock()
+	a.requestStop()
+}
+
+// stopError 是 failStop 给的原因；没有时为 nil。
+func (a *app) stopError() error {
+	a.stopMu.Lock()
+	defer a.stopMu.Unlock()
+	return a.stopErr
+}
+
+// requestExec 让 serve 优雅停止，然后 exec path 上的二进制（自升级与升级回退，master-self-update）。
+func (a *app) requestExec(path string) {
+	a.stopMu.Lock()
+	a.execPath = path
+	a.stopMu.Unlock()
+	a.requestStop()
+}
+
+// pendingExec 是 requestExec 记下的路径；没有时为空。
+func (a *app) pendingExec() string {
+	a.stopMu.Lock()
+	defer a.stopMu.Unlock()
+	return a.execPath
 }
 
 // requestStop 让正在跑的 serve 优雅停止：已经在处理的请求（含发起恢复的那一个）照常把回应发完。
@@ -97,7 +134,9 @@ func (a *app) requestStop() {
 	defer a.stopMu.Unlock()
 	if a.stopServe != nil {
 		a.stopServe()
+		return
 	}
+	a.stopPending = true
 }
 
 // newApp 装配各层。bdb 已打开且已迁移；数据目录已存在；cfg 是 serve 的配置（这里用自救开关与允许跨域的来源）。
@@ -132,8 +171,15 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		return nil, err
 	}
 	// 长任务：上次主控停止时还没结束的先标为失败（master-jobs）。参数摘要用横切层 audit 的同一套打码。
+	// 升级标记里的那个 job 不动：它由 exec 之后的收尾写结局（master-self-update）。
 	jobsSvc := jobs.New(corejobs.New(bdb, st), table, mwaudit.Digest, logger)
-	if err := jobsSvc.MarkInterrupted(context.Background()); err != nil {
+	var handedOff []string
+	if m, err := selfupdate.ReadMarker(dataDir); err != nil {
+		return nil, err
+	} else if m != nil {
+		handedOff = append(handedOff, m.JobID)
+	}
+	if err := jobsSvc.MarkInterrupted(context.Background(), handedOff...); err != nil {
 		return nil, err
 	}
 	// 整库备份与恢复（master-backup）：PostgreSQL 的 pg_dump / psql 用数据目录里的数据库配置连库。
@@ -165,6 +211,28 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 			return jobsSvc.Start(ctx, inv, run, done)
 		},
 		RequestStop: func() { a.requestStop() },
+	})
+	// 主控自升级（master-self-update）：共用备份的锁与写入暂停；替换之后让 serve 优雅停止再 exec 新二进制。
+	updates := svcupdate.New(svcupdate.Deps{DataDir: dataDir, Version: buildinfo.Version, Settings: settingsRepo,
+		Sources: selfupdate.DefaultSources(), Verify: release.VerifyFile, Root: "/", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: func() (string, error) {
+			p, err := os.Executable()
+			if err != nil {
+				return "", err
+			}
+			return filepath.EvalSymlinks(p)
+		},
+		Lock: backups.Begin, Unlock: backups.End,
+		CreateBackup: func(ctx context.Context) (string, error) {
+			info, err := backups.CreateBeforeUpgrade(ctx)
+			return info.Name, err
+		},
+		Gate: writeGate,
+		StartJob: func(ctx context.Context, inv *command.Invocation, run func(context.Context) (any, error), done func()) (any, error) {
+			return jobsSvc.Start(ctx, inv, run, done)
+		},
+		RequestExec: func(path string) { a.requestExec(path) },
+		Logger:      logger,
 	})
 	identity.SetSetupGuard(backups.SetupGuard)
 	sched := scheduler.New(scheduler.Tasks(scheduler.Deps{DB: bdb, Auth: identity, Audit: audits, Security: guard, Schedule: schedules,
@@ -205,12 +273,15 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	for name, h := range databases.Bindings() {
 		bindings[name] = h
 	}
+	for name, h := range updates.Bindings() {
+		bindings[name] = h
+	}
 	if err := table.CheckBindings(bindings); err != nil {
 		return nil, v1.Wrap(v1.CodeInternal, "命令表与处理函数的绑定不一致", err)
 	}
 	// 执行链：留痕在最外层，权限在里面，最里面按绑定分发；身份在 HTTP 层由 authn 放进 ctx。
 	// 最外层是迁移期间的拦截（被拒的不写审计），再里面是留痕、权限、按绑定分发。
-	runner := gatedRunner(writeGate, mwaudit.WrapGated(audits, table, logger, writeGate, authz.Wrap(table, identity.Verifier(), command.Dispatch(bindings))))
+	runner := gatedRunner(writeGate, table, mwaudit.WrapGated(audits, table, logger, writeGate, authz.Wrap(table, identity.Verifier(), command.Dispatch(bindings))))
 
 	// CLI 的选项在主控进程里也要一份：MCP 的 satchel_run 用它解析命令数组、用进程内的执行链执行。
 	opts := cli.DefaultOptions()
@@ -282,12 +353,8 @@ func hiddenPath(w http.ResponseWriter, r *http.Request) {
 // 连得上说明另一个主控还在跑，拒绝启动而不是把它的 socket 删掉；连不上才是残留文件，删掉重建。
 func (a *app) listen(listenAddr string) (tcp, unix net.Listener, err error) {
 	sock := filepath.Join(a.dataDir, db.SocketFile)
-	if _, statErr := os.Stat(sock); statErr == nil {
-		if conn, dialErr := net.DialTimeout("unix", sock, time.Second); dialErr == nil {
-			conn.Close()
-			return nil, nil, v1.Newf(v1.CodeConflict, "数据目录 %s 已有一个主控在运行（%s 有进程在监听）", a.dataDir, sock).
-				WithNext("先停掉那个主控，或给这个实例另指定数据目录")
-		}
+	if err := ensureNotRunning(a.dataDir); err != nil {
+		return nil, nil, err
 	}
 	if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, nil, v1.Wrap(v1.CodeInternal, "清理残留的 socket 文件 "+sock+" 失败", err)
@@ -308,6 +375,20 @@ func (a *app) listen(listenAddr string) (tcp, unix net.Listener, err error) {
 	return tcp, unix, nil
 }
 
+// ensureNotRunning：数据目录的 socket 文件在、而且连得上，说明另一个主控还在跑，返回 conflict。
+func ensureNotRunning(dataDir string) error {
+	sock := filepath.Join(dataDir, db.SocketFile)
+	if _, err := os.Stat(sock); err != nil {
+		return nil
+	}
+	if conn, err := net.DialTimeout("unix", sock, time.Second); err == nil {
+		conn.Close()
+		return v1.Newf(v1.CodeConflict, "数据目录 %s 已有一个主控在运行（%s 有进程在监听）", dataDir, sock).
+			WithNext("先停掉那个主控，或给这个实例另指定数据目录")
+	}
+	return nil
+}
+
 // serve 在两个监听上跑同一套处理器、开始内置任务，直到 ctx 取消；然后优雅停止（HTTP 与内置任务同时停，各自最多等
 // shutdownTimeout）、补写没写进库的任务记录、关库、删 socket。
 func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
@@ -316,6 +397,9 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 	defer cancelServe()
 	a.stopMu.Lock()
 	a.stopServe = cancelServe
+	if a.stopPending {
+		cancelServe()
+	}
 	a.stopMu.Unlock()
 	srv := &http.Server{
 		Handler:           a.handler,

@@ -18,6 +18,7 @@ import (
 	"github.com/satchel/satchel/internal/base/db/dbtest"
 	"github.com/satchel/satchel/internal/base/model"
 	"github.com/satchel/satchel/internal/base/schema"
+	"github.com/satchel/satchel/internal/base/selfupdate"
 	"github.com/satchel/satchel/internal/base/store"
 	"github.com/satchel/satchel/internal/command"
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
@@ -386,5 +387,39 @@ func TestSharedLockWithMigration(t *testing.T) {
 	f.s.End()
 	if _, err := f.call(t, admin(), "backup create", nil, nil); err != nil {
 		t.Fatalf("放开后应当照常：%v", err)
+	}
+}
+
+// master-backup「升级标记点名的那份不删」；升级标记在时，备份、上传、恢复与 backup_local 都不做（master-self-update「应用升级的前提」）。
+func TestUpgradeMarker(t *testing.T) {
+	f := newFixture(t, sqliteDB(t))
+	if err := f.s.Begin("升级"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := f.s.CreateBeforeUpgrade(context.Background())
+	f.s.End()
+	if err != nil || !strings.HasPrefix(info.Name, archive.PrefixBeforeUpgrade) {
+		t.Fatalf("升级前备份：%+v %v", info, err)
+	}
+	raw := mustRead(t, filepath.Join(archive.Dir(f.dataDir), info.Name))
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(filepath.Join(archive.Dir(f.dataDir), info.Name), old, old)
+	for i := 0; i < archive.Keep; i++ {
+		os.WriteFile(filepath.Join(archive.Dir(f.dataDir), "satchel-backup-new"+string(rune('a'+i))+".zip"), raw, 0o600)
+	}
+	if err := selfupdate.WriteMarker(f.dataDir, &selfupdate.Marker{JobID: "job-1", FromVersion: "0.1.0", ToVersion: "0.1.1", Backup: info.Name, Phase: selfupdate.PhaseSwitching}); err != nil {
+		t.Fatal(err)
+	}
+	f.s.prune("satchel-backup-newa.zip")
+	if _, err := os.Stat(filepath.Join(archive.Dir(f.dataDir), info.Name)); err != nil {
+		t.Fatal("升级标记里点名的备份不应当被清理掉")
+	}
+	for _, name := range []string{"backup create", "backup upload", "backup restore"} {
+		if _, err := f.call(t, admin(), name, []string{"x.zip"}, strings.NewReader("x")); code(err) != v1.CodeConflict || !strings.Contains(v1.AsError(err).Reason, "升级") {
+			t.Errorf("%s 应当 conflict 并说明在升级：%v", name, err)
+		}
+	}
+	if _, skipped, _ := f.s.TryCreateLocal(context.Background()); !skipped {
+		t.Error("backup_local 应当跳过")
 	}
 }

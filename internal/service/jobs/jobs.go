@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -132,27 +133,15 @@ func (s *Service) execute(ctx context.Context, job *core.Job, run func(context.C
 		return
 	}
 	result, runErr := safeRun(ctx, run)
+	if errors.Is(runErr, core.ErrHandedOff) {
+		// 结局由别处写（自升级：exec 之后的进程收尾）；进度留着，exec 之前还能看到 restarting。
+		return
+	}
 	// 先删进度再写结局：看到 job 结束的人就不会再看到进度。
 	s.mu.Lock()
 	delete(s.progress, job.JobID)
 	s.mu.Unlock()
-	status, exit := core.StatusDone, int64(0)
-	var raw []byte
-	var err error
-	if runErr != nil {
-		status, exit = core.StatusFailed, 1
-		raw, err = json.Marshal(v1.AsError(runErr))
-	} else {
-		raw, err = json.Marshal(result)
-	}
-	if err != nil {
-		status, exit = core.StatusFailed, 1
-		raw, _ = json.Marshal(v1.Wrap(v1.CodeInternal, "编码长任务的结果失败", err))
-	}
-	output, truncated := string(raw), false
-	if len(output) > OutputLimit {
-		output, truncated = output[:OutputLimit], true
-	}
+	status, exit, output, truncated := encode(result, runErr)
 	// 结局先放进内存，job get 立刻看得到；写进库之后再拿掉。写不进库（例如在线迁移成功后一直拿着 SQLite 的写锁，
 	// master-db-migration）时，跟着这个 job 的 CLI 与 MCP 仍能看到结局。
 	now := s.now()
@@ -168,6 +157,46 @@ func (s *Service) execute(ctx context.Context, job *core.Job, run func(context.C
 	s.mu.Lock()
 	delete(s.final, job.JobID)
 	s.mu.Unlock()
+}
+
+// encode 把工作的结果或错误编成 job 的结局：成功是 done、退出码 0、结果对象的 JSON；失败是 failed、退出码 1、四字段错误的 JSON；
+// 超过 OutputLimit 截断。
+func encode(result any, runErr error) (status string, exit int64, output string, truncated bool) {
+	status, exit = core.StatusDone, 0
+	var raw []byte
+	var err error
+	if runErr != nil {
+		status, exit = core.StatusFailed, 1
+		raw, err = json.Marshal(v1.AsError(runErr))
+	} else {
+		raw, err = json.Marshal(result)
+	}
+	if err != nil {
+		status, exit = core.StatusFailed, 1
+		raw, _ = json.Marshal(v1.Wrap(v1.CodeInternal, "编码长任务的结果失败", err))
+	}
+	output = string(raw)
+	if len(output) > OutputLimit {
+		output, truncated = output[:OutputLimit], true
+	}
+	return status, exit, output, truncated
+}
+
+// Settle 写一个由别处收尾的 job 的结局（工作返回了 ErrHandedOff 的那种：自升级在健康检查通过或回退之后，master-self-update），
+// 编法与 Start 跑完时相同。只改还是 running 的，以及 also 里列出的状态（自升级：旧进程已经写了 failed、新版本随后健康检查通过，
+// 按升级标记改写成 done）；别的状态是 conflict。
+func (s *Service) Settle(ctx context.Context, jobID string, result any, runErr error, also ...string) error {
+	j, err := s.repo.Get(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	status, exit, output, truncated := encode(result, runErr)
+	for _, from := range append([]string{core.StatusRunning}, also...) {
+		if j.Status == from {
+			return s.repo.Finish(ctx, j.ID, from, status, exit, output, truncated, s.now())
+		}
+	}
+	return v1.Newf(v1.CodeConflict, "长任务 %s 已经是 %s，不再改写", jobID, j.Status)
 }
 
 // safeRun 跑一次；panic 记成 internal 错误并写一条带调用栈的 error 日志。
@@ -196,10 +225,10 @@ func (s *Service) Stop(ctx context.Context) {
 	}
 }
 
-// MarkInterrupted 把上次主控停止时还没结束的 job 标为 failed（serve 开始监听之前调）。
-func (s *Service) MarkInterrupted(ctx context.Context) error {
+// MarkInterrupted 把上次主控停止时还没结束的 job 标为 failed（serve 开始监听之前调）；skip 里的 job_id 不动（升级标记里的那个）。
+func (s *Service) MarkInterrupted(ctx context.Context, skip ...string) error {
 	raw, _ := json.Marshal(v1.New(v1.CodeInternal, "主控停止时这个长任务还在运行，结果没有写下").WithNext("重新发起这个命令"))
-	n, err := s.repo.MarkInterrupted(ctx, string(raw), s.now())
+	n, err := s.repo.MarkInterrupted(ctx, string(raw), s.now(), skip...)
 	if n > 0 {
 		s.logger.Warn("上次主控停止时有长任务没结束，已标为 failed", "count", n)
 	}

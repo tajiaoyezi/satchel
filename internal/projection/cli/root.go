@@ -46,6 +46,8 @@ type Options struct {
 	// 一直等；MCP 每半秒一次、最多 60 秒）。
 	JobPoll    time.Duration
 	JobMaxWait time.Duration
+	// JobUnreachable 是跟长任务时连不上主控最多接着查多久（主控在重启，如自升级；master-jobs）；0 表示 2 分钟。
+	JobUnreachable time.Duration
 }
 
 // ErrNoTerminal 表示 stdin 不是终端：要从终端读的值拿不到，命令直接拒绝、不等待。

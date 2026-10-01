@@ -344,7 +344,7 @@ func TestProbeWhileSuspended(t *testing.T) {
 		ctx := context.Background()
 		s, _ := newService(t, bdb)
 		gate := &db.WriteGate{}
-		gate.Suspend()
+		gate.Suspend("测试", "")
 		s.SetWriteGate(gate)
 		for i := 0; i < DefaultConfig().MaxFailures; i++ {
 			s.RecordProbe(ctx, "198.51.100.7", "/api/v1/whoami")
@@ -358,6 +358,26 @@ func TestProbeWhileSuspended(t *testing.T) {
 		}
 		if n, _ := repo.CountActiveBans(ctx, time.Now()); n != 0 {
 			t.Fatalf("不应当写封禁：%d", n)
+		}
+	})
+}
+
+// 审查：写入暂停之前就已进门的命令（db.Entered），安全事件照常写库；没进门的只记日志。
+func TestEventWhileSuspendedEntered(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		s, _ := newService(t, bdb)
+		gate := &db.WriteGate{}
+		gate.Suspend("测试", "")
+		s.SetWriteGate(gate)
+		repo := core.New(bdb)
+		s.record(ctx, core.Event{At: time.Now(), IP: "198.51.100.8", Kind: core.KindProbe})
+		if n, _ := repo.CountEvents(ctx, core.EventFilter{}); n != 0 {
+			t.Fatalf("没进门的不应当写：%d", n)
+		}
+		s.record(db.WithEntered(ctx), core.Event{At: time.Now(), IP: "198.51.100.8", Kind: core.KindProbe})
+		if n, _ := repo.CountEvents(ctx, core.EventFilter{}); n != 1 {
+			t.Fatalf("已进门的应当写：%d", n)
 		}
 	})
 }

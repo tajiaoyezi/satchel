@@ -20,6 +20,7 @@ import (
 
 	archive "github.com/satchel/satchel/internal/base/backup"
 	"github.com/satchel/satchel/internal/base/db"
+	"github.com/satchel/satchel/internal/base/selfupdate"
 	"github.com/satchel/satchel/internal/command"
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
@@ -93,6 +94,11 @@ func (s *Service) begin(what string) error {
 	} else if m != nil {
 		return v1.New(v1.CodeConflict, "已经发起了一次恢复，主控正要重启去执行").WithNext("等主控重启完成")
 	}
+	if m, err := selfupdate.ReadMarker(s.d.DataDir); err != nil {
+		return err
+	} else if m != nil {
+		return v1.Newf(v1.CodeConflict, "主控正在从 %s 升级到 %s，还没收尾", m.FromVersion, m.ToVersion).WithNext("用 satchel job get " + m.JobID + " 看升级的结局")
+	}
 	s.busy = what
 	return nil
 }
@@ -103,8 +109,9 @@ func (s *Service) end() {
 	s.mu.Unlock()
 }
 
-// Begin 与 End 把「同一时刻只有一次备份、上传、恢复或迁移」交给在线迁移共用（master-db-migration「迁移的前提」）：
-// 业务层的模块之间不互相引用，由装配根把这两个方法注入给 service/database。what 写进冲突时的 reason。
+// Begin 与 End 把「同一时刻只有一次备份、上传、恢复、迁移或升级」交给在线迁移与自升级共用（master-db-migration「迁移的前提」、
+// master-self-update「应用升级的前提」）：业务层的模块之间不互相引用，由装配根把这两个方法注入给 service/database 与 service/update。
+// what 写进冲突时的 reason。
 func (s *Service) Begin(what string) error { return s.begin(what) }
 
 // End 放开 Begin 占住的锁。
@@ -131,13 +138,27 @@ func (s *Service) CreateLocal(ctx context.Context) (archive.Info, error) {
 	return info, nil
 }
 
+// CreateBeforeUpgrade 生成一份自升级前的备份 before-upgrade-<时间>.zip 并按保留份数清理（master-self-update「应用升级的步骤」）。
+// 调用方已经用 Begin 占住了锁。
+func (s *Service) CreateBeforeUpgrade(ctx context.Context) (archive.Info, error) {
+	info, err := archive.Create(ctx, s.source(), archive.PrefixBeforeUpgrade)
+	if err != nil {
+		return info, err
+	}
+	s.prune(info.Name)
+	return info, nil
+}
+
 // createJob 是 backup create 这个长任务的工作。
 func (s *Service) createJob(ctx context.Context) (any, error) { return s.CreateLocal(ctx) }
 
-// prune 按保留份数清理，保护刚放进去的那份，以及待恢复标记里点名的那份（master-backup「本机备份目录与保留」）。
+// prune 按保留份数清理，保护刚放进去的那份，以及待恢复标记、升级标记里点名的那份（master-backup「本机备份目录与保留」）。
 func (s *Service) prune(keep string) {
 	protect := []string{keep}
 	if m, err := archive.ReadMarker(s.d.DataDir); err == nil && m != nil {
+		protect = append(protect, m.Backup)
+	}
+	if m, err := selfupdate.ReadMarker(s.d.DataDir); err == nil && m != nil {
 		protect = append(protect, m.Backup)
 	}
 	if err := archive.Prune(s.d.DataDir, archive.Keep, protect...); err != nil {

@@ -28,6 +28,8 @@ const (
 	SourceManual = "manual"
 	SourceSetup  = "setup"
 	SourceAuto   = "auto"
+	// SourceUpgradeRollback 是自升级失败回退时写的（master-self-update「失败回退」）。
+	SourceUpgradeRollback = "upgrade_rollback"
 
 	PhasePending  = "pending"
 	PhaseRestored = "restored"

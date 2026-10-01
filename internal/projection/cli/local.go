@@ -13,6 +13,7 @@ import (
 	"github.com/satchel/satchel/internal/base/buildinfo"
 	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/schema"
+	"github.com/satchel/satchel/internal/base/selfupdate"
 	"github.com/satchel/satchel/internal/command"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 	"github.com/satchel/satchel/pkg/release"
@@ -92,12 +93,29 @@ func dbMigrate(ctx context.Context, _ *command.Invocation) (any, error) {
 	defer bdb.Close()
 	applied, err := db.Migrate(ctx, bdb) // 迁移完自带结构比对，不一致时返回 schema_mismatch
 	if err != nil {
-		return nil, err
+		return nil, upgradeAwareMismatch(DataDir(ctx), err)
 	}
 	if applied == nil {
 		applied = []string{}
 	}
 	return migrateOutput{Applied: applied}, nil
+}
+
+// upgradeAwareMismatch：数据目录里有升级标记时，结构不一致多半是新版本已经迁移过库、而这里跑的是旧二进制（master-self-update）。
+// 这时原来的「删掉库重新迁移」绝不能照做，换成升级的提示。
+func upgradeAwareMismatch(dataDir string, err error) error {
+	e := v1.AsError(err)
+	if e.Code != v1.CodeSchemaMismatch {
+		return err
+	}
+	m, rerr := selfupdate.ReadMarker(dataDir)
+	if rerr != nil || m == nil {
+		return err
+	}
+	out := *e
+	out.Next = fmt.Sprintf("数据目录里有升级标记（%s → %s，阶段 %s）：库多半已被新版本迁移过，不要删库；按 README「升级主控与更新 CDN」一节处理（升级前的备份是 backups/%s）",
+		m.FromVersion, m.ToVersion, m.Phase, m.Backup)
+	return &out
 }
 
 func renderMigrate(w io.Writer, result any) error {

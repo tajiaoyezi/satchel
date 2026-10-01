@@ -20,11 +20,12 @@ const (
 	EntryPostgres = "database/postgres.sql"
 )
 
-// 备份文件名的前缀：本机生成的、上传来的、恢复前自动生成的。
+// 备份文件名的前缀：本机生成的、上传来的、恢复前自动生成的、自升级前生成的。
 const (
 	PrefixBackup        = "satchel-backup-"
 	PrefixUploaded      = "uploaded-"
 	PrefixBeforeRestore = "before-restore-"
+	PrefixBeforeUpgrade = "before-upgrade-"
 )
 
 // Keep 是 backups/ 里最多留的 .zip 份数。

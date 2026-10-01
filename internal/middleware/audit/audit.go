@@ -54,8 +54,10 @@ func WrapGated(rec Recorder, t *command.Table, logger *slog.Logger, gate *db.Wri
 		if err != nil {
 			entry.Result = string(v1.AsError(err).Code)
 		}
-		if gate.Suspended() {
-			logger.Info("数据库迁移期间审计只记日志",
+		// 写入暂停期间，没登记进门的命令只记日志：放行的 job get / list，以及开关打开之前开始、之后才结束的 read 命令（read 不登记，
+		// 迁移与升级不等它们）。开关打开之前就已登记进门的命令（db.Entered），迁移与升级都等它们走完，它们的审计照常写库。
+		if gate.Suspended() && !db.Entered(ctx) {
+			logger.Info("写入暂停期间（迁移数据库或升级主控）审计只记日志",
 				"at", entry.At, "actor", entry.Actor, "actor_kind", entry.ActorKind, "token_id", derefID(entry.TokenID),
 				"command", entry.Command, "args_digest", entry.ArgsDigest, "result", entry.Result)
 			return result, err

@@ -10,6 +10,7 @@ import (
 
 	"github.com/uptrace/bun"
 
+	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/db/dbtest"
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/base/store"
@@ -113,4 +114,31 @@ func TestWriteFailureKeepsResult(t *testing.T) {
 			t.Fatalf("应当有一条 error 级别、含 whoami 的日志：\n%s", logs.String())
 		}
 	})
+}
+
+// 审查：写入暂停期间，开关打开之前就已进门的命令（db.Entered）审计照常写库；没登记进门的（放行的 job get / list）只记日志。
+func TestGatedEnteredStillRecords(t *testing.T) {
+	gate := &db.WriteGate{}
+	// 命令跑到一半时开关被打开（迁移或升级开始），跑完才轮到写审计。
+	suspendMidway := command.RunnerFunc(func(context.Context, *command.Invocation) (any, error) {
+		gate.Suspend("正在升级", "")
+		return map[string]any{"ok": true}, nil
+	})
+	var logs bytes.Buffer
+	rec := &memRecorder{}
+	r := WrapGated(rec, table(t), slog.New(slog.NewTextHandler(&logs, nil)), gate, suspendMidway)
+	admin := v1.WithIdentity(context.Background(), v1.LocalAdmin("root"))
+	if _, err := r.Run(db.WithEntered(admin), &command.Invocation{Path: []string{"demo", "login"}, Flags: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.entries) != 1 {
+		t.Fatalf("已进门的命令审计应当写库：%d", len(rec.entries))
+	}
+	gate.Resume()
+	if _, err := r.Run(admin, &command.Invocation{Path: []string{"whoami"}, Flags: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.entries) != 1 || !strings.Contains(logs.String(), "审计只记日志") {
+		t.Fatalf("没登记进门的只记日志：%d %s", len(rec.entries), logs.String())
+	}
 }

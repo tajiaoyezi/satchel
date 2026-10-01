@@ -40,6 +40,7 @@
 | `settings set` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/set` |
 | `settings show` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/settings/show` |
 | `settings snapshots list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/settings/snapshots` |
+| `settings update-cdn set` | master_settings | operate | master | object (enabled) | 否 | 否 | 否 | `POST /api/v1/settings/update-cdn/set/{enabled}` |
 | `setup init` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/init` |
 | `setup restore` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/restore` |
 | `setup status` | read | read | — | — | 否 | 是 | 否 | `GET /api/v1/setup/status` |
@@ -47,6 +48,8 @@
 | `token list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/token` |
 | `token revoke` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/revoke/{id}` |
 | `token update` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/update/{id}` |
+| `update apply` | action | operate | master | object (version) | 否 | 否 | 否 | `POST /api/v1/update/apply/{version}` |
+| `update check` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/update/check` |
 | `whoami` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/whoami` |
 
 ## 执行形状
@@ -60,6 +63,7 @@
 | `backup upload` | 上传 |
 | `database migrate` | 长任务 |
 | `setup restore` | 上传 |
+| `update apply` | 长任务 |
 
 ## 本地命令（不经主控，只在 CLI 里）
 

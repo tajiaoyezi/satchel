@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -181,5 +182,47 @@ func TestClientUploadDownload(t *testing.T) {
 	rc.Close()
 	if string(b) != "zip-bytes" {
 		t.Fatalf("下载的字节：%q", b)
+	}
+}
+
+// flakyRunner 前 down 次 job get 连不上主控（像主控在重启），之后是 done；refuse 为真时改成主控明确回应的 unavailable。
+type flakyRunner struct {
+	down, gets int
+	refuse     bool
+}
+
+func (r *flakyRunner) Run(_ context.Context, inv *command.Invocation) (any, error) {
+	if inv.Name() == "backup create" {
+		return map[string]any{"job_id": "job-1", "status": "queued"}, nil
+	}
+	r.gets++
+	if r.gets <= r.down {
+		if r.refuse {
+			return nil, v1.New(v1.CodeUnavailable, "正在升级")
+		}
+		return nil, v1.Wrap(v1.CodeUnavailable, "连不上主控", unreachable{errors.New("connection refused")})
+	}
+	return map[string]any{"job_id": "job-1", "status": "done", "output": `{}`}, nil
+}
+
+// master-jobs「主控重启期间接着等」：连不上时接着查、之后拿到 done；一直连不上时到点以 unavailable 结束；
+// 主控明确回应的 unavailable 照常失败。
+func TestFollowJobThroughRestart(t *testing.T) {
+	r := &flakyRunner{down: 3}
+	out, errOut, code := runShape(shapeOptions(t, r, 0), "backup", "create", "--json")
+	if code != 0 || !strings.Contains(out, "done") || r.gets != 4 {
+		t.Fatalf("连不上时应当接着查到 done：code=%d gets=%d out=%s err=%s", code, r.gets, out, errOut)
+	}
+	r = &flakyRunner{down: 1 << 30}
+	opts := shapeOptions(t, r, 0)
+	opts.JobUnreachable = 20 * time.Millisecond
+	_, errOut, code = runShape(opts, "backup", "create", "--json")
+	if code == 0 || !strings.Contains(errOut, "unavailable") || !strings.Contains(errOut, "job get job-1") {
+		t.Fatalf("一直连不上应当到点结束并提示 job get：code=%d err=%s", code, errOut)
+	}
+	r = &flakyRunner{down: 1, refuse: true}
+	_, errOut, code = runShape(shapeOptions(t, r, 0), "backup", "create", "--json")
+	if code == 0 || r.gets != 1 || !strings.Contains(errOut, "正在升级") {
+		t.Fatalf("主控明确的 unavailable 不重试：code=%d gets=%d err=%s", code, r.gets, errOut)
 	}
 }

@@ -251,3 +251,25 @@ func TestDriverReason(t *testing.T) {
 		t.Fatalf("应当去掉密码、留下原因：%s", got)
 	}
 }
+
+// 审查：拦截打开之前已经进门、还没走完的写命令，迁移先等它们；等不到就失败、放开拦截，目标库不动。
+func TestMigrateWaitsInflight(t *testing.T) {
+	prev := drainTimeout
+	drainTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { drainTimeout = prev })
+	f := newFixture(t)
+	if !f.gate.Enter() {
+		t.Fatal("开关没开时应当能进门")
+	}
+	j, err := f.migrate(t)
+	f.gate.Leave()
+	if err != nil || j.Status != corejobs.StatusFailed || !strings.Contains(*j.Output, "没有走完") {
+		t.Fatalf("应当因为进门的请求没走完而失败：%+v %v", j, err)
+	}
+	if info, _ := db.PGInfo(context.Background(), f.target); len(info.Tables) != 0 {
+		t.Fatalf("目标库不应当被动过：%v", info.Tables)
+	}
+	if locked, suspended, _ := f.settled(); locked || suspended {
+		t.Fatalf("锁与拦截应当放开：locked=%v gate=%v", locked, suspended)
+	}
+}

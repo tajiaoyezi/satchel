@@ -25,6 +25,8 @@ var GroupSummaries = map[string]string{
 	"job":                    "长任务：受理后在主控里接着跑的命令，按 job id 查结果（只对管理员开放）",
 	"backup":                 "整库备份与恢复（只对管理员开放；下载与恢复要当场验证）",
 	"database":               "主控用的数据库：查看、试连 PostgreSQL、从 SQLite 在线迁移（只对管理员开放；迁移要当场验证）",
+	"update":                 "主控自升级：检查更新、升到所选渠道的最新版（只对管理员开放；升级属主控自身类危险操作）",
+	"settings update-cdn":    "更新 CDN 的开关（主控自身类危险操作）",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -43,7 +45,26 @@ func catalogCommands() []*Command {
 	all = append(all, opsCommands()...)
 	all = append(all, backupCommands()...)
 	all = append(all, databaseCommands()...)
+	all = append(all, updateCommands()...)
 	return all
+}
+
+// updateCommands 是 m1-09 的主控自升级与更新 CDN 命令（master-self-update）。升级与改更新 CDN 开关是第 05 章危险操作的
+// 「主控自身类」：令牌要单独开这一类，每次都要带 confirm（升级填目标版本号，开关填要设的值）。
+func updateCommands() []*Command {
+	channel := Flag{Name: "channel", Type: TypeString, Default: "stable", Description: "更新渠道：stable 或 prerelease"}
+	return []*Command{
+		{Path: []string{"update", "check"}, Summary: "检查所选渠道的最新版本（先问更新 CDN，再问 GitHub），以及这台主控能不能自升级", Class: ClassRead,
+			Flags: []Flag{channel}},
+		{Path: []string{"update", "apply"}, Summary: "把主控升到所选渠道的最新版（长任务；验签、升级前备份、替换后原地重启，失败时旧二进制与备份一起回）",
+			Class: ClassAction, Shape: ShapeJob, Danger: v1.DangerMaster, Confirm: &Confirm{Kind: ConfirmObject, Arg: "version"},
+			Args:  []Arg{{Name: "version", Description: "目标版本号，必须等于 update check 看到的最新版本，如 0.1.1"}},
+			Flags: []Flag{channel}},
+		{Path: []string{"settings", "update-cdn", "set"}, Summary: "打开或关掉更新 CDN（关掉后检查更新与下载直接走 GitHub）", Class: ClassMasterSettings,
+			Danger: v1.DangerMaster, Confirm: &Confirm{Kind: ConfirmObject, Arg: "enabled"},
+			Args:  []Arg{{Name: "enabled", Description: "true 或 false"}},
+			Flags: []Flag{{Name: "resource-version", Type: TypeInt, Description: "当前的 metadata.resourceVersion（settings show 里的值）；不匹配整单拒绝"}}},
+	}
 }
 
 // databaseCommands 是 m1-08 的数据库设置与在线迁移命令（master-db-migration）。迁移是第 05 章七组的「数据库切换与在线迁移」：

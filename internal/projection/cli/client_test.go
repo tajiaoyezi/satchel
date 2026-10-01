@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,7 +147,8 @@ func TestClientPassesErrorsThrough(t *testing.T) {
 	if v1.ExitCodeOf(err) != v1.ExitConfirmRequired {
 		t.Fatal("退出码应当是 7")
 	}
-	// 非 JSON 的错误响应是 internal，不冒充四字段。
+	// 非 JSON 的错误响应是 internal，不冒充四字段（经 --server 连时代理的网关错误 502 / 503 / 504、520–524 另算，
+	// 见 TestClientProxyGatewayErrors；socket 前面没有代理，502 也是 internal）。
 	plain := fakeServer(t, func(w http.ResponseWriter, c captured) { http.Error(w, "boom", 502) })
 	_, err = NewClient(testTable(t), Connection{Socket: plain}).Run(context.Background(), &command.Invocation{Path: []string{"whoami"}})
 	if v1.AsError(err).Code != v1.CodeInternal {
@@ -172,6 +175,40 @@ func TestClientUnavailable(t *testing.T) {
 	_, err = NewClient(testTable(t), Connection{Socket: sock}).Run(context.Background(), &command.Invocation{Path: []string{"whoami"}})
 	if e := v1.AsError(err); e.Code != v1.CodeUnavailable || !strings.Contains(e.Reason, "没有进程在监听") {
 		t.Fatalf("连接被拒应当 unavailable 并说明：%+v", e)
+	}
+	// 审查：连不上认得出（跟长任务时接着查），原因的文字还是原始错误那一行。
+	if !errors.Is(err, ErrUnreachable) || strings.Contains(errors.Unwrap(err).Error(), "\n") {
+		t.Fatalf("连不上应当认得出 ErrUnreachable、原因只有一行：%q", errors.Unwrap(err))
+	}
+}
+
+// 审查：主控前面的代理回 502 / 503 / 504 或 Cloudflare 的 520–524（HTML，不是四字段错误）算连不上，可以接着等；别的状态码不是。
+// 提示不说「连不上」，写命令提醒可能已经执行。
+func TestClientProxyGatewayErrors(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, 520, 521, 522, 523, 524,
+		http.StatusInternalServerError, 519, 525} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(status)
+			w.Write([]byte("<html>bad gateway</html>"))
+		}))
+		_, err := NewClient(testTable(t), Connection{Server: srv.URL}).Run(context.Background(), &command.Invocation{Path: []string{"whoami"}})
+		srv.Close()
+		gateway := status != http.StatusInternalServerError && status != 519 && status != 525
+		if errors.Is(err, ErrUnreachable) != gateway {
+			t.Errorf("%d：算不算连不上应当是 %v：%v", status, gateway, err)
+		}
+		if e := v1.AsError(err); gateway && (e.Code != v1.CodeUnavailable || !strings.Contains(e.Reason, "代理返回了") ||
+			strings.Contains(e.Next, "可能已经在主控上执行") || !strings.Contains(e.Next, srv.URL)) {
+			t.Errorf("%d 应当 unavailable、说是代理返回的、保留检查地址的提示；whoami 是 read，不提醒可能已执行：%+v", status, e)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
+	defer srv.Close()
+	_, err := NewClient(testTable(t), Connection{Server: srv.URL}).Run(context.Background(),
+		&command.Invocation{Path: []string{"demo", "remove"}, Args: []string{"alice"}, Confirm: "alice"})
+	if e := v1.AsError(err); !errors.Is(err, ErrUnreachable) || !strings.Contains(e.Next, "可能已经在主控上执行") {
+		t.Fatalf("写命令遇到网关错误应当提醒可能已经执行：%+v", e)
 	}
 }
 

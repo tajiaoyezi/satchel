@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"mime"
@@ -80,6 +81,16 @@ func (c *Client) Run(ctx context.Context, inv *command.Invocation) (any, error) 
 	}
 	var e v1.Error
 	if err := json.Unmarshal(body, &e); err != nil || e.Code == "" {
+		if c.conn.Server != "" && gatewayStatus(resp.StatusCode) {
+			// 主控前面的代理在说后端不在或没按时回应：主控可能正在重启，也可能没在运行、或代理到主控的网络不通。
+			// （socket 连法前面没有代理，不走这里。）
+			next := "稍后重试；一直这样的话：" + c.conn.hint()
+			if cmd.Class != command.ClassRead && cmd.Shape != command.ShapeDownload {
+				next = "这条命令可能已经在主控上执行了，重试之前先查一下结果（长任务用 satchel job list）；" + next
+			}
+			return nil, v1.Wrap(v1.CodeUnavailable, fmt.Sprintf("%s 前面的代理返回了 %d，不是主控的四字段回应：主控可能正在重启、没在运行，或代理没等到它的回应",
+				c.conn.BaseURL(), resp.StatusCode), unreachable{fmt.Errorf("HTTP %d", resp.StatusCode)}).WithNext(next)
+		}
 		return nil, v1.Newf(v1.CodeInternal, "主控返回了 %d，但不是四字段错误", resp.StatusCode)
 	}
 	return nil, &e
@@ -194,5 +205,25 @@ func (c *Client) unavailable(err error) error {
 	case errors.Is(err, context.DeadlineExceeded):
 		reason = "主控没有在限时内响应"
 	}
-	return v1.Wrap(v1.CodeUnavailable, reason, err).WithNext(c.conn.hint())
+	return v1.Wrap(v1.CodeUnavailable, reason, unreachable{err}).WithNext(c.conn.hint())
 }
+
+// ErrUnreachable 标出「连不上主控」这一种 unavailable（errors.Is）：请求没到主控（连接失败），或者主控前面的代理回了网关类状态码
+// （gatewayStatus）而不是主控的四字段错误——与主控明确回应的 unavailable 区分开。跟长任务时遇到它接着查（主控可能在重启，如自升级）。
+var ErrUnreachable = errors.New("连不上主控")
+
+// gatewayStatus 报告状态码是不是代理说「后端不在或没回应」：502、503、504，以及 Cloudflare 回源失败的 520–524。
+func gatewayStatus(code int) bool {
+	switch code {
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return code >= 520 && code <= 524
+}
+
+// unreachable 包着连不上的原始错误：文字就是原始错误（输出的「原因」不多一行），errors.Is 认得出 ErrUnreachable。
+type unreachable struct{ err error }
+
+func (u unreachable) Error() string        { return u.err.Error() }
+func (u unreachable) Unwrap() error        { return u.err }
+func (u unreachable) Is(target error) bool { return target == ErrUnreachable }

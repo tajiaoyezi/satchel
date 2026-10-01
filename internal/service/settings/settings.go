@@ -41,6 +41,7 @@ func (s *Service) Bindings() command.Bindings {
 		"settings rollback":       s.rollback,
 		"settings master-url set": s.masterURLSet,
 		"settings gates set":      s.gatesSet,
+		"settings update-cdn set": s.updateCDNSet,
 	}
 }
 
@@ -72,6 +73,7 @@ func byClass(allowed map[schema.Class]bool) admits {
 var (
 	specOnly  = byClass(map[schema.Class]bool{schema.ClassSpec: true})
 	humanOnly = byClass(map[schema.Class]bool{schema.ClassHuman: true})
+	selfOnly  = byClass(map[schema.Class]bool{schema.ClassMasterSelf: true})
 )
 
 // gateFields 是第 05 章七组「门」这一组的 15 个字段，只有 settings gates set 能写（master-settings「门的设置是人类专属的设置写」）：
@@ -399,6 +401,36 @@ func (s *Service) gatesSet(ctx context.Context, inv *command.Invocation) (any, e
 	}
 	values, _ := inv.Flags["set"].(map[string]any)
 	prepared, err := s.prepare(values, gatesOnly, inv.Name())
+	if err != nil {
+		return nil, err
+	}
+	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected})
+	if err != nil {
+		return nil, err
+	}
+	s.written(st)
+	return s.output(ctx, st)
+}
+
+// updateCDNSet 改更新 CDN 的开关 update_cdn_enabled（master-self-update「更新 CDN 的开关」）：主控自身类（危险类与 confirm 由 authz
+// 在这之前查），只收 true 或 false，比对版本并抬版本、不存快照（主控自身类字段不进快照）。
+func (s *Service) updateCDNSet(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	expected, err := versionArgs(inv)
+	if err != nil {
+		return nil, err
+	}
+	var enabled bool
+	switch inv.Arg(0) {
+	case "true":
+		enabled = true
+	case "false":
+	default:
+		return nil, v1.Newf(v1.CodeBadRequest, "开关只收 true 或 false，得到 %q", inv.Arg(0))
+	}
+	prepared, err := s.prepare(map[string]any{"update_cdn_enabled": enabled}, selfOnly, inv.Name())
 	if err != nil {
 		return nil, err
 	}

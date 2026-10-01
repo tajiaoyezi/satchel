@@ -209,3 +209,39 @@ func TestProgress(t *testing.T) {
 		core.Report(context.Background(), "x") // 别的 ctx 上什么都不做
 	})
 }
+
+// master-self-update：工作返回 ErrHandedOff 时这里不写结局（job 保持 running，done 照样调）；之后由别处 Settle。
+// 启动时把没结束的 job 标为失败，跳过给出的那个（master-jobs「job 的生命周期与存储」）。
+func TestHandedOff(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		s := newService(bdb)
+		defer s.Stop(ctx)
+		released := make(chan struct{})
+		j, err := s.Start(admin(), inv(), func(context.Context) (any, error) { return nil, core.ErrHandedOff }, func() { close(released) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-released
+		other, _ := s.repo.Insert(ctx, "job-00000000000000bb", "backup create", json.RawMessage(`{}`))
+		if err := s.MarkInterrupted(ctx, j.JobID); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := s.repo.Get(ctx, j.JobID); got.Status != core.StatusRunning {
+			t.Fatalf("交出去的 job 应当还是 running：%s", got.Status)
+		}
+		if got, _ := s.repo.Get(ctx, other.JobID); got.Status != core.StatusFailed {
+			t.Fatalf("别的没结束的 job 应当标为失败：%s", got.Status)
+		}
+		if err := s.Settle(ctx, j.JobID, map[string]string{"to_version": "0.1.1"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := s.repo.Get(ctx, j.JobID)
+		if got.Status != core.StatusDone || *got.ExitCode != 0 || !strings.Contains(*got.Output, "0.1.1") {
+			t.Fatalf("Settle 之后应当 done：%+v", got)
+		}
+		if err := s.Settle(ctx, j.JobID, nil, v1.New(v1.CodeInternal, "x")); v1.AsError(err).Code != v1.CodeConflict {
+			t.Fatalf("已经结束的再 Settle 应当 conflict：%v", err)
+		}
+	})
+}

@@ -50,6 +50,10 @@ func (j *Job) Finished() bool {
 // ErrNotFound 表示没有这个 job。
 var ErrNotFound = errors.New("job not found")
 
+// ErrHandedOff 由长任务的工作返回，表示这个 job 的结局由别处写、这里不写（自升级：exec 之后由新进程或回退后的旧进程收尾，
+// master-self-update）。job 行保持 running。
+var ErrHandedOff = errors.New("job handed off")
+
 // Repo 是长任务的仓储。
 type Repo struct {
 	db    *bun.DB
@@ -93,10 +97,15 @@ func (r *Repo) Finish(ctx context.Context, id int64, from, status string, exitCo
 }
 
 // MarkInterrupted 把还是 queued 或 running 的 job 改成 failed（serve 启动时调：它们是上次主控停止时还没结束的），返回改了几个。
-func (r *Repo) MarkInterrupted(ctx context.Context, output string, at time.Time) (int, error) {
+// skip 里的 job_id 不动（升级标记里的那个，由 master-self-update 收尾）。
+func (r *Repo) MarkInterrupted(ctx context.Context, output string, at time.Time, skip ...string) (int, error) {
 	var rows []model.Job
-	if err := r.db.NewSelect().Model(&rows).Column("id", "status").Where("status IN (?)", bun.In([]string{StatusQueued, StatusRunning})).
-		Where("deleted_at IS NULL").Scan(ctx); err != nil {
+	q := r.db.NewSelect().Model(&rows).Column("id", "status").Where("status IN (?)", bun.In([]string{StatusQueued, StatusRunning})).
+		Where("deleted_at IS NULL")
+	if len(skip) > 0 {
+		q = q.Where("job_id NOT IN (?)", bun.In(skip))
+	}
+	if err := q.Scan(ctx); err != nil {
 		return 0, v1.Wrap(v1.CodeDatabase, "读取没结束的长任务失败", err)
 	}
 	finished := utc(at)

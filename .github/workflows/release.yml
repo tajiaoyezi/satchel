@@ -5,6 +5,7 @@ name: Release
 #   sign    挂受保护环境 release-signing（需仓库拥有者批准），用 tools/sign 给每个二进制签 Ed25519 分离签名，签完验回，出 checksums.txt
 #   release 同 tag 已有 Release 即失败（不覆盖），把二进制、.sig、checksums 挂到 GitHub Release，tag 含 - 为 prerelease
 #   docker  签名批准后再推多架构镜像到 ghcr.io/<owner>/satchel，标签 semver / latest / beta
+#   publish-cdn / publish-cdn-index  Release 之后推更新 CDN（R2）：先推二进制与签名，再按渠道串行地换版本索引；仓库变量 UPDATE_CDN_ARMED=1 才跑
 # satchel-web 的拉取与 embed 随 M1 前端骨架加进 build。
 
 on:
@@ -194,3 +195,145 @@ jobs:
             DATE=${{ steps.args.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  publish-cdn:
+    name: update CDN (binaries)
+    # 发版后推更新 CDN（第 09 章「发版时推 R2」，release-pipeline「Publish to the update CDN」）：放在本工作流里而不是单独用
+    # release: published 触发——本工作流用 GITHUB_TOKEN 建的 Release 不会触发别的工作流。仓库变量 UPDATE_CDN_ARMED=1 才跑，
+    # 没设就跳过（CDN 域名与 R2 bucket 准备好之前）。从 Release 下载资产再推，不重新构建：CDN 上与 Release 逐字节相同。
+    # 这个 job 只推这个版本的二进制与签名（各版本的目录互不相干，可以并发）；换渠道索引在下一个 job，按渠道串行。
+    needs: release
+    if: vars.UPDATE_CDN_ARMED == '1'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      AWS_DEFAULT_REGION: auto
+    steps:
+      - name: check R2 secrets
+        run: |
+          missing=""
+          [ -n "$R2_ACCOUNT_ID" ] || missing="$missing R2_ACCOUNT_ID"
+          [ -n "$AWS_ACCESS_KEY_ID" ] || missing="$missing R2_ACCESS_KEY_ID"
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || missing="$missing R2_SECRET_ACCESS_KEY"
+          [ -n "$R2_BUCKET" ] || missing="$missing R2_BUCKET"
+          if [ -n "$missing" ]; then
+            echo "::error::UPDATE_CDN_ARMED=1 但缺 secret：$missing"
+            exit 1
+          fi
+
+      - name: download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir dist
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern 'satchel-*' --dir dist
+          ls -la dist
+
+      - name: push binaries and signatures to R2
+        run: |
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          version="${GITHUB_REF_NAME#v}"
+          for f in dist/satchel-*; do
+            aws s3 cp "$f" "s3://${R2_BUCKET}/satchel/releases/${version}/$(basename "$f")" --endpoint-url "$endpoint" \
+              --content-type application/octet-stream --cache-control "public, max-age=31536000, immutable"
+          done
+          echo "已推到 R2：satchel/releases/${version}"
+
+  publish-cdn-index:
+    name: update CDN (channel index)
+    # 二进制都推完之后才换渠道的版本索引：CDN 上不会出现指向没传完的版本的索引。同一渠道的换索引一个一个来（并发组按渠道分），
+    # 换之前按语义化版本比较，渠道索引上已经是更新的版本（并发发布、或重跑旧发布）时不覆盖。
+    needs: publish-cdn
+    concurrency:
+      group: publish-cdn-index-${{ contains(github.ref_name, '-') && 'prerelease' || 'stable' }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      AWS_DEFAULT_REGION: auto
+    steps:
+      - name: build version.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 用 jq 构造，发布说明里的引号、换行不会破坏 JSON。
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json tagName,body,url,isPrerelease \
+            | jq '{version: .tagName, tag: .tagName, notes: .body, html_url: .url, prerelease: .isPrerelease}' > version.json
+          cat version.json
+
+      - name: update channel index
+        run: |
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          channel=stable
+          case "$GITHUB_REF_NAME" in *-*) channel=prerelease ;; esac
+          index="s3://${R2_BUCKET}/satchel/channels/${channel}/version.json"
+          # 按语义化版本比较：输出 WRITE（覆盖）、SKIP（索引上的更新，不覆盖）、INVALID_NEW（这次的 tag 不是合法版本号）、
+          # BROKEN_CURRENT（索引里的版本号解析不了：覆盖它，修好损坏的索引）。第二个参数是 --missing 时表示还没有索引，直接写。
+          cat > semver_decide.py <<'PY'
+          import re, sys
+          SEMVER = re.compile(r"^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
+          def parse(v):
+              m = SEMVER.match(v or "")
+              if not m:
+                  return None
+              ids = None
+              if m.group(4) is not None:
+                  ids = []
+                  for p in m.group(4).split("."):
+                      if p == "":
+                          return None
+                      ids.append((0, int(p), "") if p.isdigit() else (1, 0, p))
+              return (int(m.group(1)), int(m.group(2)), int(m.group(3))), ids
+          def older(a, b):
+              if a[0] != b[0]:
+                  return a[0] < b[0]
+              if a[1] is None or b[1] is None:
+                  return a[1] is not None and b[1] is None
+              return a[1] < b[1]
+          new = parse(sys.argv[1])
+          missing = sys.argv[2] == "--missing"
+          cur = None if missing else parse(sys.argv[2])
+          if new is None:
+              print("INVALID_NEW")
+          elif missing:
+              print("WRITE")
+          elif cur is None:
+              print("BROKEN_CURRENT")
+          else:
+              print("SKIP" if older(new, cur) else "WRITE")
+          PY
+          if out="$(aws s3 cp "$index" current.json --endpoint-url "$endpoint" 2>&1)"; then
+            current="$(jq -r '.version // ""' current.json 2>/dev/null || true)"
+            decision="$(python3 semver_decide.py "$GITHUB_REF_NAME" "$current")"
+          elif printf '%s' "$out" | grep -qE '\(404\)|NoSuchKey|Not Found|does not exist'; then
+            echo "渠道 ${channel} 还没有索引：第一次发布"
+            current=""
+            decision="$(python3 semver_decide.py "$GITHUB_REF_NAME" --missing)"
+          else
+            # 读不到不等于没有：网络错误、5xx、限流时不覆盖，免得旧版本盖掉新版本。
+            echo "::error::读渠道 ${channel} 的当前索引失败，不覆盖：$out"
+            exit 1
+          fi
+          case "$decision" in
+            SKIP)
+              echo "渠道 ${channel} 的索引已经是 ${current}，比 ${GITHUB_REF_NAME} 新，不覆盖"
+              exit 0 ;;
+            INVALID_NEW)
+              echo "::error::tag ${GITHUB_REF_NAME} 不是合法的语义化版本，不写渠道索引"
+              exit 1 ;;
+            BROKEN_CURRENT)
+              echo "::warning::渠道 ${channel} 的索引里的版本号（${current}）解析不了，覆盖它" ;;
+          esac
+          aws s3 cp version.json "$index" --endpoint-url "$endpoint" \
+            --content-type application/json --cache-control "public, max-age=60"
+          echo "渠道 ${channel} 的索引已换成 ${GITHUB_REF_NAME}"

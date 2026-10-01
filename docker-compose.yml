@@ -6,6 +6,8 @@ services:
     image: ${SATCHEL_IMAGE:-ghcr.io/tajiaoyezi/satchel:latest}
     container_name: satchel
     restart: unless-stopped
+    # docker stop 默认只等 10 秒就 SIGKILL；serve 的优雅停止最多约 15 秒（请求与任务 10 秒，补写记录 5 秒）。
+    stop_grace_period: 25s
     # host 网络：主控要管 80 / 443、多端口入站、agent 反向连接，bridge 模式每加一个端口都要改 compose。
     network_mode: host
     environment:
