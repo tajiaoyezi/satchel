@@ -1,4 +1,4 @@
-// Package web 是投影层的网页：前端产物的 embed 与静态服务（m1-10），以及数据目录 public/ 的对外静态文件（master-serve「无身份入口」）。
+// Package web 是投影层的网页：前端产物的 embed 与静态服务（m1-11），以及数据目录 public/ 的对外静态文件（master-serve「无身份入口」）。
 package web
 
 import (

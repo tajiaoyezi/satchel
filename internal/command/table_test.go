@@ -21,7 +21,7 @@ func TestCatalog(t *testing.T) {
 	want := map[string]Class{
 		"version": ClassLocal, "db migrate": ClassLocal, "db status": ClassLocal, "db unlock": ClassLocal, "__verify": ClassLocal, "serve": ClassLocal,
 		"admin reset-password": ClassLocal, "login": ClassLocal, "logout": ClassLocal, "mcp stdio": ClassLocal, "mcp init": ClassLocal,
-		"whoami": ClassRead, "audit list": ClassRead, "explain": ClassRead, "setup status": ClassRead, "account show": ClassRead,
+		"whoami": ClassRead, "overview": ClassRead, "audit list": ClassRead, "explain": ClassRead, "setup status": ClassRead, "account show": ClassRead,
 		"settings show": ClassRead, "settings snapshots list": ClassRead, "token list": ClassRead, "mcp status": ClassRead,
 		"security events list": ClassRead, "security bans list": ClassRead,
 		"logs list": ClassRead, "logs files list": ClassRead, "schedule list": ClassRead, "schedule runs list": ClassRead,

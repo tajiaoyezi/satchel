@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"strings"
 
 	"github.com/uptrace/bun"
 
@@ -45,6 +46,7 @@ func registerBuiltins(opts *Options) {
 	}
 	opts.Renderers["explain"] = renderExplain
 	opts.Renderers["whoami"] = renderWhoami
+	opts.Renderers["overview"] = renderOverview
 	opts.Local["login"] = loginCommand
 	opts.Renderers["login"] = renderLogin
 	opts.Local["logout"] = logoutCommand
@@ -235,6 +237,31 @@ func printList(w io.Writer, title string, items []string) error {
 		}
 	}
 	return nil
+}
+
+// overviewPartitions 是 overview 文本形式的分区顺序与名称（master-overview）。
+var overviewPartitions = []struct{ key, label string }{
+	{"servers", "服务器"}, {"users", "用户"}, {"alerts", "告警"}, {"tasks", "待办"},
+}
+
+// renderOverview 是 overview 的文本形式：每个分区一行「名称：总数」，有条目时逐条缩进列在下面
+// （条目的单行写法随交付这个分区的那一站定，在那之前按通用写法）。
+func renderOverview(w io.Writer, result any) error {
+	fields, err := toFields(result)
+	if err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, p := range overviewPartitions {
+		part, _ := fields[p.key].(map[string]any)
+		fmt.Fprintf(&b, "%s：%s\n", p.label, formatValue(part["total"]))
+		items, _ := part["items"].([]any)
+		for _, item := range items {
+			fmt.Fprintf(&b, "  %s\n", formatValue(item))
+		}
+	}
+	_, err = io.WriteString(w, b.String())
+	return err
 }
 
 // renderWhoami 是 whoami 的文本形式。

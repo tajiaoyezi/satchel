@@ -25,7 +25,7 @@ const hermesVerify = "hermes mcp test satchel"
 const hermesConfigFile = "config.yaml"
 
 func hermesNotes() []string {
-	return []string{"在 Hermes 会话里执行 /reload-mcp 或重启 Hermes 后生效", "skills 随 m1-10 交付"}
+	return []string{"在 Hermes 会话里执行 /reload-mcp 或重启 Hermes 后生效"}
 }
 
 const hermesAuthorization = "Bearer ${" + EnvToken + "}"

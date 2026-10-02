@@ -534,9 +534,84 @@ const (
 // VerifyFlags 是三个保留 flag 的名字，投影层登记与解码时用同一份。
 var VerifyFlags = []string{VerifyPasswordFlag, VerifyCodeFlag, VerifyUserFlag}
 
-// ClientOnlyFlags 是只属于 CLI 客户端的根 flag（--data-dir 现在就有，--server / --token 随 m1-04 登记）：
-// 主控端（REST、MCP）见到它们一律拒绝——身份只来自连接，数据目录是主控自己的。CLI 投影登记根 flag 时用同一份。
-var ClientOnlyFlags = []string{"server", "token", "data-dir"}
+// RootFlag 是 CLI 根命令上的一个全局 flag（help 由 cobra 给每条命令自带，不在这里）。
+// ClientOnly 表示它只属于 CLI 客户端：主控端（REST、MCP）见到一律拒绝——身份只来自连接，数据目录是主控自己的。
+type RootFlag struct {
+	Name       string
+	Type       FlagType
+	ClientOnly bool
+}
+
+// RootFlags 是 CLI 根命令上的全局 flag，只此一份：CLI 投影按它登记，ClientOnlyFlags 由它推出，skills 的检查按它认根 flag。
+var RootFlags = []RootFlag{
+	{Name: "json", Type: TypeBool},
+	{Name: "server", Type: TypeString, ClientOnly: true},
+	{Name: "token", Type: TypeString, ClientOnly: true},
+	{Name: "data-dir", Type: TypeString, ClientOnly: true},
+}
+
+// ClientOnlyFlags 是只属于 CLI 客户端的根 flag（--data-dir 现在就有，--server / --token 随 m1-04 登记），由 RootFlags 推出：
+// 主控端（REST、MCP）见到它们一律拒绝。
+var ClientOnlyFlags = clientOnlyFlags()
+
+func clientOnlyFlags() []string {
+	var names []string
+	for _, f := range RootFlags {
+		if f.ClientOnly {
+			names = append(names, f.Name)
+		}
+	}
+	return names
+}
+
+// ConnectingLocal 是会连主控的本地命令：只有它们接受显式的 --server / --token（master-cli「本地命令不接受 --server 与 --token」）。
+// 别的本地命令也从根上继承了这两个 flag，执行时一律以 usage 拒绝。
+var ConnectingLocal = []string{"login", "mcp stdio", "mcp init"}
+
+// IsConnectingLocal 报告 name 是不是会连主控的本地命令。
+func IsConnectingLocal(name string) bool {
+	for _, n := range ConnectingLocal {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// CLIFlags 是一条命令在 CLI 上接受的全部 flag 与类型（不含 cobra 自带的 help）：
+//   - 登记的 flag 去掉 password 类型——密码只从终端读，CLI 不登记它；
+//   - 按命令属性自动带的保留 flag：危险类加 confirm，人类专属加 verify-code 与 verify-user（verify-password 同样只从终端读），
+//     长任务加 no-wait，列表命令加 limit 与 cursor；
+//   - 根 flag，其中 server、token 只给经主控的命令与会连主控的本地命令（别的本地命令执行时拒绝它们）。
+//
+// skills 的检查按它认 flag；CLI 投影有测试核对它与 cobra 树上实际登记的一致。
+func CLIFlags(c *Command) []Flag {
+	var out []Flag
+	for _, f := range c.Flags {
+		if f.Type != TypePassword {
+			out = append(out, Flag{Name: f.Name, Type: f.Type})
+		}
+	}
+	if c.Danger != "" {
+		out = append(out, Flag{Name: "confirm", Type: TypeString})
+	}
+	if c.HumanOnly {
+		out = append(out, Flag{Name: VerifyCodeFlag, Type: TypeString}, Flag{Name: VerifyUserFlag, Type: TypeString})
+	}
+	if c.Shape == ShapeJob {
+		out = append(out, Flag{Name: NoWaitFlag, Type: TypeBool})
+	}
+	if c.List {
+		out = append(out, Flag{Name: "limit", Type: TypeInt}, Flag{Name: "cursor", Type: TypeString})
+	}
+	for _, r := range RootFlags {
+		if (r.Name == "server" || r.Name == "token") && c.Class == ClassLocal && !IsConnectingLocal(c.Name()) {
+			continue
+		}
+		out = append(out, Flag{Name: r.Name, Type: r.Type})
+	}
+	return out
+}
 
 // ClientOnlyCommands 是只在 CLI 里有意义的命令路径的首段（第 05 章：login、mcp init 在 satchel_run 的拒绝清单里）：
 // MCP 按首段拒绝。login、logout、mcp stdio、mcp init 是本地命令；mcp status 是读命令，同样按首段拒绝（token list 在 MCP 上可得）。

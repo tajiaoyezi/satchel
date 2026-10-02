@@ -234,9 +234,10 @@ func localCommands() []*Command {
 		// MCP 接入（master-mcp）：垫片与接入管理都在 CLI 进程里跑。mcp init 要替 token create 带当场验证，
 		// 所以自己登记 --verify-user / --verify-code（本地命令不会被自动加这组保留 flag；密码仍只从终端读）。
 		{Path: []string{"mcp", "stdio"}, Summary: "stdio 方式的 MCP 垫片：连上主控的 /mcp，把它的两个工具转给本地 runtime", Class: ClassLocal},
-		{Path: []string{"mcp", "init"}, Summary: "把一个 AI runtime 接上主控：签一把令牌（或用已有的），写进它的 MCP 配置与环境变量", Class: ClassLocal,
+		{Path: []string{"mcp", "init"}, Summary: "把一个 AI runtime 接上主控：签一把令牌（或用已有的），写进它的 MCP 配置与环境变量，并装上 skills", Class: ClassLocal,
 			Flags: []Flag{
 				{Name: "runtime", Type: TypeString, Description: "要接入的 runtime：claude-code、codex 或 hermes"},
+				{Name: "skills-only", Type: TypeBool, Description: "只把 skills 写进 runtime 的 skills 目录：不连主控、不签令牌、不改配置"},
 				{Name: "url", Type: TypeString, Description: "写进 runtime 配置的主控地址（默认用 CLI 连的地址；在主控本机则按监听地址推出本机地址）"},
 				{Name: "preset", Type: TypeString, Default: "ops", Description: "新令牌的预设：readonly、ops、full"},
 				{Name: "name", Type: TypeString, Description: "新令牌的名字与 runtime 标签（默认 <runtime>@<主机名>）"},
@@ -280,6 +281,8 @@ func identityCommands() []*Command {
 func baseCommands() []*Command {
 	return []*Command{
 		{Path: []string{"whoami"}, Summary: "显示当前调用者的身份、权限范围与危险类", Class: ClassRead},
+		// 开局总览（master-overview）：四个分区随对应功能出现，M1 都是空的。
+		{Path: []string{"overview"}, Summary: "开局总览：服务器、用户、告警、待办四个分区（各自随对应功能出现）", Class: ClassRead},
 		{Path: []string{"audit", "list"}, Summary: "按时间倒序列出审计记录（只对管理员开放）", Class: ClassRead, List: true,
 			Flags: []Flag{
 				{Name: "actor", Type: TypeString, Description: "只看这个 actor（精确匹配）"},

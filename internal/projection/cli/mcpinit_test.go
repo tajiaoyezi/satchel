@@ -221,7 +221,8 @@ func TestMcpInitCodexAndHermes(t *testing.T) {
 	}
 }
 
-// master-mcp「解析不了就不签发」「Codex 的 include 过滤先停」：config 错误、没有签发、文件没动、片段打印出来。
+// master-mcp「解析不了就不签发」「Codex 的 include 过滤先停」：config 错误、没有签发、文件没动。codex 打印片段、next 提示补好配置后
+// 用 --skills-only；坏的 settings.json 在确定 Claude Code 的配置目录时就停下，next 请用户修好它。
 func TestMcpInitStopsBeforeIssuing(t *testing.T) {
 	home, _ := runtimeHome(t)
 	dataDir, master := startSocketMaster(t)
@@ -229,14 +230,15 @@ func TestMcpInitStopsBeforeIssuing(t *testing.T) {
 	put(t, settings, "{not json")
 	codexCfg := filepath.Join(home, ".codex", "config.toml")
 	put(t, codexCfg, "[shell_environment_policy]\ninclude_only = [\"PATH\", \"HOME\"]\n")
-	for _, tc := range []struct{ runtime, file, before, why string }{
-		{"claude-code", settings, "{not json", "不是合法的 JSON"},
-		{"codex", codexCfg, "[shell_environment_policy]\ninclude_only = [\"PATH\", \"HOME\"]\n", "include_only"},
+	for _, tc := range []struct{ runtime, file, before, why, next string }{
+		{"claude-code", settings, "{not json", "不是合法的 JSON", "修好 " + settings},
+		{"codex", codexCfg, "[shell_environment_policy]\ninclude_only = [\"PATH\", \"HOME\"]\n", "include_only", "satchel mcp init --runtime codex --skills-only"},
 	} {
 		opts, fp := initOptions("secret12", "")
 		_, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", tc.runtime, "--verify-user", "admin", "--data-dir", dataDir, "--json")
 		e := decodeError(t, stderr)
-		if code != v1.ExitFailure || e.Code != v1.CodeConfig || !strings.Contains(e.Reason, tc.why) || e.State["snippet"] == nil {
+		if code != v1.ExitFailure || e.Code != v1.CodeConfig || !strings.Contains(e.Reason, tc.why) || !strings.Contains(e.Next, tc.next) ||
+			(tc.runtime == "codex") != (e.State["snippet"] != nil) {
 			t.Fatalf("%s：%d %+v", tc.runtime, code, e)
 		}
 		if master.count() != 0 || len(fp.labels) != 0 {
@@ -352,7 +354,8 @@ func TestMcpInitAddress(t *testing.T) {
 	}
 }
 
-// 令牌签出来之后写配置失败：partial_failure（退出码 8），带令牌明文与片段。
+// 令牌签出来之后写配置失败：partial_failure（退出码 8），带令牌明文与片段；skills 还没写，next 提示配置补好之后用 --skills-only
+// （master-mcp「写配置失败时提示补装 skills」）。
 func TestMcpInitPartialFailure(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("靠目录权限制造写失败")
@@ -368,9 +371,11 @@ func TestMcpInitPartialFailure(t *testing.T) {
 	opts, _ := initOptions("secret12", "")
 	_, stderr, code := runWith(t, opts, "mcp", "init", "--runtime", "codex", "--verify-user", "admin", "--url", targetMaster(t), "--data-dir", dataDir, "--json")
 	e := decodeError(t, stderr)
-	if code != v1.ExitPartialFailure || e.Code != v1.CodePartialFailure || e.State["token"] != issuedToken || e.State["snippet"] == nil || master.count() != 1 {
+	if code != v1.ExitPartialFailure || e.Code != v1.CodePartialFailure || e.State["token"] != issuedToken || e.State["snippet"] == nil || master.count() != 1 ||
+		!strings.Contains(e.Next, "satchel mcp init --runtime codex --skills-only") {
 		t.Fatalf("partial_failure：%d %+v", code, e)
 	}
+	notExist(t, filepath.Join(home, ".agents"))
 }
 
 // 写进配置的地址先核对：连不上、不是 Satchel 的在签发之前停下；签发后那里不认这把令牌是 partial_failure，不写配置、不给明文。

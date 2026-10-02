@@ -120,10 +120,28 @@ func newRoot(opts Options) (*cobra.Command, *options) {
 			cmd.SetContext(withConnFlags(ctx, o.conn))
 		},
 	}
-	root.PersistentFlags().BoolVar(&o.json, "json", false, "以 JSON 输出（等价于环境变量 SATCHEL_OUTPUT=json）")
-	root.PersistentFlags().StringVar(&o.dataDir, "data-dir", "", "数据目录（默认取环境变量 "+db.EnvDataDir+"，再默认 "+db.DefaultDataDir+"）")
-	root.PersistentFlags().StringVar(&o.conn.server, "server", "", "远程主控的地址，如 https://panel.example.com（默认取环境变量 "+EnvServer+"，再取登录文件；都没有就连本机 socket）")
-	root.PersistentFlags().StringVar(&o.conn.token, "token", "", "API 令牌（会留在进程列表与 shell 历史里；脚本用环境变量 "+EnvToken+"，常用的机器用 satchel login）")
+	// 根 flag 按命令表的 RootFlags 登记（只此一份）；这里只给每个名字配上变量与说明，配不上就在构造时 panic。
+	rootVars := map[string]struct {
+		p    any
+		desc string
+	}{
+		"json":     {&o.json, "以 JSON 输出（等价于环境变量 SATCHEL_OUTPUT=json）"},
+		"data-dir": {&o.dataDir, "数据目录（默认取环境变量 " + db.EnvDataDir + "，再默认 " + db.DefaultDataDir + "）"},
+		"server":   {&o.conn.server, "远程主控的地址，如 https://panel.example.com（默认取环境变量 " + EnvServer + "，再取登录文件；都没有就连本机 socket）"},
+		"token":    {&o.conn.token, "API 令牌（会留在进程列表与 shell 历史里；脚本用环境变量 " + EnvToken + "，常用的机器用 satchel login）"},
+	}
+	for _, f := range command.RootFlags {
+		v, ok := rootVars[f.Name]
+		if !ok {
+			panic("根 flag --" + f.Name + " 没有配变量")
+		}
+		switch f.Type {
+		case command.TypeBool:
+			root.PersistentFlags().BoolVar(v.p.(*bool), f.Name, false, v.desc)
+		default:
+			root.PersistentFlags().StringVar(v.p.(*string), f.Name, "", v.desc)
+		}
+	}
 	// 树里只能有命令表里的命令：cobra 自带的 completion 命令关掉；help 命令换成一个不叫 help 的隐藏桩
 	// （cobra 的帮助模板会把名字叫 help 的命令硬列出来），这样 satchel help 就是普通的未知子命令，帮助用 --help 或 explain。
 	root.CompletionOptions.DisableDefaultCmd = true

@@ -224,7 +224,7 @@ func hasPasswordFlag(c *command.Command) bool {
 func execute(ctx context.Context, c *command.Command, inv *command.Invocation, opts Options, runner command.Runner) (any, error) {
 	switch {
 	case c.Class == command.ClassLocal:
-		if f := connFlagsOf(ctx); (f.serverSet || f.tokenSet) && !connectingLocal[c.Name()] {
+		if f := connFlagsOf(ctx); (f.serverSet || f.tokenSet) && !command.IsConnectingLocal(c.Name()) {
 			return nil, usageError("%s 只在本机跑、不连主控，不接受 --server 与 --token", c.Name())
 		}
 		h, ok := opts.Local[c.Name()]

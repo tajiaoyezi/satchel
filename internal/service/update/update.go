@@ -108,7 +108,7 @@ func (s *Service) blocked() *v1.Error {
 		return v1.Newf(v1.CodeConflict, "主控只在 Linux 上运行，%s 上不能自升级", s.d.GOOS)
 	case selfupdate.InDocker(s.d.Root):
 		return v1.New(v1.CodeConflict, "Docker 部署不能在容器里替换主控二进制，升级要换镜像 tag").
-			WithNext("docker compose pull && docker compose up -d")
+			WithNext("在 compose 文件所在的目录把 .env 里 SATCHEL_IMAGE 的 tag 改成新版本号（latest 不用改），再 docker compose pull && docker compose up -d")
 	case IsDev(s.d.Version):
 		return v1.Newf(v1.CodeConflict, "当前是开发版构建（%s），不能自升级", s.d.Version).
 			WithNext("用 install.sh 装一个正式发布的版本")

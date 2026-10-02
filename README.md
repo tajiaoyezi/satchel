@@ -1,8 +1,8 @@
 # Satchel（百宝袋）
 
-Agent-first 的多服务器代理管理系统。主控、CLI 与 MCP 在这一个仓库、一个二进制 `satchel` 里；节点守护是 [satchel-agent](https://github.com/satchel/satchel-agent)。
+Agent-first 的多服务器代理管理系统。主控、CLI、MCP 与写给 AI 的 skills 在这一个仓库、一个二进制 `satchel` 里；节点守护是 [satchel-agent](https://github.com/satchel/satchel-agent)。
 
-**状态：M1 主控基础阶段。主控能起来（`serve`）、REST / CLI / MCP 三个投影同构上线，初始化向导、网页登录与两步验证、系统设置、API 令牌与远程 CLI / AI runtime 接入可用，业务命令随后续 change 加入。**
+**状态：M1 主控基础阶段。主控能起来（`serve`）、REST / CLI / MCP 三个投影同构上线，初始化向导、网页登录与两步验证、系统设置、API 令牌与远程 CLI / AI runtime 接入、开局总览与 skills 可用，业务命令随后续 change 加入。**
 
 ## 构建
 
@@ -44,6 +44,10 @@ go build ./cmd/satchel
 - **当场验证**：`account set-password` / `account totp setup` / `account totp confirm` / `account totp disable` / `account recovery-codes regenerate` 是人类专属命令：每次执行都要在同一个请求里带上自己的密码（`verify-password`）与——账号开了两步验证时——第二因素（`verify-code`），验一次用一次，不签发任何提升票据。CLI 上密码只从终端读（`--verify-password` 不是命令行参数，给了就是用法错误），`--verify-code` 可以作参数也可以终端输入（恢复码建议终端输入，写在命令行上会留在 shell 历史与进程列表里）；stdin 不是终端时直接以 `human_required` 拒绝、不等待。本机管理员不是账号，要用 `--verify-user <管理员用户名>` 指明验谁；登录的用户只能验自己。REST 上这三个值放在 JSON 体里，它们永不进审计摘要。`account set-password --new-password`（终端读两遍）改完作废该账号其它全部会话、保留当前这一个。
 - **忘了管理员密码**：在主控本机执行 `satchel admin reset-password <用户名> --confirm <用户名>`（本地命令，直接开数据目录里的库，主控在不在跑都行；只对管理员账号；新密码在终端里读两遍）。它作废该账号全部会话、不动两步验证，且因为不经主控而**不进审计**（stderr 会提示这一点）。
 
+### 开局总览
+
+`satchel overview`（REST `GET /api/v1/overview`，MCP 上是 `satchel_run` 的 `["overview"]`）一条命令返回全系统概况，解决 AI 每次连上来的冷启动：服务器、用户、告警、待办四个分区，每个分区是 `{items, total}`（`items` 至多 10 条，`total` 是调用者看得到的总数）。任何有身份的调用者都能看（本机管理员、管理员与普通用户的会话、任何令牌），普通用户只看到自己的数据。分区随对应功能出现：服务器随 M2、用户随 M3、告警与待办随 M4，在那之前是空列表（`items` 为 `[]`、`total` 为 0），不报错也不省掉。文本形式每个分区一行：`服务器：0`、`用户：0`、`告警：0`、`待办：0`。它只读，不发外部请求。
+
 ### 系统设置
 
 系统设置是**一个单例对象**（kind `SystemSettings`，第 07 章「主控设置类」）：`system_config` 的列与 `system_settings` 键值表的 93 个 key 合在一起，整单一个 `resourceVersion`。`serve` 启动时（迁移之后、监听之前）确保那一行存在，空库起来就是版本 1。`settings *` 只对管理员开放（本机管理员与管理员账号），普通用户 `forbidden`。
@@ -62,17 +66,52 @@ go build ./cmd/satchel
 - **令牌与权限范围**：令牌是 `sat_` 加 43 个字符的随机串，库里只存它的 SHA-256，明文只在签发的那一次输出里出现。权限范围由 `read`（恒有）、`operate`、六个危险类（`delete`、`restart`、`permission`、`batch`、`exec`、`master`）与单独的 `secrets`（密钥读取）组成；预设由它推出：没有 `operate` 是 `readonly`，有 `operate` 且六类全开是 `full`，其余是 `ops`。命令上 `--preset readonly|ops|full` 把 `operate` 与危险类设成该预设的样子，`--danger <类>`（可重复）把危险类设成恰好这几个并隐含 `operate`，`--secrets` 开关密钥读取；`--preset readonly` 带 `--danger` 是 `bad_request`。新建时默认只读、不过期（`--expires-in 720h` 设过期时间）。
 - **签发者与上限**：令牌挂在签发者的账号名下，权限上限是签发者的角色：管理员什么都能签；普通用户只能签 `read` 与 `operate`，要带危险类或 `secrets` 直接 `forbidden` 并点名超出的项，不会悄悄截掉。令牌每次被使用时，生效的权限是它的权限范围与签发者**当下**角色的交集：签发者被降为普通用户后危险类与密钥读取随之失效，签发者停用或删除后令牌无效。
 - **签发、改、吊销**：`satchel token create --name <名字> [--preset …] [--danger …] [--secrets] [--expires-in …] [--runtime <标签>]`、`token update <id>`（改名字、权限范围、过期时间，至少给一项）、`token revoke <id>` 是人类专属命令（当场验证见上文），令牌不能签令牌（REST 与 MCP 上都是 `human_required`）。改权限与吊销立刻生效，令牌字符串不变；已吊销的不能再改。`token list` 列出令牌、`state`（`active` / `revoked` / `expired`）与最后使用时间（按分钟记）；普通用户只看得到、改得了自己的令牌，别人的一律 `not_found`，管理员可用 `--owner` 过滤。
-- **第一把令牌在哪签**：在主控本机经 socket 执行，例如 `satchel token create --name laptop --preset ops --verify-user admin`（本机管理员不是账号，要用 `--verify-user` 指明一个管理员，令牌挂在它名下），或在网页上签（随 m1-10）。远程只带令牌的 CLI 签不了新令牌。
+- **第一把令牌在哪签**：在主控本机经 socket 执行，例如 `satchel token create --name laptop --preset ops --verify-user admin`（本机管理员不是账号，要用 `--verify-user` 指明一个管理员，令牌挂在它名下），或在网页上签（随 m1-11）。远程只带令牌的 CLI 签不了新令牌。
 - **远程 CLI**：连哪个主控、带哪把令牌，各自按「根 flag（`--server`、`--token`）→ 环境变量（`SATCHEL_SERVER`、`SATCHEL_TOKEN`）→ 登录文件」的顺序取第一个有的；都没有 server 就连本机 socket。`--server` 可以带路径前缀（主控挂在反代的子路径下）。`--token` 会留在进程列表与 shell 历史里，只适合临时试一下；脚本用环境变量；常用的机器用 `satchel login --server <地址>`：令牌从终端读，先用它调一次 `whoami` 确认是令牌身份再存进登录文件——用户配置目录下的 `satchel/login.json`（Linux 上 `~/.config/satchel/`，macOS 上 `~/Library/Application Support/satchel/`），文件 0600，权限对组或其他用户开放时拒绝使用。登录文件里的令牌只发给它自己记的那个 server：用 `--server` 或环境变量指向别的主控时不会带上它。`satchel logout` 只删登录文件，令牌在服务端仍然有效，吊销用 `token revoke`。本地命令（`version`、`db *`、`serve`、`admin reset-password`、`logout` 等）显式带 `--server` / `--token` 是用法错误，免得以为在改远端、实际开了本机的库；环境变量不算。人类专属命令（`token create` / `update` / `revoke`、`account set-password` 等）只能在主控本机经 socket、不带令牌执行：CLI 连的是远程主控或带着令牌时直接 `human_required`，不问密码，也就不会把密码发出去（远程 CLI 没有人的身份）。
 - **本机配了令牌**：带了令牌就按令牌算，经 socket 也一样：主控本机的进程设了 `SATCHEL_TOKEN`，就只有这把令牌的权限，不再是本机管理员。带了无效的令牌（不存在、已吊销、已过期、签发者停用，或 `Authorization` 头不是 Bearer）一律 `unauthenticated`，连初始化向导也拒，reason 不区分是哪一种，不会退回本机管理员或会话身份，也不记审计；`/api/v1/healthz` 与 `/public/` 不受影响。
 - **明文 HTTP 的风险**：用 `http://` 把令牌、或终端里输入的密码（例如远程执行 `setup init`）发给回环地址以外的主控时，CLI 会在 stderr 提示一行（密码在输入之前提示；输出是 JSON 时不提示，stderr 只留给错误）：同一网络上的人能截获它们。经公网访问请给主控配 HTTPS。
 - **接 AI runtime**：`satchel mcp init --runtime claude-code|codex|hermes` 在主控本机经 socket 签一把令牌（要加 `--verify-user`；预设默认 `ops`，名字与 runtime 标签默认 `<runtime>@<主机名>`，`--preset` / `--name` 可改；远程 CLI 签不了，用 `--use-token` 改用一把已有的令牌），写进 runtime 的配置。写进配置的主控地址取 `--url`，不给就用 CLI 连的 server，都没有就按 serve 的监听地址推出本机地址（`0.0.0.0:12889` 推成 `http://127.0.0.1:12889`）；它是非本机的 `http://` 时会提示一行（输出是 JSON 时不提示）。签发之前先请求这个地址的 `/api/v1/healthz`，连不上或不是 Satchel 主控就停下；签出来的令牌先对它调一次 `whoami`，那里认不出这把令牌（不是签发它的主控）就不写配置、提示吊销它。
-  - Claude Code：先 `claude mcp remove --scope user satchel` 再 `claude mcp add --scope user satchel -- <satchel 的绝对路径> mcp stdio`（已经登记了同样的就都不跑；add 失败时把原来的登记交还给你），三个变量 `SATCHEL_SERVER`、`SATCHEL_TOKEN`、`SATCHEL_OUTPUT=json` 写进 `~/.claude/settings.json` 的 `env`（顶层其它键与顺序不变）。`satchel mcp stdio` 是给只支持本地进程方式的 runtime 用的垫片：连上主控的 `/mcp`，先确认令牌有效，再把两个工具原样转给 runtime；stdout 只走协议。
+  - Claude Code：先 `claude mcp remove --scope user satchel` 再 `claude mcp add --scope user satchel -- <satchel 的绝对路径> mcp stdio`（已经登记了同样的就都不跑；add 失败时把原来的登记交还给你），三个变量 `SATCHEL_SERVER`、`SATCHEL_TOKEN`、`SATCHEL_OUTPUT=json` 写进 Claude Code 配置目录（`CLAUDE_CONFIG_DIR`，没设时 `~/.claude`，见下一节）下 `settings.json` 的 `env`（顶层其它键与顺序不变）；判断「已经登记过」读的是配置目录下的 `.config.json`（存在时），否则设了 `CLAUDE_CONFIG_DIR` 时是 `$CLAUDE_CONFIG_DIR/.claude.json`、没设时是 `~/.claude.json`。`satchel mcp stdio` 是给只支持本地进程方式的 runtime 用的垫片：连上主控的 `/mcp`，先确认令牌有效，再把两个工具原样转给 runtime；stdout 只走协议。
   - Codex：`$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`）的 `[mcp_servers.satchel]` 里的 `url` 与 `http_headers.Authorization`（Bearer 加令牌；块里你写的其它键，如 `enabled`、`disabled_tools`、超时，原样保留），以及 `[shell_environment_policy]` 的 `set` 里的三个变量。块是 stdio 写法或配了 `bearer_token_env_var` 时先停下。注意：Codex 把受信任（trusted）项目里的 `.codex/config.toml` 与用户级配置按键合并，项目层只写一个 `[mcp_servers.satchel]` 的 `url`，你的令牌就会随用户级的 `http_headers` 发往那个地址（已对 Codex 0.156.1 的源码与正式二进制核实）；只把你信任的仓库标为 trusted。你配了 include 过滤（`include_only` 或 `filters`）且不放行 `SATCHEL_*` 时先停下，打印要手工加的 include。
   - Hermes：`$HERMES_HOME/.env`（默认 `~/.hermes/.env`）里的三个变量，`config.yaml` 的 `mcp_servers.satchel` 里的 `url` 与 `headers.Authorization`（`Bearer ${SATCHEL_TOKEN}`，令牌明文只在 `.env` 里；条目里你写的其它键原样保留），以及 `terminal.env_passthrough`。
 
-  只动 Satchel 自己的键（你在 satchel 条目里写的 `enabled: false` 之类不改，输出会提示接入后仍是停用的）；改已有文件前先备份成 `<文件>.satchel-bak-<时间戳>`（0600），先写临时文件再改名、保留原权限，但写进令牌的 `settings.json`、`config.toml`、`.env` 会去掉组与其他用户的权限（输出里注明）；新文件 0600、新目录 0700。原来配置里的另一把令牌不会被吊销，输出会提示你用 `mcp status` 找到后 `token revoke`；任何一个文件解析不了或写法不在支持范围内，在签发令牌之前就停下（`config`）并打印要手工加的片段。`--print` 只打印片段与命令、不写文件（这时输出里有令牌明文）。令牌签出来之后写文件失败是 `partial_failure`（退出码 8），输出里带令牌明文与片段。改完重启 runtime，验证命令分别是 `claude mcp get satchel`、`codex mcp get satchel --json`、`hermes mcp test satchel`；skills 随 m1-09 交付。
+  只动 Satchel 自己的键（你在 satchel 条目里写的 `enabled: false` 之类不改，输出会提示接入后仍是停用的）；改已有文件前先备份成 `<文件>.satchel-bak-<时间戳>`（0600），先写临时文件再改名、保留原权限，但写进令牌的 `settings.json`、`config.toml`、`.env` 会去掉组与其他用户的权限（输出里注明）；新文件 0600、新目录 0700。原来配置里的另一把令牌不会被吊销，输出会提示你用 `mcp status` 找到后 `token revoke`；任何一个文件解析不了或写法不在支持范围内，在签发令牌之前就停下（`config`）并打印要手工加的片段。`--print` 只打印片段与命令、不写文件（这时输出里有令牌明文）。令牌签出来之后写文件失败是 `partial_failure`（退出码 8），输出里带令牌明文与片段。改完重启 runtime，验证命令分别是 `claude mcp get satchel`、`codex mcp get satchel --json`、`hermes mcp test satchel`。写好配置之后，同一条命令再把 skills 装进 runtime 的 skills 目录，见下一节。
 - **谁在连**：`satchel mcp status` 列出绑了 runtime 标签的令牌，按最后使用时间倒序，从没用过的排最后；可见范围与 `token list` 相同。
+
+### skills：写给 AI 的操作手册
+
+七份 skills 编在 satchel 二进制里（源文件在 `internal/base/skills/files/`，每个 skill 一个目录、里面只有一个 `SKILL.md`），`satchel mcp init` 接入时一起装进 runtime 的用户级 skills 目录，runtime 按场景自动加载。skills 只是说明，不是权限：令牌的权限范围、危险类与人类专属始终由主控判定。
+
+| skill | 讲什么 |
+|---|---|
+| `satchel-basics` | 开局（`overview`、`whoami`）；按需学命令（`--help`、`explain`，版本不同时用 MCP 的 `satchel_explain` 核对）；输出与四字段错误、退出码；长任务；危险操作与 `--confirm`；人类专属命令怎么请人在主控本机执行；MCP 上怎么调用、哪些做不了；远程用 CLI |
+| `satchel-troubleshoot` | 日志、内置定时任务、长任务、审计与安全事件；主控起不来、管理员忘了密码、被门或 IP 封禁挡在外面时请人在主控本机处理 |
+| `satchel-backup` | 生成、列出、上传备份；下载与恢复要请人做；新装的主控走初始化向导 |
+| `satchel-upgrade` | 检查更新、升级主控、更新 CDN 的开关、升级失败时的自动回退 |
+| `satchel-settings` | 日常运维档的设置、写前快照与回滚；主控地址与门这两组要请人改 |
+| `satchel-access` | 令牌与谁在连；签发、改权限、吊销令牌与接入 runtime 要请人做；账号；IP 封禁 |
+| `satchel-database` | 看当前的数据库、试连 PostgreSQL、从 SQLite 在线迁移 |
+
+`docs/skills.md` 是由命令表与 skills 生成的「命令 × skills 对照表」（与 `docs/commands.md` 同一步 `go generate ./internal/command/`）。测试保证命令表里每条非隐藏命令都至少有一个 skill 讲到，skills 里写的每条 `satchel` 命令行都能在这个二进制的 CLI 上解析，CI 守着生成物与命令表和 skills 一致。
+
+- **装在哪**：
+
+  | runtime | skills 目录 |
+  |---|---|
+  | Claude Code | 配置目录下的 `skills/`：`$CLAUDE_CONFIG_DIR/skills`，没设时 `~/.claude/skills` |
+  | Codex | `~/.agents/skills`（Codex 0.95 起的用户级目录，跟着 `HOME` 走、与 `CODEX_HOME` 无关；更早的 Codex 用不上 skills） |
+  | Hermes | `$HERMES_HOME/skills`（默认 `~/.hermes/skills`）；用 profile 的，先把 `HERMES_HOME` 设成那个 profile 的目录再跑 |
+
+  每个 skill 写成 `<skills 目录>/satchel-<名字>/SKILL.md`。只写这几个文件：内容相同的不写，不同的直接覆盖、不留备份；同名目录里别的文件、skills 目录里别的 skill 都不动；新文件 0600、新目录 0700。skills 目录本身可以是符号链接（照常跟随）；某个 `satchel-*` 目录或其中的 `SKILL.md` 是符号链接、位置被普通文件占着或读不了时，在签发令牌之前停下（`config`），修好那个路径后重跑。
+- **生效**：重启 runtime 之后生效。Claude Code 与 Codex 运行中通常几秒内自动发现（Claude Code 的 skills 目录是这次新建的，要执行 `/reload-skills`）；Hermes 没有热加载，交互界面、gateway、桌面版这些长期运行的进程要重启（不重启时在会话里执行 `/reload-skills` 可以先用上，系统提示里的 skills 索引要到重启才更新）。三个 runtime 都不用打开任何开关。
+- **顺序与失败**：先写 MCP 配置、执行 runtime 的命令，再写 skills。写配置失败时 skills 不写，`next` 提示配置补好之后执行 `satchel mcp init --runtime <x> --skills-only`；写 skills 失败时配置已经写好，以 `partial_failure`（退出码 8）结束，不再给令牌明文，`state` 里带着配置部分的结果（主控地址、令牌 id、改了的文件与备份、提示），`next` 同样指向 `--skills-only`。`--print` 不读写 skills，只在输出里给出该装的目录。
+- **只装 skills**：`satchel mcp init --runtime <x> --skills-only` 只写 skills：不连主控、不签令牌、不改配置，主控没在跑也行。它只和 `--runtime` 一起用，同时给 `--use-token`、`--print`、`--url`、`--name`、`--preset`、`--verify-user`、`--verify-code` 或 `--server`、`--token` 是用法错误。升级 satchel 之后用它更新 skills。`satchel-*` 这几个目录归 Satchel 管，手改的内容会被下次 `mcp init` 覆盖；不想要 skills，删掉这几个目录即可，MCP 配置不受影响。
+- **谁来跑**：`mcp init` 写的是执行它的那个用户的目录。在主控本机用 `sudo` 跑时写进的是 root 的目录；给普通用户的 runtime 装 skills，由那个用户自己执行 `--skills-only`（root 写出的 0700 目录，别的用户读不到）。
+- **Claude Code 的配置目录**：在启动 Claude Code 的环境里设了 `CLAUDE_CONFIG_DIR` 时，`settings.json`、用户级 MCP 登记与 skills 都在那个目录，`mcp init` 跟着它走。它是空值或相对路径（例如字面的 `~/cfg`，Claude Code 不展开 `~`）时以 `config` 停下；只写在 `~/.claude/settings.json` 的 `env` 里时也以 `config` 停下：这样设时 Claude Code 只把 `settings.json` 与 skills 换到那个目录，MCP 登记仍在 `~/.claude.json`，照 `next` 把它挪到启动 Claude Code 的环境里（如 shell 的配置文件）再跑。这两项检查在签发令牌与写任何文件之前做，`--print` 与 `--skills-only` 也做。设在 VS Code 扩展或桌面版的启动环境里的，satchel 看不到：按输出里列出的目录手工调整。
+- **别的客户端**：没有自动安装，照 `internal/base/skills/files/` 手工复制到它的 skills 目录。
+- **从没有 skills 的版本升级**：主控与各处的 CLI 一起升级（skills 装的是本机 CLI 这个二进制里的版本）。已经接入的 runtime，升级之后执行一次 `satchel mcp init --runtime <x> --skills-only`。另外两种 Claude Code 用户：
+  - 在启动环境里设了 `CLAUDE_CONFIG_DIR` 的：以前的 `mcp init` 把环境变量写进了 `~/.claude/settings.json`，Claude Code 没有读它。重跑一次完整的 `mcp init`（可以 `--use-token` 沿用原来的令牌）；之后 `~/.claude/settings.json` 的 `env` 里那三个 `SATCHEL_*`（含令牌明文）和旁边的 `.satchel-bak-*` 都没用了，可以删掉。没用 `--use-token` 时，`satchel token list` 里会有两把同名的 `claude-code@<主机名>`，吊销 id 不是这次输出里令牌 id 的那一把（id 较小的是原来那把）；也可以重跑时用 `--name` 给新令牌另起名字。
+  - 只在 `~/.claude/settings.json` 的 `env` 里设了它的：以前的配置是生效的；重跑时会先以 `config` 停下，照 `next` 把它挪到启动环境里再跑。
 
 ### 门与登录防护
 
@@ -101,7 +140,7 @@ go build ./cmd/satchel
 - **登录限流**（`login_rate_max_attempts` / `login_rate_window_minutes` / `login_rate_lock_minutes`，默认 1 小时内 5 次、锁 1 小时）：猜密码按来源 IP 与账号名两个维度分别计数，达到上限的那一次之后锁定，锁定期内登录与当场验证直接 `rate_limited`（HTTP 429，退出码 1，`state.until` 是解锁时间），不再比对密码。与 mmwx 不同：两步登录时密码对了不清零，第二步错了照计，整个登录成功才清零；当场验证的密码或验证码比对不上也计入（只缺第二因素不计）；账号已停用时密码对了也算一次失败。同时发来的一批尝试最多只有上限那么多次会去比对密码，其余直接 `rate_limited`。`skip_local_ip`（默认开）时本地与内网地址不计 IP 维度，账号维度照计。有人故意猜错你的用户名会把你的网页登录锁一阵子，这时在主控本机用 CLI 不受影响。
 - **令牌猜测的封禁**（`brute_force_enabled` / `brute_force_max_failures` / `brute_force_window_minutes` / `brute_force_block_minutes`，默认 24 小时内 5 次、封 24 小时）：经 TCP 的请求带了无效的 `Authorization` 头，按来源 IP 计一次，达到上限自动封禁这个 IP，写进 `ip_bans`，重启后恢复。被封的 IP **只有带 `Authorization` 头的请求**被拒（`forbidden`），网页会话与登录照常（猜密码由登录限流管）——所以一个配着已吊销令牌、不停重试的 AI 客户端不会把你的网页也封掉。`skip_local_ip` 开着时本地与内网地址不计也不封。关掉 `brute_force_enabled` 只停自动封禁，已有的封禁照常生效（mmwx 关掉会让全部封禁失效）。手动：`satchel security ban <ip> [--permanent]` 与 `security unban <ip>` 是人类专属命令，`security bans list` 列出生效中的封禁（都只对管理员开放）。
 - **安全事件**：登录与当场验证比对不上（`login_fail` / `login_locked`、`verify_fail` / `verify_locked`）、令牌校验失败（`probe`）、自动封禁（`ban`）、手动封禁（`ban_manual`）、解封（`unban`）各记一条，含来源 IP、路径或命令名、账号名与「第几次 / 上限」。`satchel security events list [--kind …] [--ip …]` 按时间倒序看（只对管理员开放）。保留 90 天，见「日志与定时任务」。
-- **Turnstile 登录验证码**：`turnstile_site_key`（非空时至少 20 个字符）与 `turnstile_secret_key` 两个都填才启用。启用后网页登录要带 `turnstile_token`，主控先向 Cloudflare 核对：没带或没过是 `bad_request`（不算一次猜密码），连不上 Cloudflare 是 `unavailable`。登录页用不要身份的 `GET /api/v1/session/captcha` 取 `enabled` 与 `site_key`（不含 secret key）。第二步、当场验证与经 socket 的登录不要验证码。「测试配置」随 m1-10 的设置页。
+- **Turnstile 登录验证码**：`turnstile_site_key`（非空时至少 20 个字符）与 `turnstile_secret_key` 两个都填才启用。启用后网页登录要带 `turnstile_token`，主控先向 Cloudflare 核对：没带或没过是 `bad_request`（不算一次猜密码），连不上 Cloudflare 是 `unavailable`。登录页用不要身份的 `GET /api/v1/session/captcha` 取 `enabled` 与 `site_key`（不含 secret key）。第二步、当场验证与经 socket 的登录不要验证码。「测试配置」随 m1-11 的设置页。
 - **跨域（CORS）**：默认只允许同源（mmwx 默认对所有来源放开）。`SATCHEL_ALLOWED_ORIGINS` 列出的来源拿到 `Access-Control-Allow-Origin` 等头、预检直接 204；永远不发 `Access-Control-Allow-Credentials`，所以跨域只给自己拿着令牌的网页用，会话 cookie 不跨域。
 - **被挡在门外时**：在主控本机经 socket 用 CLI 改回来，例如 `satchel settings gates set --set master_local_only=false --set silent_mode=false --resource-version <N> --verify-user <管理员>`，或 `satchel security unban <ip> --verify-user <管理员>`；静默模式也可以重启主控后在开放期里进去；连本机 shell 都不方便时，以 `SATCHEL_FORCE_PUBLIC_ACCESS=1` 重启主控只跳过「关闭公网访问」这一道门（进来之后关掉设置、再去掉这个变量）。
 
@@ -183,7 +222,7 @@ go build ./cmd/satchel
     不要只换回旧二进制就启动：新版本可能已经迁移过库（`attempts` 为 0 也不能说明没有，停止信号不计次），旧版本会因库结构比它新而起不来，或者带着新版本写过的库继续跑。
   - **回退时换库失败**（例如备份坏了、磁盘满、找不到 `psql`、PostgreSQL 还没起来）：旧版本拒绝启动，而不是带着升级之后的库对外服务；两个标记都留着，处理好原因后把数据目录里 `restore-pending.json` 的 `phase` 改回 `pending` 再启动，主控会重试换库。升级前的备份确实坏了、修不回来时，有两条出路：把 `restore-pending.json` 的 `backup` 改成 `backups/` 里另一份能用的备份（`phase` 同样改回 `pending`），换回那一刻；或者重新装回新版本的二进制（从 Release 下载并验签），再删掉 `restore-pending.json` 与 `upgrade-pending.json`，带着升级之后的库继续跑新版本。
   - **升级成功之后又换回了旧版本**（升级标记已是 `committed` 或已删）：旧版本面对的是升级之后的库，库结构比它新时会拒绝启动。推荐换回新版本；确实要回到旧版本，就按上面「自动回退不了」的步骤 2–5 恢复升级前的备份（升级之后的写入全部丢掉）。标记已删时：备份名到 `backups/` 里按 `before-upgrade-` 前缀找，旧二进制是目标路径加 `.bak`，步骤 4 跳过。注意升级前的备份只在升级标记还在时受保护，之后按 7 份轮换（`backup_local` 每天一份，大约一周后就没了），`.bak` 也只有一份（再升级一次就被覆盖）：隔得久了就回不去，只能留在新版本。
-  - 不能自升级的情况：Docker 部署（换镜像 tag：`docker compose pull && docker compose up -d`）、直接 `go build` 的开发版、非 Linux。
+  - 不能自升级的情况：Docker 部署（换镜像 tag：一键脚本在 `.env` 的 `SATCHEL_IMAGE` 里固定了安装时的版本，先把 tag 改成新版本号，`latest` 不用改，再 `docker compose pull && docker compose up -d`）、直接 `go build` 的开发版、非 Linux。
 - **更新 CDN**：`satchel settings update-cdn set <true|false> --resource-version <N> --confirm <true|false>`（主控自身类）打开或关掉。关掉之后检查更新与下载直接走 GitHub。**CDN 的域名现在还没有**（`internal/base/selfupdate` 里的 `CDNBase` 为空），开关开着也不走 CDN，`update check` 的 `cdn.reason` 会说明。启用步骤：在代码里填上域名 → 仓库配好 R2 的四个 secret（`R2_ACCOUNT_ID`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、`R2_BUCKET`）→ 设仓库变量 `UPDATE_CDN_ARMED=1` → 下一次发版时发布线把二进制、签名与 `version.json` 推上去。渠道的版本索引只会被更新的版本覆盖：要撤回一个有问题的版本，手工把 R2 上 `satchel/channels/<渠道>/version.json` 换成上一个版本的内容（重跑旧版本的发布线不会覆盖更新的索引）。同一渠道短时间内连发三个版本时，GitHub 可能取消中间那个的换索引，重跑它即可。
 
 ## REST 与 MCP

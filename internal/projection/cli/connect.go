@@ -99,9 +99,6 @@ func connFlagsOf(ctx context.Context) connFlags {
 	return f
 }
 
-// connectingLocal 是会连主控的本地命令：只有它们接受显式的 --server / --token（master-cli「本地命令不接受 --server 与 --token」）。
-var connectingLocal = map[string]bool{"login": true, "mcp stdio": true, "mcp init": true}
-
 // Connect 解析本次执行连主控的方式；令牌经明文 HTTP 发往回环以外的地址时往 stderr 写一行提示。
 // 一次执行只调它一次：经主控的命令在执行前调，会连主控的本地命令（mcp stdio、mcp init）在处理函数里调。
 func Connect(ctx context.Context) (Connection, error) {

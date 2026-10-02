@@ -6,22 +6,36 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 )
 
-// Claude Code（design 第 14、14a 条）：MCP 服务器只经它自己的命令登记（不碰 ~/.claude.json），登记的是 stdio 垫片；
-// 三个环境变量写进 ~/.claude/settings.json 的 env（官方文档：为每个会话及其子进程设置），垫片是子进程，读得到。
+// Claude Code（design 第 14、14a 条）：MCP 服务器只经它自己的命令登记（不碰用户级登记文件），登记的是 stdio 垫片；
+// 三个环境变量写进配置目录（CLAUDE_CONFIG_DIR，没设时 ~/.claude）下 settings.json 的 env（官方文档：为每个会话及其子进程设置），
+// 垫片是子进程，读得到。
 
 const claudeVerify = "claude mcp get satchel"
 
 func claudeNotes() []string {
-	return []string{"重启 Claude Code 后生效（已开的会话不会重新读 settings.json 的 env）", "skills 随 m1-10 交付"}
+	return []string{"重启 Claude Code 后生效（已开的会话不会重新读 settings.json 的 env）"}
 }
 
 func claudeSettingsPath(env runtimeEnv) string {
-	return filepath.Join(env.home, ".claude", "settings.json")
+	return filepath.Join(env.claudeDir, "settings.json")
+}
+
+// claudeRegistrationPath 是 Claude Code 用户级 MCP 登记所在的文件（claude mcp add / remove 读写的也是它）：
+// 配置目录下的 .config.json（存在时），否则设了 CLAUDE_CONFIG_DIR 时是 $CLAUDE_CONFIG_DIR/.claude.json，没设时是 ~/.claude.json。
+func claudeRegistrationPath(env runtimeEnv) string {
+	if path := filepath.Join(env.claudeDir, ".config.json"); pathExists(path) {
+		return path
+	}
+	if env.claudeSet {
+		return filepath.Join(env.claudeDir, ".claude.json")
+	}
+	return filepath.Join(env.home, ".claude.json")
 }
 
 func claudeCommands(claude, executable string) []initCommand {
@@ -74,10 +88,15 @@ func planClaudeCode(env runtimeEnv, url, token string) (*initPlan, error) {
 	return plan, nil
 }
 
-// claudeRegistration 读 Claude Code 在用户级登记的 satchel（~/.claude.json 顶层 mcpServers.satchel 的原文）；
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// claudeRegistration 读 Claude Code 在用户级登记的 satchel（登记文件顶层 mcpServers.satchel 的原文）；
 // 没有或读不懂返回 nil。只读，不改这个文件（Claude Code 自己频繁改写它）。
 func claudeRegistration(env runtimeEnv) json.RawMessage {
-	raw, err := readOptional(filepath.Join(env.home, ".claude.json"))
+	raw, err := readOptional(claudeRegistrationPath(env))
 	if err != nil || raw == nil {
 		return nil
 	}

@@ -28,6 +28,7 @@
 | `logs files list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/logs/files` |
 | `logs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/logs` |
 | `mcp status` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/mcp/status` |
+| `overview` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/overview` |
 | `schedule list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/schedule` |
 | `schedule runs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/schedule/runs` |
 | `security ban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/ban/{ip}` |
@@ -76,7 +77,7 @@
 | `db unlock` | 清除上一次迁移被中断后残留的迁移锁 |
 | `login` | 验过一把令牌后，把主控地址与它存进登录文件，之后的命令默认连那个主控 |
 | `logout` | 删掉登录文件（令牌在服务端仍然有效，吊销用 token revoke） |
-| `mcp init` | 把一个 AI runtime 接上主控：签一把令牌（或用已有的），写进它的 MCP 配置与环境变量 |
+| `mcp init` | 把一个 AI runtime 接上主控：签一把令牌（或用已有的），写进它的 MCP 配置与环境变量，并装上 skills |
 | `mcp stdio` | stdio 方式的 MCP 垫片：连上主控的 /mcp，把它的两个工具转给本地 runtime |
 | `serve` | 启动主控（只在 Linux 上） |
 | `version` | 打印版本号、commit 与构建时间 |

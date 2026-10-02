@@ -19,7 +19,8 @@ import (
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
-// TestMain 让整个包的测试碰不到开发机上真的登录文件与环境变量：用户配置目录换成临时目录，两个环境变量清掉。
+// TestMain 让整个包的测试碰不到开发机上真的登录文件、runtime 配置与环境变量：用户配置目录换成临时目录，
+// 两个连接变量与 CLAUDE_CONFIG_DIR 清掉（不能用 t.Setenv 设空值：空值是 config 错误）。
 func TestMain(m *testing.M) {
 	home, err := os.MkdirTemp("", "satchel-home")
 	if err != nil {
@@ -29,6 +30,7 @@ func TestMain(m *testing.M) {
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	os.Unsetenv(EnvServer)
 	os.Unsetenv(EnvToken)
+	os.Unsetenv(claudeConfigEnv)
 	code := m.Run()
 	os.RemoveAll(home)
 	os.Exit(code)
@@ -379,14 +381,26 @@ func TestLocalCommandsRejectConnectionFlags(t *testing.T) {
 	fp := &fakePrompt{}
 	opts := testOptions()
 	opts.Prompt = fp.prompt
-	for _, args := range [][]string{
-		{"--server", "https://panel.example.com", "admin", "reset-password", "admin", "--confirm", "admin"},
-		{"--token", "sat_x", "admin", "reset-password", "admin", "--confirm", "admin"},
-		{"--server", "https://panel.example.com", "version"},
-		{"--server", "https://panel.example.com", "db", "status"},
-		{"--token", "sat_x", "logout"},
-		{"--server", "https://panel.example.com", "serve"},
-	} {
+	// 命令表里每一条不会连主控的本地命令，--server 与 --token 各试一次（必填的位置参数随便填）。
+	var cases [][]string
+	for _, c := range opts.Table.Local() {
+		if command.IsConnectingLocal(c.Name()) {
+			continue
+		}
+		args := append([]string{}, c.Path...)
+		for _, a := range c.Args {
+			if !a.Optional {
+				args = append(args, "x")
+			}
+		}
+		cases = append(cases,
+			append([]string{"--server", "https://panel.example.com"}, args...),
+			append([]string{"--token", "sat_x"}, args...))
+	}
+	if len(cases) < 16 {
+		t.Fatalf("不连主控的本地命令应当至少 8 条：%v", cases)
+	}
+	for _, args := range cases {
 		_, stderr, code := runWith(t, opts, append(args, "--data-dir", dir, "--json")...)
 		if e := decodeError(t, stderr); code != v1.ExitUsage || e.Code != v1.CodeUsage || !strings.Contains(e.Reason, "不连主控") {
 			t.Fatalf("%v 应当是用法错误：%d %+v", args, code, e)

@@ -22,9 +22,11 @@ import (
 )
 
 // mcp init（master-mcp「mcp init 把一个 runtime 接上主控」）分三步，前一步不过不做后一步：
-// ① 检查：runtime 名、写进配置的主控地址、把要改的每个文件用占位令牌完整算一遍（解析不了、写法不支持就停，此时还没签发令牌）；
+// ① 检查：runtime 名、Claude Code 的配置目录、写进配置的主控地址、把要改的每个文件用占位令牌完整算一遍、算出要写的 skills
+// （解析不了、写法不支持、skills 的位置被占着就停，此时还没签发令牌）；
 // ② 取令牌：--use-token 从终端读一把已有的，否则经 CLI 当前的连接调 token create（人类专属，当场验证从终端读）；
-// ③ 写配置：先备份、再原子写；令牌签出来之后写失败是 partial_failure，输出带令牌明文与手工片段。--print 跳过这一步。
+// ③ 写配置与 skills：配置先备份、再原子写，然后写 skills；令牌签出来之后写配置失败是 partial_failure，输出带令牌明文与手工片段；
+// 写 skills 失败也是 partial_failure，但不再给明文（令牌已经在配置里）。--print 跳过这一步。--skills-only 只写 skills，见 mcpinit_skills.go。
 
 // placeholderToken 是预检用的占位令牌：形状与真令牌相同（sat_ 加 43 个 base64url 字符），算出来的改动与真令牌只差这一串。
 var placeholderToken = "sat_" + strings.Repeat("x", 43)
@@ -40,6 +42,8 @@ func satchelEnv(url, token string) [][2]string {
 // runtimeEnv 是写 runtime 配置要用到的本机环境；测试里换成临时目录与假命令。
 type runtimeEnv struct {
 	home       string // 用户主目录
+	claudeDir  string // Claude Code 的配置目录（resolveRuntimeEnv 填）：$CLAUDE_CONFIG_DIR，没设时 ~/.claude
+	claudeSet  bool   // claudeDir 是不是 CLAUDE_CONFIG_DIR 给的（决定用户级登记文件在哪）
 	codexHome  string // $CODEX_HOME，默认 ~/.codex
 	hermesHome string // $HERMES_HOME，默认 ~/.hermes
 	executable string // satchel 自己的绝对路径（claude mcp add 登记它）
@@ -148,6 +152,8 @@ type initOutput struct {
 	Verify   string     `json:"verify"`
 	Notes    []string   `json:"notes"`
 	Printed  bool       `json:"printed"`
+	// Skills 是 skills 的结果；--print 时只有该装的目录。
+	Skills initSkills `json:"skills"`
 }
 
 func mcpInit(ctx context.Context, inv *command.Invocation) (any, error) {
@@ -164,6 +170,12 @@ func runMCPInit(ctx context.Context, inv *command.Invocation, env runtimeEnv) (a
 	spec, ok := runtimeSpecs[name]
 	if !ok {
 		return nil, usageError("--runtime 只能是 claude-code、codex 或 hermes，得到 %q", name)
+	}
+	if inv.Bool("skills-only") {
+		return runSkillsOnly(ctx, inv, env, name)
+	}
+	if err := resolveRuntimeEnv(&env, name); err != nil {
+		return nil, err
 	}
 	conn, err := Connect(ctx)
 	if err != nil {
@@ -187,9 +199,13 @@ func runMCPInit(ctx context.Context, inv *command.Invocation, env runtimeEnv) (a
 		return nil, usageError("--name 只能是 1 到 64 个字母、数字或 . _ @ -（它同时是令牌的 runtime 标签），得到 %q", tag)
 	}
 	plaintextWarning(ctx, url, "runtime 以后会把令牌")
+	dir := skillsDir(env, name)
 	if !printOnly {
 		if _, err := spec.plan(env, url, placeholderToken); err != nil {
-			return nil, preflightError(err, spec.snippet(env, url, shownToken))
+			return nil, preflightError(err, spec.snippet(env, url, shownToken), name)
+		}
+		if _, _, err := planSkills(dir); err != nil {
+			return nil, skillsPathError(err, "mcp init 在签发令牌之前停下，没有写任何文件")
 		}
 		if err := probeMaster(ctx, url); err != nil {
 			return nil, err
@@ -213,14 +229,16 @@ func runMCPInit(ctx context.Context, inv *command.Invocation, env runtimeEnv) (a
 				*tok.ID, url, v1.AsError(err).Reason).WithNext(fmt.Sprintf("执行 satchel token revoke %d 吊销它，检查 --url 后重跑", *tok.ID))
 		}
 	}
-	out := initOutput{Runtime: name, URL: url, Token: tok, Files: []initFile{}, Commands: []string{}, Notes: []string{}}
+	out := initOutput{Runtime: name, URL: url, Token: tok, Files: []initFile{}, Commands: []string{}, Notes: []string{},
+		Skills: initSkills{Dir: dir, Written: []string{}, Unchanged: []string{}}}
 
-	// ③ 写配置。
+	// ③ 写配置与 skills。
 	if printOnly {
 		out.Printed = true
 		out.Token.Token = plain
 		out.Snippet = strings.Split(spec.snippet(env, url, plain), "\n")
 		out.Verify, out.Notes = verifyAndNotes(name)
+		out.Notes = append(out.Notes, "没有写 skills：配置加好之后执行 satchel mcp init --runtime "+name+" --skills-only，把它们装进 "+dir)
 		return out, nil
 	}
 	plan, err := spec.plan(env, url, plain)
@@ -233,26 +251,52 @@ func runMCPInit(ctx context.Context, inv *command.Invocation, env runtimeEnv) (a
 		if removed {
 			previous = plan.previous
 		}
-		return nil, writeFailure(err, tok, plain, spec.snippet(env, url, plain), out.Files, previous)
+		return nil, writeFailure(err, tok, plain, spec.snippet(env, url, plain), out.Files, previous, name)
 	}
 	out.Verify, out.Notes = plan.verify, plan.notes
+	edits, unchanged, err := planSkills(dir)
+	if err == nil {
+		out.Skills, err = writeSkills(dir, edits, unchanged)
+	}
+	if err != nil {
+		return nil, skillsFailure(err, out)
+	}
+	out.Notes = append(out.Notes, skillsNotes(name, dir)...)
 	return out, nil
 }
 
+// skillsFailure 是配置已经写好、写 skills 却失败：partial_failure，不带令牌明文（令牌已经在配置里）；state 带上配置部分的结果，
+// 免得成功时才有的提示（原来的令牌没有吊销、接入后仍是停用的）跟着丢了。
+func skillsFailure(err error, out initOutput) error {
+	e := v1.Newf(v1.CodePartialFailure, "MCP 配置已经写好，但写 skills 失败：%s", skillsErrReason(err)).
+		WithState("url", out.URL).WithState("token_id", out.Token.ID).WithState("files", out.Files).WithState("commands", out.Commands).
+		WithState("verify", out.Verify).WithState("notes", out.Notes).WithState("skills", out.Skills).
+		WithNext("修好 " + out.Skills.Dir + " 后执行 satchel mcp init --runtime " + out.Runtime + " --skills-only 装上 skills")
+	if out.Token.Issued { // --use-token 只知道令牌的 id（whoami 不给名字与预设）
+		e = e.WithState("token_name", out.Token.Name).WithState("token_preset", out.Token.Preset)
+	}
+	return e
+}
+
+// skillsOnlyHint 是配置没写成时附在 next 后面的一句：配置补好之后用 --skills-only 装 skills。
+func skillsOnlyHint(runtime string) string {
+	return "；配置补好之后执行 satchel mcp init --runtime " + runtime + " --skills-only 装上 skills"
+}
+
 // preflightError 把预检的失败包成 config：片段按行放进 state，文本形式也能直接照着加。
-func preflightError(err error, snippet string) error {
+func preflightError(err error, snippet, runtime string) error {
 	var u errUnsupported
 	if errors.As(err, &u) {
 		return v1.Newf(v1.CodeConfig, "%s：%s；mcp init 在签发令牌之前停下，没有改任何文件", u.path, u.why).
 			WithState("snippet", strings.Split(snippet, "\n")).
-			WithNext("按 state.snippet 手工加上（令牌用 satchel token create 签一把），或改好文件后重跑 satchel mcp init")
+			WithNext("按 state.snippet 手工加上（令牌用 satchel token create 签一把），或改好文件后重跑 satchel mcp init" + skillsOnlyHint(runtime))
 	}
 	return err
 }
 
 // writeFailure 是令牌已到手、写配置却失败：签发的令牌是 partial_failure（带明文，免得签了没人知道）；--use-token 的是 config。
 // previous 非空时是 runtime 里原有、已被 claude mcp remove 删掉的登记，交还给用户照着恢复。
-func writeFailure(err error, tok initToken, plain, snippet string, written []initFile, previous string) error {
+func writeFailure(err error, tok initToken, plain, snippet string, written []initFile, previous, runtime string) error {
 	reason := v1.AsError(err).Reason
 	var u errUnsupported
 	if errors.As(err, &u) {
@@ -262,11 +306,11 @@ func writeFailure(err error, tok initToken, plain, snippet string, written []ini
 	if !tok.Issued {
 		e = v1.Newf(v1.CodeConfig, "写 runtime 的配置失败：%s", reason).
 			WithState("snippet", strings.Split(strings.ReplaceAll(snippet, plain, shownToken), "\n")).WithState("written", written).
-			WithNext("按 state.snippet 手工加上")
+			WithNext("按 state.snippet 手工加上" + skillsOnlyHint(runtime))
 	} else {
 		e = v1.Newf(v1.CodePartialFailure, "令牌已签发（id %d），但写 runtime 的配置失败：%s", deref64(tok.ID), reason).
 			WithState("token", plain).WithState("snippet", strings.Split(snippet, "\n")).WithState("written", written).
-			WithNext(fmt.Sprintf("按 state.snippet 手工加上；不想要这把令牌就 satchel token revoke %d", deref64(tok.ID)))
+			WithNext(fmt.Sprintf("按 state.snippet 手工加上；不想要这把令牌就 satchel token revoke %d", deref64(tok.ID)) + skillsOnlyHint(runtime))
 	}
 	if previous != "" {
 		e = e.WithState("previous_registration", previous).
@@ -559,6 +603,9 @@ func verifyAndNotes(runtime string) (string, []string) {
 }
 
 func renderMCPInit(w io.Writer, result any) error {
+	if only, ok := result.(skillsOnlyOutput); ok {
+		return renderSkillsOnly(w, only)
+	}
 	out := result.(initOutput)
 	var b strings.Builder
 	if out.Printed {
@@ -584,6 +631,11 @@ func renderMCPInit(w io.Writer, result any) error {
 	}
 	for _, c := range out.Commands {
 		fmt.Fprintf(&b, "执行了 %s\n", c)
+	}
+	if out.Printed {
+		fmt.Fprintf(&b, "skills 该装的目录：%s（没有写）\n", out.Skills.Dir)
+	} else {
+		renderSkills(&b, out.Skills)
 	}
 	fmt.Fprintf(&b, "验证：%s\n", out.Verify)
 	for _, n := range out.Notes {

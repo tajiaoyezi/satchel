@@ -20,7 +20,7 @@ func testRuntimeEnv(t *testing.T) runtimeEnv {
 	t.Helper()
 	home := t.TempDir()
 	return runtimeEnv{
-		home: home, codexHome: filepath.Join(home, ".codex"), hermesHome: filepath.Join(home, ".hermes"), executable: "/opt/satchel/bin/satchel",
+		home: home, claudeDir: filepath.Join(home, ".claude"), codexHome: filepath.Join(home, ".codex"), hermesHome: filepath.Join(home, ".hermes"), executable: "/opt/satchel/bin/satchel",
 		lookPath: func(name string) (string, error) { return "/usr/local/bin/" + name, nil },
 		run:      func(string, ...string) ([]byte, error) { return nil, nil },
 	}

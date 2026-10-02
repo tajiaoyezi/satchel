@@ -49,6 +49,7 @@ import (
 	svcdatabase "github.com/satchel/satchel/internal/service/database"
 	"github.com/satchel/satchel/internal/service/jobs"
 	svclogs "github.com/satchel/satchel/internal/service/logs"
+	svcoverview "github.com/satchel/satchel/internal/service/overview"
 	"github.com/satchel/satchel/internal/service/schedule"
 	svcsecurity "github.com/satchel/satchel/internal/service/security"
 	svcsettings "github.com/satchel/satchel/internal/service/settings"
@@ -274,6 +275,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		bindings[name] = h
 	}
 	for name, h := range updates.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range svcoverview.New().Bindings() {
 		bindings[name] = h
 	}
 	if err := table.CheckBindings(bindings); err != nil {
