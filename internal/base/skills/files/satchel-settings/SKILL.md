@@ -58,11 +58,19 @@ description: "看与改系统设置时用：日常运维档的设置、写前快
 
 ## 主控地址与门：要请人改
 
-这两组是人类专属，令牌一律 `human_required`，写操作也不存快照。
+这两组是人类专属，令牌一律 `human_required`，写操作也不存快照。两组也可以请人用管理员账号登录网页，在「系统设置」页上改，当场验证在网页上输入。
 
 - 主控地址与订阅域名：这一步只能由人做：请用户在主控本机、用 root 或运行主控的用户、在没有设 `SATCHEL_TOKEN` 与 `SATCHEL_SERVER`、也没用 `satchel login` 存过登录文件的终端里（不是 AI runtime 的终端）执行 `sudo satchel settings master-url set --url https://panel.example.com --resource-version <N> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署把开头的 `sudo satchel` 换成 `docker compose exec satchel satchel`。订阅域名用 `--subscription-url`；值是干净的 `https://` 或 `http://` 地址（只有协议、域名与可选的端口），空串表示清掉。
 - 门（关闭公网访问、静默模式、登录限流与封禁的参数、Turnstile、反代登记）：这一步只能由人做：请用户在同样的终端里执行 `sudo satchel settings gates set --set silent_mode=true --resource-version <N> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署同样换成 `docker compose exec satchel satchel`。写完下一个请求就按新值判定。
 - 打开关闭公网访问或静默模式之前提醒人：经 TCP 的网页、远程 CLI 与 MCP 可能马上进不去，主控本机的 CLI 不受影响。被挡在外面时见 `satchel-troubleshoot`。
+
+## Turnstile 的测试配置
+
+门这一组的 `turnstile_site_key` 与 `turnstile_secret_key` 填好之后，可以核对它们配得对不对：`satchel settings turnstile test --response <token>`。
+
+- `<token>` 是网页上 Turnstile 组件给出的一次性 token，AI 拿不到；通常请人在网页的「系统设置」页点「测试配置」，由页面完成这一步。
+- 输出里 `success` 是核对通过没有，`error_codes` 是 Cloudflare 给的原因，`hostname` 是签发 token 的站点。
+- 两个 key 没都填是 `conflict`；连不上 Cloudflare 是 `unavailable`。它只核对，不改设置。
 
 ## 注意
 

@@ -62,6 +62,7 @@ description: "用 Satchel 之前先读：开局看总览与身份，怎么学命
 
   这一步只能由人做：请用户在主控本机、用 root 或运行主控的用户、在没有设 `SATCHEL_TOKEN` 与 `SATCHEL_SERVER`、也没用 `satchel login` 存过登录文件的终端里（不是 AI runtime 的终端）执行 `sudo satchel token revoke <id> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署把开头的 `sudo satchel` 换成 `docker compose exec satchel satchel`。
 
+- 网页上有入口的人类专属命令，也可以请人用管理员账号登录网页、在那一页上做，当场验证在网页上输入：令牌的签发、改与吊销在「API 令牌」页，主控地址与门在「系统设置」页。没有网页入口的（例如备份的下载与恢复、数据库迁移、IP 封禁与解封）只写上面主控本机的做法。
 - 这个用户以前用 `satchel login` 存过登录文件的，先请人执行 `satchel logout`：带着令牌就不是本机管理员了。
 - 例外：`account set-password`、两步验证与恢复码这几条命令在主控本机做不了，见 `satchel-access`。
 - `satchel explain` 里有 `password` 类型参数的命令（例如 `database test`、`setup init`）要在终端里输入密码：AI 的 shell 没有终端，MCP 上也传不了密码，同样请人来执行。

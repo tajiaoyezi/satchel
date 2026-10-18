@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -99,6 +102,45 @@ func TestOpsEndToEnd(t *testing.T) {
 			if status, fields, _ := carol.call("GET", base+path, "", nil); status != 403 || str(fields["code"]) != "forbidden" {
 				t.Fatalf("普通用户 GET %s 应当 403：%d %v", path, status, fields)
 			}
+		}
+	})
+}
+
+// master-logs「三个入口都能看旧文件」：logs list 的 --file 登记的是日志文件名（字符串），CLI、REST、MCP 都照常解析；
+// 出日志目录的名字三个入口都是 not_found（双库）。
+func TestLogsFileThreeEntrances(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		isolateHome(t)
+		h := start(t, bdb)
+		base := h.tcpURL
+		old := "satchel-2026-09-25T08-00-00.000.log"
+		line := `time=2026-09-25T08:00:00.000Z level=INFO msg=旧文件里的一行` + "\n"
+		if err := os.WriteFile(filepath.Join(h.dataDir, db.LogsDir, old), []byte(line), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		admin := setupAdmin(t, base)
+		tok := issueToken(t, admin, base, "readonly")
+		mcp := mcpOverTCP(t, base, tok)
+
+		if lines, _ := h.cliPage("logs", "list", "--file", old); len(lines) != 1 || lines[0]["msg"] != "旧文件里的一行" {
+			t.Fatalf("CLI 应当读到旧文件：%v", lines)
+		}
+		if status, fields, _ := admin.call("GET", base+"/api/v1/logs?file="+old, "", nil); status != 200 || !strings.Contains(string(fields["items"]), "旧文件里的一行") {
+			t.Fatalf("REST 应当读到旧文件：%d %v", status, fields)
+		}
+		if text, isErr := runTool(t, mcp, "logs", "list", "--file", old); isErr || !strings.Contains(text, "旧文件里的一行") {
+			t.Fatalf("MCP 应当读到旧文件：%v %s", isErr, text)
+		}
+
+		bad := "../satchel.db"
+		if _, stderr, code := h.cli("logs", "list", "--file", bad, "--json"); code != 5 || !strings.Contains(stderr, `"not_found"`) {
+			t.Fatalf("CLI 出日志目录应当 not_found：%d %s", code, stderr)
+		}
+		if status, fields, _ := admin.call("GET", base+"/api/v1/logs?file="+url.QueryEscape(bad), "", nil); status != 404 || str(fields["code"]) != "not_found" {
+			t.Fatalf("REST 出日志目录应当 not_found：%d %v", status, fields)
+		}
+		if text, isErr := runTool(t, mcp, "logs", "list", "--file", bad); !isErr || !strings.Contains(text, `"not_found"`) {
+			t.Fatalf("MCP 出日志目录应当 not_found：%v %s", isErr, text)
 		}
 	})
 }

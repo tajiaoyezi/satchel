@@ -35,10 +35,12 @@ func New() *Client {
 	return &Client{URL: SiteVerifyURL, HTTP: &http.Client{Timeout: Timeout}}
 }
 
-// Result 是一次核对的结果：Success 为假时 ErrorCodes 是 Cloudflare 给的原因（如 invalid-input-response）。
+// Result 是一次核对的结果：Success 为假时 ErrorCodes 是 Cloudflare 给的原因（如 invalid-input-response）；
+// Hostname 是 Cloudflare 报的签发这个 token 的站点（测试配置时用来诊断 site key 配在哪个域名上）。
 type Result struct {
 	Success    bool
 	ErrorCodes []string
+	Hostname   string
 }
 
 // Verify 把 token 连同 secret 与来源 IP（为空时不带）交给 siteverify 核对。服务不可用（连不上、超时、不是 2xx、
@@ -64,6 +66,7 @@ func (c *Client) Verify(ctx context.Context, secret, token, remoteIP string) (Re
 	var body struct {
 		Success    *bool    `json:"success"`
 		ErrorCodes []string `json:"error-codes"`
+		Hostname   string   `json:"hostname"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&body); err != nil {
 		return Result{}, unavailable(err)
@@ -71,7 +74,7 @@ func (c *Client) Verify(ctx context.Context, secret, token, remoteIP string) (Re
 	if body.Success == nil {
 		return Result{}, unavailable(fmt.Errorf("siteverify 的回应里没有 success"))
 	}
-	return Result{Success: *body.Success, ErrorCodes: body.ErrorCodes}, nil
+	return Result{Success: *body.Success, ErrorCodes: body.ErrorCodes, Hostname: body.Hostname}, nil
 }
 
 func unavailable(cause error) *v1.Error {

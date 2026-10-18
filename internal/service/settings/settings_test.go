@@ -328,7 +328,7 @@ func TestRules(t *testing.T) {
 			"traffic_check_interval": "9", "speed_collect_interval": "0", "dashboard_refresh_interval_ms": "500", "probe_disguise_ping_interval_ms": "1999",
 			"probe_disguise_theme": "bad name!", "notify_traffic_threshold_percent": "0", "notify_package_expiring_days": "366",
 			"proxy_groups_source_url": "ftp://x", "login_wallpaper": strings.Repeat("a", 2001), "probe_disguise_logo": "logo.png",
-			"sub_rate_limit": "0", "user_quota_subscribe": "-1", "silent_mode_timeout": "0",
+			"branding_logo_url": "javascript:alert(1)", "sub_rate_limit": "0", "user_quota_subscribe": "-1", "silent_mode_timeout": "0",
 		}
 		for name, value := range bad {
 			_, err := f.set(map[string]any{name: value}, 1)
@@ -350,7 +350,7 @@ func TestRules(t *testing.T) {
 			"subscription_output_format": "json", "default_theme": "premium", "heartbeat_interval": "5", "traffic_collect_interval": "10",
 			"dashboard_refresh_interval_ms": "1000", "probe_disguise_ping_interval_ms": "300000", "probe_disguise_theme": "", "notify_traffic_threshold_percent": "100",
 			"proxy_groups_source_url": "https://example.com/groups.yaml", "probe_disguise_logo": "data:image/png;base64,AAAA", "user_quota_subscribe": "0",
-			"probe_disguise_ping_targets": `[{"host":"1.1.1.1","type":"icmp"}]`,
+			"branding_logo_url": "https://example.com/logo.png", "probe_disguise_ping_targets": `[{"host":"1.1.1.1","type":"icmp"}]`,
 		}
 		obj = f.mustSet(good, 1)
 		if obj.Spec.DefaultTheme != "premium" || obj.Spec.SubscriptionOutputFormat != "json" || obj.Spec.HeartbeatInterval != 5 {

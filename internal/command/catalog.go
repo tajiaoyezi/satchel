@@ -213,6 +213,10 @@ func settingsCommands() []*Command {
 				{Name: "set", Type: TypeObject, Kind: v1.Kind("SystemSettings"), Description: "要改的字段与值，只收门这一组：master_local_only、silent_mode、silent_mode_timeout、probe_disguise_block_login、brute_force_enabled、brute_force_max_failures、brute_force_window_minutes、brute_force_block_minutes、login_rate_max_attempts、login_rate_window_minutes、login_rate_lock_minutes、skip_local_ip、turnstile_site_key、turnstile_secret_key、trusted_proxies"},
 				version,
 			}},
+		// Turnstile 的测试配置（master-login-protection）：只核对、不改设置。flag 不叫 token（那是 CLI 的根 flag），
+		// 用 siteverify 接口里这个值的名字 response。
+		{Path: []string{"settings", "turnstile", "test"}, Summary: "用已保存的 secret 核对网页上 Turnstile 组件给出的 token（只核对，不改设置；只对管理员开放）", Class: ClassAction,
+			Flags: []Flag{{Name: "response", Type: TypeString, Secret: true, Description: "Turnstile 组件拿到的一次性 token"}}},
 	}
 }
 

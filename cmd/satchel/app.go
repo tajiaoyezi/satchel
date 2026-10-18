@@ -293,6 +293,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	opts.Remote = func(string) command.Runner { return runner }
 	opts.ServerSide = true
 
+	// 网页（master-web）：/api/、/mcp、/public/ 之外的路径；别的方法交回 notFoundPath。
+	console := web.NewHandler(webFiles(), http.HandlerFunc(notFoundPath))
+
 	mux := http.NewServeMux()
 	mounts := []struct {
 		pattern string
@@ -301,7 +304,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		{command.APIPrefix, rest.NewHandler(table, runner, identity)},
 		{mcp.Path, mcp.NewHandler(opts)},
 		{web.PublicPrefix, web.PublicHandler(filepath.Join(dataDir, db.PublicDir))},
-		{"/", http.HandlerFunc(notFoundPath)},
+		{"/", console},
 	}
 	var patterns []string
 	for _, m := range mounts {
@@ -323,6 +326,8 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		identity.SetTurnstileKeys(g.TurnstileSiteKey, g.TurnstileSecretKey)
 		guard.Configure(svcsecurity.Config{Enabled: g.BruteForceEnabled, MaxFailures: g.BruteForceMaxFailures, Window: g.BruteForceWindow,
 			Block: g.BruteForceBlock, SkipLocalIP: g.SkipLocalIP})
+		b := s.Branding()
+		console.SetBranding(web.Branding{SiteTitle: b.SiteTitle, BrandTitle: b.BrandTitle, LogoURL: b.LogoURL, LoginWallpaper: b.LoginWallpaper, DefaultTheme: b.DefaultTheme})
 	}
 	current, err := settingsRepo.Load(context.Background())
 	if err != nil {
@@ -338,6 +343,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		gate: gates, guard: guard, identity: identity, sched: sched, schedules: schedules, jobs: jobsSvc, backups: backups, writeGate: writeGate, databases: databases}
 	return a, nil
 }
+
+// webFiles 是编进二进制的网页产物；测试里换成一份假的。
+var webFiles = web.Dist
 
 // notFoundPath 是顶层没有登记的路径的回应（四字段的 not_found）。
 func notFoundPath(w http.ResponseWriter, r *http.Request) {

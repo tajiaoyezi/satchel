@@ -108,6 +108,26 @@ func parsePrefix(s string) (netip.Prefix, bool) {
 	return netip.PrefixFrom(a, a.BitLen()), true
 }
 
+// Branding 是网页首屏注入的品牌与外观字段（master-web「首屏注入」）：登录页本来就显示它们。
+type Branding struct {
+	SiteTitle      string
+	BrandTitle     string
+	LogoURL        string
+	LoginWallpaper string
+	DefaultTheme   string
+}
+
+// Branding 取出首屏注入的五个字段。
+func (st *State) Branding() Branding {
+	return Branding{
+		SiteTitle:      st.text("branding_site_title"),
+		BrandTitle:     st.text("branding_brand_title"),
+		LogoURL:        st.text("branding_logo_url"),
+		LoginWallpaper: st.text("login_wallpaper"),
+		DefaultTheme:   st.text("default_theme"),
+	}
+}
+
 // Gates 取出门这一组的设置。库里的值在写入时已过规则；万一是坏的（只可能是导入或手改），数值按默认值取、
 // trusted_proxies 按「没有登记」取（不信任何请求头），并记一条 warn。
 func (st *State) Gates() Gates {

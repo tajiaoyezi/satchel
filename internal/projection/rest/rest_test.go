@@ -26,6 +26,7 @@ func testTable(t *testing.T) *command.Table {
 			Flags: []command.Flag{{Name: "purge", Type: command.TypeBool}, {Name: "spec", Type: command.TypeFile}}},
 		&command.Command{Path: []string{"custom"}, Summary: "s", Class: command.ClassRead, REST: &command.REST{Method: "GET", Path: "/api/v1/my/custom"}},
 		&command.Command{Path: []string{"version"}, Summary: "s", Class: command.ClassLocal},
+		&command.Command{Path: []string{"demo", "logs"}, Summary: "s", Class: command.ClassRead, Flags: []command.Flag{{Name: "file", Type: command.TypeString}}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +133,7 @@ func TestDecodeQuery(t *testing.T) {
 		{"/api/v1/audit?n=1&n=2", "只能给一次"},
 		{"/api/v1/audit?f=/etc/passwd", "文件"},
 		{"/api/v1/audit?filename=x", "文件"},
+		{"/api/v1/audit?file=/etc/passwd", "文件"},
 	}
 	for _, tc := range cases {
 		code, fields := do(t, h, "GET", tc.path, "", nil)
@@ -148,6 +150,18 @@ func TestDecodeQuery(t *testing.T) {
 	}
 	if e.last.Flags["actor"] != "root" || e.last.Flags["n"] != 7 || strings.Join(e.last.Flags["tag"].([]string), ",") != "a,b" || e.last.Page.Cursor != "c1" || e.last.Page.Limit != 0 {
 		t.Fatalf("查询参数解码不对：%+v %+v", e.last.Flags, e.last.Page)
+	}
+}
+
+// master-rest-api「文件路径参数」：命令把 file 登记成字符串时（如 logs list 的日志文件名）照常解析，不当成文件路径。
+func TestFileNamedFlagOfOtherType(t *testing.T) {
+	e := &echo{}
+	h := NewHandler(testTable(t), e, nil)
+	if code, fields := do(t, h, "GET", "/api/v1/demo/logs?file=old-1.log", "", nil); code != 200 || e.last.Flags["file"] != "old-1.log" {
+		t.Fatalf("登记成字符串的 file 应当照常解析：%d %v %+v", code, fields, e.last)
+	}
+	if code, fields := do(t, h, "GET", "/api/v1/demo/logs?filename=x", "", nil); code != 400 || !strings.Contains(errorOf(t, fields).Reason, "文件") {
+		t.Fatalf("没登记的 filename 仍算文件路径：%d %v", code, fields)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/satchel/satchel/internal/base/captcha"
 	"github.com/satchel/satchel/internal/base/db/dbtest"
+	"github.com/satchel/satchel/internal/command"
 	coresecurity "github.com/satchel/satchel/internal/core/security"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
@@ -29,7 +30,7 @@ func (f *fakeCaptcha) Verify(_ context.Context, secret, token, remoteIP string) 
 	if f.err != nil {
 		return captcha.Result{}, f.err
 	}
-	return captcha.Result{Success: f.pass, ErrorCodes: f.codes}, nil
+	return captcha.Result{Success: f.pass, ErrorCodes: f.codes, Hostname: "panel.example.com"}, nil
 }
 
 func withCaptcha(t *testing.T, bdb *bun.DB) (*Service, *fakeCaptcha) {
@@ -121,6 +122,67 @@ func TestTurnstileOrderAndSocket(t *testing.T) {
 		f.pass = false
 		if _, err := s.Login(overSocket(), "admin", password, false, ""); err != nil {
 			t.Fatalf("经 unix socket 的登录不要验证码：%v", err)
+		}
+	})
+}
+
+// master-login-protection「测试配置」：通过与不通过都照样返回结果；用的是已保存的 secret；不写安全事件。
+func TestTurnstileTestCommand(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		s, f := withCaptcha(t, bdb)
+		admin := v1.WithIdentity(from("198.51.100.7"), v1.LocalAdmin("root"))
+		run := func(ctx context.Context, response string) (TurnstileTest, error) {
+			out, err := s.turnstileTest(ctx, &command.Invocation{Flags: map[string]any{"response": response}})
+			if err != nil {
+				return TurnstileTest{}, err
+			}
+			return out.(TurnstileTest), nil
+		}
+		res, err := run(admin, "tok-good")
+		if err != nil || !res.Success || len(res.ErrorCodes) != 0 || res.ErrorCodes == nil || res.Hostname != "panel.example.com" {
+			t.Fatalf("通过时：%+v %v", res, err)
+		}
+		if f.secret != "0x4AAAAAAAsecretforsatchel" || f.ip != "198.51.100.7" {
+			t.Fatalf("应当用已保存的 secret 与来源 IP：%q %q", f.secret, f.ip)
+		}
+		f.pass, f.codes = false, []string{"invalid-input-response"}
+		if res, err = run(admin, "tok-bad"); err != nil || res.Success || len(res.ErrorCodes) != 1 || res.ErrorCodes[0] != "invalid-input-response" {
+			t.Fatalf("不通过时照样返回结果：%+v %v", res, err)
+		}
+		if n := len(securityEvents(t, bdb, coresecurity.EventFilter{})); n != 0 {
+			t.Fatalf("测试配置不写安全事件：%d", n)
+		}
+		// 经 unix socket 不带来源 IP。
+		if _, err = run(v1.WithIdentity(overSocket(), v1.LocalAdmin("root")), "tok"); err != nil || f.ip != "" {
+			t.Fatalf("经 socket 不带 IP：%v %q", err, f.ip)
+		}
+	})
+}
+
+// master-login-protection「测试配置的前提与权限」：两个 key 没都填是 conflict；连不上是 unavailable；普通用户 forbidden；
+// 没给 response 是 bad_request。
+func TestTurnstileTestPreconditions(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		s, f := withCaptcha(t, bdb)
+		admin := v1.WithIdentity(from("198.51.100.7"), v1.LocalAdmin("root"))
+		inv := func(response string) *command.Invocation {
+			return &command.Invocation{Flags: map[string]any{"response": response}}
+		}
+		user := v1.WithIdentity(from("198.51.100.7"), v1.Identity{Actor: "carol", ActorKind: v1.ActorUser, Role: v1.RoleUser, Scopes: []v1.Scope{v1.ScopeRead, v1.ScopeOperate}})
+		if _, err := s.turnstileTest(user, inv("x")); v1.AsError(err).Code != v1.CodeForbidden {
+			t.Fatalf("普通用户应当 forbidden：%v", err)
+		}
+		if _, err := s.turnstileTest(admin, inv("")); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Fatalf("没给 response 应当 bad_request：%v", err)
+		}
+		s.SetTurnstileKeys("0x4AAAAAAAsitekeyforsatchel", "")
+		if _, err := s.turnstileTest(admin, inv("x")); v1.AsError(err).Code != v1.CodeConflict {
+			t.Fatalf("只填一个 key 应当 conflict：%v", err)
+		}
+		s.SetTurnstileKeys("0x4AAAAAAAsitekeyforsatchel", "0x4AAAAAAAsecretforsatchel")
+		f.err = v1.New(v1.CodeUnavailable, "连不上")
+		if _, err := s.turnstileTest(admin, inv("x")); v1.AsError(err).Code != v1.CodeUnavailable {
+			t.Fatalf("连不上应当 unavailable：%v", err)
 		}
 	})
 }

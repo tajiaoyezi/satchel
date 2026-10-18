@@ -290,10 +290,10 @@ func noTerminal(c *command.Command, err error) error {
 	}
 	if c.HumanOnly {
 		return v1.Wrap(v1.CodeHumanRequired, c.Name()+" 是只有人能做的操作，要在终端里当场验证身份；当前没有终端", err).
-			WithNext("在有终端的会话里执行，或在网页上操作")
+			WithNext("在有终端的会话里执行" + orWeb(c.Name()))
 	}
 	return v1.Wrap(v1.CodeBadRequest, c.Name()+" 要从终端读密码，当前没有终端", err).
-		WithNext("在有终端的会话里执行，或在网页上操作")
+		WithNext("在有终端的会话里执行" + orWeb(c.Name()))
 }
 
 // argsValidator 按表校验位置参数个数，文案点名缺的或多余的那个。

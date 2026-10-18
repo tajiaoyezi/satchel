@@ -16,6 +16,7 @@ import (
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/base/selfupdate"
 	"github.com/satchel/satchel/internal/command"
+	"github.com/satchel/satchel/internal/projection/web"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 	"github.com/satchel/satchel/pkg/release"
 )
@@ -23,11 +24,31 @@ import (
 // 本地命令的处理函数与文本渲染：version、db migrate / status / unlock、__verify。
 // 它们不经主控：db 直接调 base/db（迁移没有业务逻辑，不为它造 service），serve 起主控时用同一个函数。
 
+// versionInfo 是 version 的输出：构建信息，加上编进二进制的网页版本（satchel-web 的 tag，master-web；没有网页时为空）。
+type versionInfo struct {
+	buildinfo.Info
+	Web string `json:"web"`
+}
+
+// webVersion 返回编进二进制的网页版本；测试里换掉它。
+var webVersion = func() string {
+	if m, err := web.Embedded(); err == nil && m != nil {
+		return m.Version
+	}
+	return ""
+}
+
 func registerBuiltins(opts *Options) {
-	opts.Local["version"] = func(context.Context, *command.Invocation) (any, error) { return buildinfo.Get(), nil }
+	opts.Local["version"] = func(context.Context, *command.Invocation) (any, error) {
+		return versionInfo{Info: buildinfo.Get(), Web: webVersion()}, nil
+	}
 	opts.Renderers["version"] = func(w io.Writer, result any) error {
-		info := result.(buildinfo.Info)
-		_, err := fmt.Fprintf(w, "satchel %s\ncommit: %s\nbuilt: %s\n", info.Version, info.Commit, info.Date)
+		info := result.(versionInfo)
+		webLine := info.Web
+		if webLine == "" {
+			webLine = "（没有编进网页）"
+		}
+		_, err := fmt.Fprintf(w, "satchel %s\ncommit: %s\nbuilt: %s\nweb: %s\n", info.Version, info.Commit, info.Date, webLine)
 		return err
 	}
 	opts.Local["db migrate"] = dbMigrate

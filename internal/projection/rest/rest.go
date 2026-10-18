@@ -143,17 +143,7 @@ func fileFlagError(name string) *v1.Error {
 }
 
 func isFileFlag(c *command.Command, name string) bool {
-	for _, f := range c.FileFlags() {
-		if f == name {
-			return true
-		}
-	}
-	for _, f := range command.FilePathFlags {
-		if f == name {
-			return true
-		}
-	}
-	return false
+	return c.IsFilePathFlag(name)
 }
 
 func decodeQuery(c *command.Command, r *http.Request, inv *command.Invocation) error {

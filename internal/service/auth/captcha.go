@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/satchel/satchel/internal/base/captcha"
+	"github.com/satchel/satchel/internal/command"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -86,4 +87,44 @@ func (s *Service) checkCaptcha(ctx context.Context, token string) error {
 			WithNext("刷新登录页，重新完成验证码后再提交")
 	}
 	return nil
+}
+
+// TurnstileTest 是 settings turnstile test 的输出：核对通过没有、Cloudflare 给的错误码与签发 token 的站点。
+type TurnstileTest struct {
+	Success    bool     `json:"success"`
+	ErrorCodes []string `json:"error_codes"`
+	Hostname   string   `json:"hostname"`
+}
+
+// turnstileTest 是 Turnstile 的测试配置（master-login-protection）：用已保存的 secret 核对网页上组件给出的 token。
+// 只对管理员开放；两个 key 没都填是 conflict；连不上 Cloudflare 是 unavailable。核对不通过照样成功返回结果；
+// 它不改设置，不计登录失败，不写安全事件。
+func (s *Service) turnstileTest(ctx context.Context, inv *command.Invocation) (any, error) {
+	if !v1.IdentityFrom(ctx).IsAdmin() {
+		return nil, v1.New(v1.CodeForbidden, "Turnstile 的测试配置只对管理员开放")
+	}
+	v, site, secret := s.turnstile.snapshot()
+	if v == nil || site == "" || secret == "" {
+		return nil, v1.New(v1.CodeConflict, "Turnstile 没有启用：turnstile_site_key 与 turnstile_secret_key 两个都填了才能测试").
+			WithNext("先用 satchel settings gates set 保存两个 key，再测试")
+	}
+	token := strings.TrimSpace(inv.String("response", ""))
+	if token == "" {
+		return nil, v1.New(v1.CodeBadRequest, "缺 --response：要测试的是 Turnstile 组件拿到的 token").
+			WithNext("在网页的系统设置页点「测试配置」，由页面上的组件拿到 token")
+	}
+	remote := v1.RemoteFrom(ctx)
+	ip := ""
+	if !remote.Socket {
+		ip = remote.IP
+	}
+	res, err := v.Verify(ctx, secret, token, ip)
+	if err != nil {
+		return nil, err
+	}
+	codes := res.ErrorCodes
+	if codes == nil {
+		codes = []string{}
+	}
+	return TurnstileTest{Success: res.Success, ErrorCodes: codes, Hostname: res.Hostname}, nil
 }

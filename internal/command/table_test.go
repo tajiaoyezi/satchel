@@ -34,7 +34,7 @@ func TestCatalog(t *testing.T) {
 		"token create": ClassAction, "token update": ClassAction, "token revoke": ClassAction,
 		"security ban": ClassAction, "security unban": ClassAction,
 		"settings set": ClassMasterSettings, "settings rollback": ClassMasterSettings, "settings master-url set": ClassMasterSettings,
-		"settings gates set": ClassMasterSettings,
+		"settings gates set": ClassMasterSettings, "settings turnstile test": ClassAction,
 	}
 	if len(table.All()) != len(want) {
 		t.Fatalf("目录里应当恰好 %d 条命令，得到 %v", len(want), table.Names())

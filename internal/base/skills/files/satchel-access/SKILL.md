@@ -17,7 +17,7 @@ description: "管令牌、AI 接入、账号与 IP 封禁时用：看令牌与�
 
 ## 签发、改权限、吊销：要请人做
 
-这三条是人类专属，令牌不能签令牌，也不能改或吊销令牌。
+这三条是人类专属，令牌不能签令牌，也不能改或吊销令牌。三条也可以请人用管理员账号登录网页，在「API 令牌」页上做，当场验证在网页上输入；网页上新令牌的明文同样只显示一次。
 
 - 签发：这一步只能由人做：请用户在主控本机、用 root 或运行主控的用户、在没有设 `SATCHEL_TOKEN` 与 `SATCHEL_SERVER`、也没用 `satchel login` 存过登录文件的终端里（不是 AI runtime 的终端）执行 `sudo satchel token create --name <名字> --preset ops --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署把开头的 `sudo satchel` 换成 `docker compose exec satchel satchel`。
   - 新令牌默认只读、不过期；`--expires-in 720h` 设过期时间，`--secrets` 打开密钥读取。
@@ -57,7 +57,7 @@ description: "管令牌、AI 接入、账号与 IP 封禁时用：看令牌与�
 - 看自己账号的状态（角色、两步验证、剩余恢复码、活动会话数）：`satchel account show`。令牌身份看到的是签发者的账号；本机管理员不是账号，会得到 `bad_request`。剩余恢复码不足两枚时有 `recovery_codes_low` 提示，转告人。
 - 改密码、两步验证与恢复码这几条只能由账号本人登录之后做：`satchel account set-password`、`satchel account totp setup`、`satchel account totp confirm --code <验证码>`、`satchel account totp disable`、`satchel account recovery-codes regenerate`。
   - 令牌做不了（`human_required`）；本机管理员不是账号，主控本机的终端也做不了。
-  - 网页随 m1-11 交付；在那之前只能用账号的登录会话调 REST。请人自己操作。
+  - 请账号本人登录网页，在「账号」页上做，当场验证在网页上输入。
 - 管理员忘了密码见 `satchel-troubleshoot`。
 
 ## IP 封禁

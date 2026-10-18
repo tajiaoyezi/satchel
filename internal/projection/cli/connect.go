@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/satchel/satchel/internal/command"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -119,12 +120,21 @@ func humanReachable(what string, conn Connection) error {
 	switch {
 	case conn.Token != "":
 		return v1.Newf(v1.CodeHumanRequired, "%s 是只有人能做的操作，CLI 现在带着令牌，令牌一律不能做；没有问密码", what).
-			WithNext("在主控本机不带令牌执行（去掉 --token 与环境变量 " + EnvToken + "，登录过的先 satchel logout），或在网页上操作")
+			WithNext("在主控本机不带令牌执行（去掉 --token 与环境变量 " + EnvToken + "，登录过的先 satchel logout）" + orWeb(what))
 	case conn.Server != "":
 		return v1.Newf(v1.CodeHumanRequired, "%s 是只有人能做的操作，远程 CLI 没有人的身份（TCP 上只认令牌）；没有问密码", what).
-			WithNext("在主控本机经 socket 执行（去掉 --server 与环境变量 " + EnvServer + "，登录过的先 satchel logout），或在网页上操作")
+			WithNext("在主控本机经 socket 执行（去掉 --server 与环境变量 " + EnvServer + "，登录过的先 satchel logout）" + orWeb(what))
 	}
 	return nil
+}
+
+// orWeb 是错误提示末尾指向网页的半句「，或在网页的「<页面名>」页操作」：只有页面清单里有提供这条命令的页面时才有
+// （master-web「错误提示里的网页入口」），what 不是命令路径时（如「mcp init 签发令牌」）为空串。
+func orWeb(what string) string {
+	if hint := command.WebHint(what, "操作"); hint != "" {
+		return "，或" + hint
+	}
+	return ""
 }
 
 // resolveConnection 按第 05 章的顺序取 server 与令牌：根 flag、环境变量、登录文件，各取第一个有的。

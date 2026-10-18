@@ -71,8 +71,8 @@ func TestCurrentCommandsCovered(t *testing.T) {
 			visible++
 		}
 	}
-	if visible != 55 || !used["overview"] || !used["token create"] || !used["serve"] {
-		t.Fatalf("应当覆盖 55 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
+	if visible != 56 || !used["overview"] || !used["token create"] || !used["serve"] {
+		t.Fatalf("应当覆盖 56 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
 	}
 	extra := command.MustNew(append(command.Catalog().All(), &command.Command{Path: []string{"demo", "ping"}, Summary: "测试", Class: command.ClassRead})...)
 	if missing := Coverage(extra, refs); strings.Join(missing, ",") != "demo ping" {

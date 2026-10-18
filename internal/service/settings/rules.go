@@ -44,8 +44,11 @@ var rules = map[string]func(v any) error{
 	// Satchel 新增的反向代理登记（第 06 章）：JSON 数组、至多 64 项，每项恰好含 cidr 与 header（master-settings）。
 	"trusted_proxies": trustedProxies,
 	// handler/system_settings.go:1384-1390 只限 2000 字节、不看形状；Satchel 加一条与探针 logo 相同的形状规则，
-	// 免得 javascript: 之类进了库、m1-11 登录页当 URL 用时变成存储型 XSS。
+	// 免得 javascript: 之类进了库、网页登录页当图片地址用时变成存储型 XSS。
 	"login_wallpaper": imageRef(2000),
+	// handler/branding.go:128-129 只去掉首尾空白、不看形状也不限长；它与登录壁纸一样进首屏注入、被网页当图片地址用，
+	// Satchel 加同样的形状规则与 2000 字节上限。
+	"branding_logo_url": imageRef(2000),
 	// handler/system_settings.go:638-666：<= 128KB，非空须以 /、http://、https:// 或 data:image/ 开头。
 	"probe_disguise_logo": imageRef(128 * 1024),
 	// Satchel 新增：mmwx 收明文 token 自己算 SHA-256（handler/system_settings.go:616-624），Satchel 由客户端算好交上来，

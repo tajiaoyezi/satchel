@@ -16,3 +16,7 @@
 /.env
 /data/
 /postgres-data/
+
+# 网页产物：tools/web/build.sh 按固定 tag 构建后放进来，不提交，目录里只留 .gitkeep
+/internal/projection/web/dist/*
+!/internal/projection/web/dist/.gitkeep

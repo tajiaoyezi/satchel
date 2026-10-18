@@ -151,15 +151,23 @@ func precheck(opts cli.Options, args []string) error {
 		return v1.Newf(v1.CodeBadRequest, "%s 是本地命令，只在主控本机的 CLI 里有，不经主控、MCP 上不可用", cmd.Name())
 	}
 	if cmd.Anonymous {
-		return v1.Newf(v1.CodeBadRequest, "%s 是初始化向导的命令，只给人在网页或主控本机的 CLI 上用，MCP 上不可用", cmd.Name())
+		where := "主控本机的 CLI"
+		if _, ok := command.WebPage(cmd.Name()); ok {
+			where = "网页或主控本机的 CLI"
+		}
+		return v1.Newf(v1.CodeBadRequest, "%s 是初始化向导的命令，只给人在%s上用，MCP 上不可用", cmd.Name(), where)
 	}
 	if cmd.HumanOnly {
 		return v1.Newf(v1.CodeHumanRequired, "%s 是只有人能做的操作，MCP 上不可用", cmd.Name()).
-			WithNext("在网页或主控本机的 CLI 上由管理员本人执行")
+			WithNext(command.HumanOnlyNext(cmd.Name()))
 	}
 	// 下载与上传的是文件本身：MCP 的输出恒为 JSON 文本、输入只有命令数组，放不下文件（上传类的 --file 在上面已按文件路径拒绝）。
 	if cmd.Shape == command.ShapeDownload || cmd.Shape == command.ShapeUpload {
-		return v1.Newf(v1.CodeBadRequest, "%s 收发的是文件本身，只能经 CLI 或网页做，MCP 上不可用", cmd.Name())
+		where := "CLI"
+		if _, ok := command.WebPage(cmd.Name()); ok {
+			where = "CLI 或网页"
+		}
+		return v1.Newf(v1.CodeBadRequest, "%s 收发的是文件本身，只能经%s做，MCP 上不可用", cmd.Name(), where)
 	}
 	return nil
 }
@@ -178,16 +186,12 @@ func flagName(a string) (string, bool) {
 }
 
 func isFilePathFlag(name string, cmd *command.Command) bool {
+	if cmd != nil {
+		return cmd.IsFilePathFlag(name)
+	}
 	for _, f := range command.FilePathFlags {
 		if name == f {
 			return true
-		}
-	}
-	if cmd != nil {
-		for _, f := range cmd.FileFlags() {
-			if name == f {
-				return true
-			}
 		}
 	}
 	return false

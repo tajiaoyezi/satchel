@@ -26,12 +26,21 @@ jobs:
       SATCHEL_TEST_REQUIRE_PG: "1"
       # PostgreSQL 的备份与恢复测试要 pg_dump 与 psql（主版本不低于服务器的 16）：缺了直接失败，不许静默跳过。
       SATCHEL_TEST_REQUIRE_PG_TOOLS: "1"
+      # 页面清单与命令表的核对（master-web）不许跳过：没编进网页直接失败。
+      SATCHEL_TEST_REQUIRE_WEB: "1"
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22 # 与 satchel-web 的 .nvmrc 一致
+
+      - name: 网页（按 SATCHEL_WEB_REF 构建 satchel-web 并放进编进二进制的目录）
+        run: tools/web/build.sh
 
       - name: gofmt
         run: |
@@ -71,15 +80,21 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null
-          shellcheck --severity=error install.sh docker-entrypoint.sh
+          shellcheck --severity=error install.sh docker-entrypoint.sh tools/web/build.sh
           # 全量输出只作提示，不阻断（spec 的口径是没有 error 级问题）。
-          shellcheck install.sh docker-entrypoint.sh || true
+          shellcheck install.sh docker-entrypoint.sh tools/web/build.sh || true
 
   docker:
     name: docker build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      # 镜像要带网页：COPY . . 会把构建脚本放进 internal/projection/web/dist/ 的产物一并拷进构建阶段。
+      - name: 网页
+        run: tools/web/build.sh
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
@@ -91,7 +106,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: image reports version
-        run: docker run --rm satchel:ci version | grep -q "satchel 0.0.0-dev"
+        run: |
+          docker run --rm satchel:ci version | grep -q "satchel 0.0.0-dev"
+          ref=$(tr -d ' \r\n' < internal/projection/web/SATCHEL_WEB_REF)
+          web=$(docker run --rm satchel:ci version --json | jq -r .web)
+          [ "$web" = "$ref" ] || { echo "::error::镜像里的网页版本是「$web」，应当是 $ref"; exit 1; }
 
       - name: default command serves and turns healthy
         run: |
@@ -104,7 +123,65 @@ jobs:
           docker logs "$cid"
           [ "$status" = "healthy" ] || { echo "::error::容器 $(docker inspect --format '{{.State.Status}}' "$cid")，健康状态 $status"; exit 1; }
           curl -fsS http://127.0.0.1:12889/api/v1/healthz | grep -q '"status":"ok"'
+          # GET / 是 satchel-web 的 index.html，不是开发构建的占位页（master-web）。
+          page=$(curl -fsS http://127.0.0.1:12889/)
+          printf '%s' "$page" | grep -q 'id="satchel-boot"' || { echo "::error::GET / 不是网页的 index.html"; printf '%s\n' "$page"; exit 1; }
           docker stop "$cid" >/dev/null
           code=$(docker inspect --format '{{.State.ExitCode}}' "$cid")
           docker logs "$cid" 2>&1 | grep -q '主控已停止' || { echo "::error::docker stop 后日志里没有优雅停止的记录"; exit 1; }
           [ "$code" = "0" ] || { echo "::error::docker stop 后退出码是 $code，不是 0（STOPSIGNAL 不对？）"; exit 1; }
+
+  web-e2e:
+    name: web end-to-end
+    # 网页的端到端测试（web-console「网页的测试」）：按固定 tag 构建网页与主控，以空数据目录起 serve，跑 satchel-web 的 Playwright 测试。
+    # Turnstile 那一步用 Cloudflare 公开的测试 key，要连 challenges.cloudflare.com。
+    runs-on: ubuntu-latest
+    steps:
+      - name: 网页检出放在哪
+        run: echo "SATCHEL_WEB_KEEP=$RUNNER_TEMP/satchel-web" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: 网页（保留 satchel-web 的检出，端到端测试用同一份）
+        run: tools/web/build.sh
+
+      - name: 构建主控
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/satchel" ./cmd/satchel
+
+      - name: 起主控（空数据目录）
+        run: |
+          "$RUNNER_TEMP/satchel" serve --data-dir "$RUNNER_TEMP/data" > "$RUNNER_TEMP/serve.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:12889/api/v1/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:12889/api/v1/healthz | grep -q '"status":"ok"' || { cat "$RUNNER_TEMP/serve.log"; exit 1; }
+
+      - name: Playwright
+        working-directory: ${{ env.SATCHEL_WEB_KEEP }}
+        env:
+          SATCHEL_E2E_URL: http://127.0.0.1:12889
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test
+
+      - name: 主控日志
+        if: always()
+        run: cat "$RUNNER_TEMP/serve.log" || true
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            ${{ env.SATCHEL_WEB_KEEP }}/playwright-report
+            ${{ env.SATCHEL_WEB_KEEP }}/test-results
+          retention-days: 7

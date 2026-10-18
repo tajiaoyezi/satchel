@@ -208,8 +208,15 @@ func TestParserConstraints(t *testing.T) {
 		}
 	}
 	text, isErr := s.run([]string{"demo", "lock"}, "")
-	if e := decodeErr(t, text); !isErr || e.Code != v1.CodeHumanRequired {
-		t.Fatalf("人类专属应当 human_required：%v %s", isErr, text)
+	if e := decodeErr(t, text); !isErr || e.Code != v1.CodeHumanRequired || strings.Contains(e.Next, "网页") {
+		t.Fatalf("人类专属应当 human_required，没有网页时不提网页：%v %s", isErr, text)
+	}
+	// master-web「错误提示里的网页入口」：主控编进的页面清单里有提供它的页面时，next 写出页面名。
+	command.SetWebEntries(command.WebEntries{Login: true, Pages: map[string]string{"demo lock": "演示"}})
+	t.Cleanup(func() { command.SetWebEntries(command.WebEntries{}) })
+	text, _ = s.run([]string{"demo", "lock"}, "")
+	if e := decodeErr(t, text); !strings.Contains(e.Next, "在网页的「演示」页用管理员账号操作") {
+		t.Fatalf("有入口时写出页面名：%s", text)
 	}
 	for _, args := range [][]string{{"whoami", "-f", "/nonexistent/spec.yaml"}, {"whoami", "--filename", "/x"}, {"whoami", "--file=/x"}, {"demo", "apply", "--spec", "/nonexistent/spec.yaml"}} {
 		text, isErr := s.run(args, "")
@@ -217,6 +224,13 @@ func TestParserConstraints(t *testing.T) {
 		if !isErr || e.Code != v1.CodeBadRequest || !strings.Contains(e.Reason, "文件") || strings.Contains(e.Reason, "不存在") {
 			t.Errorf("%v 应当被拒为文件路径参数、且没有去打开：%v %s", args, isErr, text)
 		}
+	}
+	// 命令把 file 登记成字符串时（logs list 的日志文件名）照常解析；同一条命令上没登记的 -f 仍算文件路径。
+	if text, isErr := s.run([]string{"logs", "list", "--file", "old-1.log"}, ""); isErr || !strings.Contains(text, `"logs list"`) {
+		t.Errorf("logs list --file 应当照常执行：%v %s", isErr, text)
+	}
+	if text, isErr := s.run([]string{"logs", "list", "-f", "old-1.log"}, ""); !isErr || !strings.Contains(decodeErr(t, text).Reason, "文件") {
+		t.Errorf("没登记的 -f 仍算文件路径：%v %s", isErr, text)
 	}
 	for _, args := range [][]string{{"audit"}, {"whoami", "extra"}, {"audit", "list", "--limit", "1", "--limit", "2"}, {"audit", "list", "--bogus"}} {
 		text, isErr := s.run(args, "")

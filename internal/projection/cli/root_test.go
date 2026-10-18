@@ -148,6 +148,28 @@ func TestVersionJSONFlag(t *testing.T) {
 	}
 }
 
+// master-cli「开发构建」「带网页的构建」：version 报出编进二进制的网页版本，没有网页时为空串、文本里写明没有编进。
+func TestVersionWebField(t *testing.T) {
+	orig := webVersion
+	t.Cleanup(func() { webVersion = orig })
+	webVersion = func() string { return "" }
+	stdout, _, _ := run(t, "version", "--json")
+	if got := decodeJSONObject(t, stdout); string(got["web"]) != `""` {
+		t.Fatalf("没有网页时 web 为空串：%s", stdout)
+	}
+	if text, _, _ := run(t, "version"); !strings.Contains(text, "web: （没有编进网页）") {
+		t.Fatalf("文本里写明没有编进网页：%s", text)
+	}
+	webVersion = func() string { return "v0.1.0" }
+	stdout, _, _ = run(t, "version", "--json")
+	if got := decodeJSONObject(t, stdout); string(got["web"]) != `"v0.1.0"` {
+		t.Fatalf("带网页时 web 是 tag：%s", stdout)
+	}
+	if text, _, _ := run(t, "version"); !strings.Contains(text, "web: v0.1.0") {
+		t.Fatalf("文本里有网页版本：%s", text)
+	}
+}
+
 func TestVersionJSONEnv(t *testing.T) {
 	t.Setenv("SATCHEL_OUTPUT", "json")
 	stdout, _, code := run(t, "version")

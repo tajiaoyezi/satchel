@@ -320,7 +320,22 @@ func (c *Command) FlagByName(name string) (Flag, bool) {
 	return Flag{}, false
 }
 
-// FileFlags 返回 file 类型的 flag 名，REST 与 MCP 按它拒绝。
+// IsFilePathFlag 报告 name 在这条命令上算不算文件路径参数（REST 与 MCP 按它拒绝、不打开任何路径）：命令登记了这个名字时，
+// 只有 file 类型才算；没登记的 CLI 惯用文件路径名（FilePathFlags）算。命令把这几个名字登记成别的类型时照常解析
+// （如 logs list 的 file 是日志文件的名字）。
+func (c *Command) IsFilePathFlag(name string) bool {
+	if f, ok := c.FlagByName(name); ok {
+		return f.Type == TypeFile
+	}
+	for _, n := range FilePathFlags {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// FileFlags 返回 file 类型的 flag 名。
 func (c *Command) FileFlags() []string {
 	var names []string
 	for _, f := range c.Flags {
@@ -617,7 +632,8 @@ func CLIFlags(c *Command) []Flag {
 // MCP 按首段拒绝。login、logout、mcp stdio、mcp init 是本地命令；mcp status 是读命令，同样按首段拒绝（token list 在 MCP 上可得）。
 var ClientOnlyCommands = []string{"login", "logout", "mcp"}
 
-// FilePathFlags 是 CLI 惯用的文件路径 flag 名（含短名 -f），REST 与 MCP 上一律拒绝、不打开任何路径。
+// FilePathFlags 是 CLI 惯用的文件路径 flag 名（含短名 -f）：命令没有登记它们时，REST 与 MCP 上拒绝、不打开任何路径
+// （见 IsFilePathFlag）。
 var FilePathFlags = []string{"f", "filename", "file"}
 
 func validDanger(d v1.Danger) bool {

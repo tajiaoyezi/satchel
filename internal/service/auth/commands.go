@@ -20,6 +20,7 @@ func (s *Service) Bindings() command.Bindings {
 		"account totp confirm":              s.totpConfirm,
 		"account totp disable":              s.totpDisable,
 		"account recovery-codes regenerate": s.recoveryRegenerate,
+		"settings turnstile test":           s.turnstileTest,
 	}
 }
 

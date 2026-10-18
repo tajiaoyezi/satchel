@@ -41,6 +41,7 @@
 | `settings set` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/set` |
 | `settings show` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/settings/show` |
 | `settings snapshots list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/settings/snapshots` |
+| `settings turnstile test` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/turnstile/test` |
 | `settings update-cdn set` | master_settings | operate | master | object (enabled) | 否 | 否 | 否 | `POST /api/v1/settings/update-cdn/set/{enabled}` |
 | `setup init` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/init` |
 | `setup restore` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/restore` |

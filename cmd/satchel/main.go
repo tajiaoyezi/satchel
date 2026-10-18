@@ -11,6 +11,7 @@ import (
 	"github.com/satchel/satchel/internal/command"
 	"github.com/satchel/satchel/internal/projection/cli"
 	"github.com/satchel/satchel/internal/projection/mcp"
+	"github.com/satchel/satchel/internal/projection/web"
 )
 
 // options 是 satchel 二进制的完整装配：默认的 CLI 选项加上只有装配根才能装的 serve 与 mcp stdio
@@ -34,5 +35,9 @@ func options() cli.Options {
 }
 
 func main() {
+	// 错误提示里的网页入口按编进二进制的页面清单来（master-web）：在执行任何命令之前设置一次。
+	if m, err := web.Embedded(); err == nil {
+		command.SetWebEntries(m.Entries())
+	}
 	os.Exit(cli.Execute(options(), os.Args[1:], os.Stdout, os.Stderr))
 }

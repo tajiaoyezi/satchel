@@ -42,12 +42,12 @@ func Wrap(t *command.Table, verifier HumanVerifier, next command.Runner) command
 		id := v1.IdentityFrom(ctx)
 		if id.IsAnonymous() {
 			return nil, v1.New(v1.CodeUnauthenticated, "没有身份：请登录、经主控本机的 unix socket 调用，或带上令牌").
-				WithNext("网页上登录；在主控本机以 root 或运行主控的用户执行 satchel；远程用 satchel login 或 --server 加 --token")
+				WithNext(unauthenticatedNext())
 		}
 		if cmd.HumanOnly {
 			if id.ActorKind == v1.ActorToken || id.ActorKind == v1.ActorSystem {
 				return nil, v1.Newf(v1.CodeHumanRequired, "%s 是只有人能做的操作，令牌一律不能做", cmd.Name()).
-					WithNext("在网页或 CLI 上由管理员本人执行")
+					WithNext(command.HumanOnlyNext(cmd.Name()))
 			}
 			if verifier == nil {
 				return nil, v1.Newf(v1.CodeHumanRequired, "%s 是只有人能做的操作，需要当场验证身份，本版本还没有验证入口", cmd.Name())
@@ -65,7 +65,7 @@ func Wrap(t *command.Table, verifier HumanVerifier, next command.Runner) command
 			if !id.HasDanger(cmd.Danger) {
 				return nil, v1.Newf(v1.CodeForbidden, "%s 属于危险操作的%s，当前身份没有开这一类", cmd.Name(), dangerLabels[cmd.Danger]).
 					WithState("required_danger", string(cmd.Danger)).WithState("danger", id.Danger).
-					WithNext("在「API 令牌」页给这把令牌打开对应的危险类")
+					WithNext(dangerNext(id, cmd.Danger))
 			}
 			if err := checkConfirm(cmd, inv); err != nil {
 				return nil, err
@@ -78,8 +78,34 @@ func Wrap(t *command.Table, verifier HumanVerifier, next command.Runner) command
 // InvalidCredential 是请求带了无效凭据时的错误（authz 第 ① 步，MCP 的 satchel_explain 同用）。
 // reason 不区分令牌是不存在、已吊销、已过期还是签发者已停用，免得给探测令牌的人当回显。
 func InvalidCredential() *v1.Error {
+	next := "换一把有效的令牌；令牌由管理员在主控本机（satchel token create）签发"
+	if hint := command.WebHint("token create", "签发"); hint != "" {
+		next += "，或" + hint
+	}
 	return v1.New(v1.CodeUnauthenticated, "请求带的凭据无效：Authorization 头要是 Bearer 加一把有效的令牌，这把令牌不存在、已吊销、已过期，或签发者已停用").
-		WithNext("换一把有效的令牌；令牌由管理员在主控本机（satchel token create）或网页上签发")
+		WithNext(next)
+}
+
+// unauthenticatedNext 是没有身份时的下一步：网页有登录页时才提网页登录（master-web「错误提示里的网页入口」）。
+func unauthenticatedNext() string {
+	next := "在主控本机以 root 或运行主控的用户执行 satchel；远程用 satchel login 或 --server 加 --token"
+	if command.WebLogin() {
+		next = "在网页上登录；" + next
+	}
+	return next
+}
+
+// dangerNext 是危险类没开时的下一步。令牌：在提供 token update 的网页页面打开这一类，或请人在主控本机改
+// （--danger 是整体替换，要写上全部要开的类）；别的身份（普通用户的会话没有危险类）：请管理员来做。
+func dangerNext(id v1.Identity, d v1.Danger) string {
+	if id.ActorKind != v1.ActorToken {
+		return "这一类操作要由管理员来做"
+	}
+	local := "请人在主控本机执行 satchel token update <id> --verify-user <管理员账号>，--danger 要写上这把令牌要开的全部危险类（它是整体替换）"
+	if hint := command.WebHint("token update", "给这把令牌打开 "+string(d)+" 类"); hint != "" {
+		return hint + "；或" + local
+	}
+	return local
 }
 
 // decimalRe 是 count 口径接受的形状：规范的非负十进制（没有前导零、正负号、空白）。

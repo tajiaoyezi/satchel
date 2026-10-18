@@ -62,6 +62,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `settings set` | `satchel-settings` |
 | `settings show` | `satchel-backup`、`satchel-settings`、`satchel-troubleshoot`、`satchel-upgrade` |
 | `settings snapshots list` | `satchel-settings` |
+| `settings turnstile test` | `satchel-settings` |
 | `settings update-cdn set` | `satchel-upgrade` |
 | `setup init` | `satchel-backup` |
 | `setup restore` | `satchel-backup` |

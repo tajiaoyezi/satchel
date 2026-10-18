@@ -252,7 +252,8 @@ func TestEndToEnd(t *testing.T) {
 		if resp, err := http.Get(h.tcpURL + "/public/"); err != nil || resp.StatusCode != 404 {
 			t.Fatalf("/public/ 目录应当 404")
 		}
-		if status, fields := get(t, http.DefaultClient, h.tcpURL+"/nosuch"); status != 404 || string(fields["code"]) != `"not_found"` {
+		// 顶层的其余路径归网页（master-web）；/api/v1/ 下的未知路径仍是 404 四字段。
+		if status, fields := get(t, http.DefaultClient, h.tcpURL+"/api/v1/nosuch"); status != 404 || string(fields["code"]) != `"not_found"` {
 			t.Fatalf("未知路径应当 404 四字段：%d %v", status, fields)
 		}
 		if n := h.auditCount(); n != 4 {
