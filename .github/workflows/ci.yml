@@ -109,7 +109,8 @@ jobs:
         run: |
           docker run --rm satchel:ci version | grep -q "satchel 0.0.0-dev"
           ref=$(tr -d ' \r\n' < internal/projection/web/SATCHEL_WEB_REF)
-          web=$(docker run --rm satchel:ci version --json | jq -r .web)
+          # 绕过入口脚本：它先跑 db migrate，输出也在 stdout 上，jq 读不了。
+          web=$(docker run --rm --entrypoint /usr/local/bin/satchel satchel:ci version --json | jq -r .web)
           [ "$web" = "$ref" ] || { echo "::error::镜像里的网页版本是「$web」，应当是 $ref"; exit 1; }
 
       - name: default command serves and turns healthy
