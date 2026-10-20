@@ -55,7 +55,7 @@ func Dir(dataDir string) string { return filepath.Join(dataDir, db.BackupsDir) }
 // dataFiles 是进备份的数据目录里的单个文件，dataDirs 是整个进备份的子目录（其余的一律不进）。
 var (
 	dataFiles = []string{db.ConfigFile, db.ConfigYAMLFile, db.MasterKeyFile}
-	dataDirs  = []string{db.SubscribesDir, db.RuleTemplatesDir}
+	dataDirs  = []string{db.SubscribesDir, db.RuleTemplatesDir, db.UploadsDir}
 )
 
 // restoredFiles 与 restoredDirs 是恢复时换掉的：database.json 与 config.yaml 保持当前的（design 第 7 条）。

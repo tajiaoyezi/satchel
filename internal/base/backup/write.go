@@ -205,7 +205,7 @@ func filterDump(w io.Writer, r io.Reader, schema string) error {
 func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
 // addDataFiles 把数据目录里进备份的文件与目录写进 ZIP：database.json、config.yaml、master.key（存在时），
-// subscribes/ 与 rule_templates/ 下的普通文件（. 开头的不进），路径相对数据目录。
+// subscribes/、rule_templates/ 与 public/uploads/ 下的普通文件（. 开头的不进），路径相对数据目录。
 func addDataFiles(zw *zip.Writer, dataDir string) error {
 	for _, name := range dataFiles {
 		if err := addFile(zw, dataDir, name); err != nil {

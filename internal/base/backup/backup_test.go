@@ -100,7 +100,7 @@ func sqliteSource(dataDir string, bdb *bun.DB) Source {
 	return Source{DataDir: dataDir, DB: bdb, Driver: db.DriverSQLite, Version: "test"}
 }
 
-// master-backup「SQLite 备份的内容」。
+// master-backup「SQLite 备份的内容」「上传的图片进备份」：public/ 里只有 uploads/ 进备份。
 func TestCreateSQLite(t *testing.T) {
 	dataDir, _, bdb := sqliteMaster(t)
 	seedUser(t, bdb, "alice")
@@ -112,6 +112,8 @@ func TestCreateSQLite(t *testing.T) {
 	write(t, filepath.Join(dataDir, db.RuleTemplatesDir, "sub", "r.txt"), "r")
 	write(t, filepath.Join(dataDir, db.LogsDir, db.LogFile), "log")
 	write(t, filepath.Join(dataDir, db.PublicDir, "p.txt"), "p")
+	write(t, filepath.Join(dataDir, filepath.FromSlash(db.UploadsDir), "i.png"), "img")
+	write(t, filepath.Join(dataDir, filepath.FromSlash(db.UploadsDir), ".upload-1"), "tmp")
 	info, err := Create(context.Background(), sqliteSource(dataDir, bdb), PrefixBackup)
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +125,7 @@ func TestCreateSQLite(t *testing.T) {
 	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
 		t.Fatalf("备份应当 0600，得到 %o", fi.Mode().Perm())
 	}
-	want := []string{"database/satchel.db", "manifest.json", db.MasterKeyFile, db.RuleTemplatesDir + "/sub/r.txt", db.SubscribesDir + "/a.yaml"}
+	want := []string{"database/satchel.db", "manifest.json", db.MasterKeyFile, db.UploadsDir + "/i.png", db.RuleTemplatesDir + "/sub/r.txt", db.SubscribesDir + "/a.yaml"}
 	if got := zipNames(t, path); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("条目应当是 %v，得到 %v", want, got)
 	}
@@ -184,7 +186,7 @@ func TestValidate(t *testing.T) {
 	good := func() *Manifest {
 		return &Manifest{Format: Format, Driver: db.DriverSQLite, Migrations: migrations(t), CreatedAt: time.Now()}
 	}
-	ok := buildZip(t, dir, "ok.zip", good(), map[string]string{EntrySQLite: "x", "subscribes/a": "a"})
+	ok := buildZip(t, dir, "ok.zip", good(), map[string]string{EntrySQLite: "x", "subscribes/a": "a", db.UploadsDir + "/i.png": "i"})
 	if _, err := Validate(ok, db.DriverSQLite); err != nil {
 		t.Fatalf("合法的备份：%v", err)
 	}
@@ -205,6 +207,7 @@ func TestValidate(t *testing.T) {
 		{buildZip(t, dir, "future.zip", future, map[string]string{EntrySQLite: "x"}), v1.CodeBadRequest, "0002_future"},
 		{buildZip(t, dir, "escape.zip", good(), map[string]string{EntrySQLite: "x", "../escape": "e"}), v1.CodeBadRequest, "../escape"},
 		{buildZip(t, dir, "other.zip", good(), map[string]string{EntrySQLite: "x", "logs/satchel.log": "l"}), v1.CodeBadRequest, "logs/"},
+		{buildZip(t, dir, "public.zip", good(), map[string]string{EntrySQLite: "x", db.PublicDir + "/a.txt": "a"}), v1.CodeBadRequest, db.PublicDir + "/a.txt"},
 	}
 	for _, c := range cases {
 		_, err := Validate(c.path, db.DriverSQLite)
@@ -269,12 +272,15 @@ func TestLatestUsable(t *testing.T) {
 	}
 }
 
-// master-backup「SQLite 恢复到过去」：库、master.key、subscribes/ 回到备份那一刻；database.json 不动；留下 before-restore 与 replaced。
+// master-backup「SQLite 恢复到过去」「恢复换回上传的图片」：库、master.key、subscribes/、public/uploads/ 回到备份那一刻；
+// database.json 不动；留下 before-restore 与 replaced。
 func TestRestoreSQLite(t *testing.T) {
 	dataDir, cfg, bdb := sqliteMaster(t)
+	uploads := filepath.Join(dataDir, filepath.FromSlash(db.UploadsDir))
 	seedUser(t, bdb, "alice")
 	write(t, filepath.Join(dataDir, db.MasterKeyFile), "old-key")
 	write(t, filepath.Join(dataDir, db.SubscribesDir, "a.yaml"), "a")
+	write(t, filepath.Join(uploads, "A.png"), "A")
 	b, err := Create(context.Background(), sqliteSource(dataDir, bdb), PrefixBackup)
 	if err != nil {
 		t.Fatal(err)
@@ -282,6 +288,7 @@ func TestRestoreSQLite(t *testing.T) {
 	seedUser(t, bdb, "late")
 	write(t, filepath.Join(dataDir, db.MasterKeyFile), "new-key")
 	write(t, filepath.Join(dataDir, db.SubscribesDir, "late.yaml"), "late")
+	write(t, filepath.Join(uploads, "B.png"), "B")
 	write(t, filepath.Join(dataDir, db.ConfigFile), `{"driver":"sqlite"}`)
 	bdb.Close()
 	if err := WriteMarker(dataDir, &Marker{Backup: b.Name, Source: SourceManual, Actor: "root", Phase: PhasePending}); err != nil {
@@ -307,6 +314,12 @@ func TestRestoreSQLite(t *testing.T) {
 	if c, _ := os.ReadFile(filepath.Join(dataDir, db.ConfigFile)); string(c) != `{"driver":"sqlite"}` {
 		t.Fatal("database.json 不应当被动")
 	}
+	if got := dirNames(t, uploads); strings.Join(got, ",") != "A.png" {
+		t.Fatalf("public/uploads/ 里应当只有 A：%v", got)
+	}
+	if parked, _ := filepath.Glob(filepath.Join(Dir(dataDir), "replaced-*", filepath.FromSlash(db.UploadsDir), "B.png")); len(parked) != 1 {
+		t.Fatal("B 应当在这次恢复的停放目录里")
+	}
 	list, _ := List(dataDir)
 	before := false
 	for _, x := range list {
@@ -324,6 +337,7 @@ func TestRestoreSQLiteRollback(t *testing.T) {
 	seedUser(t, bdb, "alice")
 	write(t, filepath.Join(dataDir, db.MasterKeyFile), "cur-key")
 	write(t, filepath.Join(dataDir, db.SubscribesDir, "cur.yaml"), "c")
+	write(t, filepath.Join(dataDir, filepath.FromSlash(db.UploadsDir), "cur.png"), "c")
 	bdb.Close()
 	m := &Manifest{Format: Format, Driver: db.DriverSQLite, Migrations: migrations(t)}
 	bad := buildZip(t, Dir(dataDir), "satchel-backup-bad.zip", m, map[string]string{EntrySQLite: "garbage", db.MasterKeyFile: "bak-key"})
@@ -338,11 +352,80 @@ func TestRestoreSQLiteRollback(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, db.SubscribesDir, "cur.yaml")); err != nil {
 		t.Fatal("subscribes/ 应当撤回")
 	}
+	if _, err := os.Stat(filepath.Join(dataDir, filepath.FromSlash(db.UploadsDir), "cur.png")); err != nil {
+		t.Fatal("public/uploads/ 应当撤回")
+	}
 	after, _ := db.Open(context.Background(), cfg)
 	defer after.Close()
 	if count(t, after, (*model.User)(nil)) != 1 {
 		t.Fatal("库应当原样")
 	}
+}
+
+// 审查第 1 条：给 public/uploads 建停放用的父目录失败（停放目录里 public 是个普通文件）→ 撤回之后原来的图片还在原处。
+func TestRestoreParkFailureKeepsUploads(t *testing.T) {
+	dataDir, cfg, bdb := sqliteMaster(t)
+	uploads := filepath.Join(dataDir, filepath.FromSlash(db.UploadsDir))
+	write(t, filepath.Join(dataDir, db.MasterKeyFile), "cur-key")
+	write(t, filepath.Join(uploads, "cur.png"), "c")
+	b, err := Create(context.Background(), sqliteSource(dataDir, bdb), PrefixBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bdb.Close()
+	parked := filepath.Join(Dir(dataDir), "replaced-x")
+	write(t, filepath.Join(parked, db.PublicDir), "not a directory")
+	WriteMarker(dataDir, &Marker{Backup: b.Name, Source: SourceManual, Phase: PhasePending, ReplacedDir: "replaced-x"})
+	got, err := Startup(context.Background(), Target{DataDir: dataDir, Config: cfg, Version: "test"}, quiet)
+	if err != nil || got.Phase != PhaseFailed || !strings.Contains(got.Error, db.UploadsDir) {
+		t.Fatalf("应当是 failed，原因点名 public/uploads：%+v %v", got, err)
+	}
+	if c, _ := os.ReadFile(filepath.Join(uploads, "cur.png")); string(c) != "c" {
+		t.Fatal("原来的图片应当还在原处")
+	}
+	if k, _ := os.ReadFile(filepath.Join(dataDir, db.MasterKeyFile)); string(k) != "cur-key" {
+		t.Fatalf("master.key 应当撤回：%q", k)
+	}
+}
+
+// 不含 public/uploads/ 的备份（m1-11 及以前生成的）：恢复之后这个目录是空的，原来的图片在停放目录里。
+func TestRestoreBackupWithoutUploads(t *testing.T) {
+	dataDir, cfg, bdb := sqliteMaster(t)
+	uploads := filepath.Join(dataDir, filepath.FromSlash(db.UploadsDir))
+	b, err := Create(context.Background(), sqliteSource(dataDir, bdb), PrefixBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range zipNames(t, filepath.Join(Dir(dataDir), b.Name)) {
+		if strings.HasPrefix(name, db.UploadsDir+"/") {
+			t.Fatalf("这份备份不该有 public/uploads/ 的条目：%s", name)
+		}
+	}
+	write(t, filepath.Join(uploads, "C.png"), "C")
+	bdb.Close()
+	WriteMarker(dataDir, &Marker{Backup: b.Name, Source: SourceManual, Phase: PhasePending})
+	if m, err := Startup(context.Background(), Target{DataDir: dataDir, Config: cfg, Version: "test"}, quiet); err != nil || m.Phase != PhaseRestored {
+		t.Fatalf("恢复：%+v %v", m, err)
+	}
+	if fi, err := os.Stat(uploads); err != nil || !fi.IsDir() || len(dirNames(t, uploads)) != 0 {
+		t.Fatalf("public/uploads/ 应当在、而且是空的：%v %v", err, dirNames(t, uploads))
+	}
+	if parked, _ := filepath.Glob(filepath.Join(Dir(dataDir), "replaced-*", filepath.FromSlash(db.UploadsDir), "C.png")); len(parked) != 1 {
+		t.Fatal("原来的图片应当在停放目录里")
+	}
+}
+
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
 }
 
 func corruptFile(t *testing.T, path string) {
@@ -534,24 +617,30 @@ func TestAutoRestoreResumesAfterCrash(t *testing.T) {
 	}
 }
 
-// 审查第 2 条：手动恢复换到一半崩溃（库与 subscribes/ 已停放、subscribes/ 里有一半新东西），重启接着做完；停放目录里的原件不被盖掉。
+// 审查第 2 条：手动恢复换到一半崩溃（库、subscribes/ 与 public/uploads/ 已停放，subscribes/ 与 public/uploads/ 里有一半新东西），
+// 重启接着做完；停放目录里的原件不被盖掉。
 func TestRestoreResumesMidSwap(t *testing.T) {
 	dataDir, cfg, bdb := sqliteMaster(t)
 	seedUser(t, bdb, "alice")
+	uploads := filepath.Join(dataDir, filepath.FromSlash(db.UploadsDir))
 	write(t, filepath.Join(dataDir, db.SubscribesDir, "a.yaml"), "backup-a")
+	write(t, filepath.Join(uploads, "A.png"), "A")
 	b, err := Create(context.Background(), sqliteSource(dataDir, bdb), PrefixBackup)
 	if err != nil {
 		t.Fatal(err)
 	}
 	seedUser(t, bdb, "late")
 	write(t, filepath.Join(dataDir, db.SubscribesDir, "a.yaml"), "current-a")
+	write(t, filepath.Join(uploads, "B.png"), "B")
 	bdb.Close()
 	parked := filepath.Join(Dir(dataDir), "replaced-x")
-	os.MkdirAll(parked, 0o700)
+	os.MkdirAll(filepath.Join(parked, db.PublicDir), 0o700)
 	WriteMarker(dataDir, &Marker{Backup: b.Name, Source: SourceManual, Phase: PhasePending, ReplacedDir: "replaced-x"})
 	// 模拟上一次做到一半：原件已停放，原位置上有一半新东西。
 	os.Rename(filepath.Join(dataDir, db.SubscribesDir), filepath.Join(parked, db.SubscribesDir))
 	write(t, filepath.Join(dataDir, db.SubscribesDir, "half.yaml"), "half")
+	os.Rename(uploads, filepath.Join(parked, filepath.FromSlash(db.UploadsDir)))
+	write(t, filepath.Join(uploads, "A.png"), "half")
 	os.Rename(cfg.Path, filepath.Join(parked, db.SQLiteFile))
 	m, err := Startup(context.Background(), Target{DataDir: dataDir, Config: cfg, Version: "test"}, quiet)
 	if err != nil || m.Phase != PhaseRestored {
@@ -570,6 +659,12 @@ func TestRestoreResumesMidSwap(t *testing.T) {
 	}
 	if c, _ := os.ReadFile(filepath.Join(parked, db.SubscribesDir, "a.yaml")); string(c) != "current-a" {
 		t.Fatalf("停放目录里的原件不应当被盖掉：%q", c)
+	}
+	if c, _ := os.ReadFile(filepath.Join(uploads, "A.png")); string(c) != "A" || len(dirNames(t, uploads)) != 1 {
+		t.Fatalf("public/uploads/ 里应当只有备份里的 A：%q %v", c, dirNames(t, uploads))
+	}
+	if got := dirNames(t, filepath.Join(parked, filepath.FromSlash(db.UploadsDir))); strings.Join(got, ",") != "A.png,B.png" {
+		t.Fatalf("停放目录里的原图片不应当被盖掉：%v", got)
 	}
 }
 

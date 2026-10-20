@@ -11,7 +11,7 @@ description: "备份与恢复主控时用：生成、列出、上传备份；下
 
 ## 备份里有什么
 
-一个 ZIP：数据库的一致拷贝、`database.json`、`config.yaml`、`master.key`（主控通信密钥）、订阅文件与规则模板。会话不在里面，恢复后所有人要重新登录。备份放在主控数据目录的 `backups/`，最多留 7 份（手动的、上传的、内置任务每天生成的、恢复前与升级前自动生成的都算）。
+一个 ZIP：数据库的一致拷贝、`database.json`、`config.yaml`、`master.key`（主控通信密钥）、订阅文件、规则模板与上传的图片（`public/uploads/`，见 `satchel-settings`）。会话不在里面，恢复后所有人要重新登录。备份放在主控数据目录的 `backups/`，最多留 7 份（手动的、上传的、内置任务每天生成的、恢复前与升级前自动生成的都算）。
 
 ## 生成与查看
 
@@ -34,12 +34,13 @@ description: "备份与恢复主控时用：生成、列出、上传备份；下
 satchel backup upload --file <本地备份文件>
 ```
 
-它只能经 CLI：文件在 CLI 这一端读取，MCP 上传不了文件。校验不过（打不开、不认识、比这个主控新）是 `bad_request`。
+文件在 CLI 这一端读取，MCP 上传不了文件；没有 CLI 时请人用管理员账号登录网页，在「备份与恢复」页点「上传」。校验不过（打不开、不认识、比这个主控新）是 `bad_request`。
 
 ## 下载与恢复：要请人做
 
 - 下载：这一步只能由人做：请用户在主控本机、用 root 或运行主控的用户、在没有设 `SATCHEL_TOKEN` 与 `SATCHEL_SERVER`、也没用 `satchel login` 存过登录文件的终端里（不是 AI runtime 的终端）执行 `sudo satchel backup download <备份名> --output <本地路径> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署把开头的 `sudo satchel` 换成 `docker compose exec satchel satchel`。备份里有主控通信密钥与全部数据，下载下来的文件要妥善保管。
 - 恢复：这一步只能由人做：请用户在同样的终端里执行 `sudo satchel backup restore <备份名> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署同样换成 `docker compose exec satchel satchel`。
+- 下载与恢复也可以请人用管理员账号登录网页，在「备份与恢复」页上做，当场验证在网页上输入；恢复之后页面会等主控重启，再回到登录页。
 
 恢复之前先把后果告诉人：
 

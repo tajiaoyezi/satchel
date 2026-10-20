@@ -34,7 +34,7 @@ func TestCatalog(t *testing.T) {
 		"token create": ClassAction, "token update": ClassAction, "token revoke": ClassAction,
 		"security ban": ClassAction, "security unban": ClassAction,
 		"settings set": ClassMasterSettings, "settings rollback": ClassMasterSettings, "settings master-url set": ClassMasterSettings,
-		"settings gates set": ClassMasterSettings, "settings turnstile test": ClassAction,
+		"settings gates set": ClassMasterSettings, "settings turnstile test": ClassAction, "settings image upload": ClassAction,
 	}
 	if len(table.All()) != len(want) {
 		t.Fatalf("目录里应当恰好 %d 条命令，得到 %v", len(want), table.Names())
@@ -54,7 +54,7 @@ func TestCatalog(t *testing.T) {
 		}
 	}
 	// m1-07 的执行形状、人类专属与不要身份。
-	for name, shape := range map[string]Shape{"backup create": ShapeJob, "update apply": ShapeJob, "backup upload": ShapeUpload, "setup restore": ShapeUpload, "backup download": ShapeDownload} {
+	for name, shape := range map[string]Shape{"backup create": ShapeJob, "update apply": ShapeJob, "backup upload": ShapeUpload, "setup restore": ShapeUpload, "settings image upload": ShapeUpload, "backup download": ShapeDownload} {
 		if c, _ := table.Lookup(name); c.Shape != shape {
 			t.Errorf("%s 的执行形状应当是 %s，得到 %q", name, shape, c.Shape)
 		}

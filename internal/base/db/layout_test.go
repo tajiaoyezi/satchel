@@ -8,10 +8,12 @@ import (
 	"testing"
 )
 
-// otherPrograms 是恰好与数据目录里的名字同名、指的却是别的程序的文件：mcp init 要改 Hermes 自己的 config.yaml，
-// 这个名字在 runtime_hermes.go 里定义一次（按文件与名字精确放行，不放过同一文件里别的名字）。
+// otherPrograms 是恰好与数据目录里的名字同名、指的却是别的东西的文件：mcp init 要改 Hermes 自己的 config.yaml，
+// 这个名字在 runtime_hermes.go 里定义一次；网页「备份与恢复」页的 id 也叫 backups，在清单核对的必需页面里写一次
+// （按文件与名字精确放行，不放过同一文件里别的名字）。
 var otherPrograms = map[string]string{
 	filepath.Join("internal", "projection", "cli", "runtime_hermes.go"): ConfigYAMLFile,
+	filepath.Join("internal", "projection", "web", "manifest_test.go"):  BackupsDir,
 }
 
 // storage-dual-database「名字只有一处」：数据目录里的子目录与文件名只在定义常量的这一处出现，别处不许写死字面量。
@@ -19,7 +21,7 @@ var otherPrograms = map[string]string{
 // 不在清单里：它们在错误文案的断言里以字面量出现是合理的（点名文件的 reason）；logs 与 recovery-codes 也不在：它们同时是命令组的名字（logs list、account recovery-codes regenerate）。
 func TestLayoutNamesDefinedOnce(t *testing.T) {
 	root := filepath.Join("..", "..", "..")
-	names := []string{SubscribesDir, RuleTemplatesDir, PublicDir, MasterKeyFile, SocketFile, ConfigYAMLFile, LogFile, RestorePendingFile, UpgradePendingFile, ServeLockFile, BackupsDir}
+	names := []string{SubscribesDir, RuleTemplatesDir, PublicDir, UploadsDir, MasterKeyFile, SocketFile, ConfigYAMLFile, LogFile, RestorePendingFile, UpgradePendingFile, ServeLockFile, BackupsDir}
 	re := regexp.MustCompile(`"(` + strings.Join(escapeAll(names), "|") + `)"`)
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {

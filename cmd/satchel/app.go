@@ -202,6 +202,8 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		GenerateCodes: auth.GenerateRecoveryCodes,
 	})
 	identity.SetSetupRestore(backups.SetupRestore)
+	// 上传图片放进 public/uploads/；有备份、恢复、迁移或升级在进行时不清理旧图片（master-settings「上传图片」）。
+	settings.SetUploads(dataDir, backups.Busy, logger)
 	// 数据库设置与在线迁移（master-db-migration）：迁移拿着 SQLite 写锁时打开「写入暂停」，执行链、会话入口、审计与令牌都看它。
 	writeGate := &db.WriteGate{}
 	tokens.SetWriteGate(writeGate)

@@ -59,3 +59,36 @@ func TestPublicHandler(t *testing.T) {
 		t.Fatalf("直接打处理器也不该越界：%d %q", rec.Code, rec.Body.String())
 	}
 }
+
+// public/uploads/ 里的文件（哪怕是恢复回来的 HTML）带 nosniff 与 CSP sandbox；public/ 里别的文件不加。
+func TestPublicHandlerUploadsHeaders(t *testing.T) {
+	dataDir := t.TempDir()
+	pub := filepath.Join(dataDir, db.PublicDir)
+	uploads := filepath.Join(dataDir, filepath.FromSlash(db.UploadsDir))
+	if err := os.MkdirAll(uploads, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, dir := range map[string]string{"x.html": uploads, "a.png": uploads, "page.html": pub} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("<script>alert(1)</script>"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func(p string) http.Header {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/public/x", nil)
+		req.URL.Path = p
+		PublicHandler(pub).ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("%s 应当 200，得到 %d", p, rec.Code)
+		}
+		return rec.Header()
+	}
+	for _, p := range []string{"/public/uploads/x.html", "/public/uploads/a.png", "/public/./uploads/x.html", "/public//uploads/x.html"} {
+		if h := get(p); h.Get("Content-Security-Policy") != "sandbox" || h.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s 应当带 sandbox 与 nosniff：%v", p, h)
+		}
+	}
+	if h := get("/public/page.html"); h.Get("Content-Security-Policy") != "" || h.Get("X-Content-Type-Options") != "" {
+		t.Errorf("public/ 里人手放的文件不该加：%v", h)
+	}
+}

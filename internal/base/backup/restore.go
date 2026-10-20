@@ -174,16 +174,26 @@ type mover struct{ parked []move }
 type move struct{ from, to string }
 
 // park 把 from 停放到 to，接着做的时候原位置可以放新的。可以接着上一次中途崩溃的恢复做：to 已经在（上一次停放的原件），
-// 说明 from 上是上一次放进去、没做完的新东西，删掉它，不能把它移过去盖掉原件。撤回时一律删掉 from、把 to 移回来。
+// 说明 from 上是上一次放进去、没做完的新东西，删掉它，不能把它移过去盖掉原件。撤回时一律删掉 from、把 to 移回来，
+// 所以原件还在 from 上时不能记账：移动没成功（建父目录或改名失败）就不记，撤回不会碰它。
 func (mv *mover) park(from, to string) error {
-	mv.parked = append(mv.parked, move{from, to})
 	if _, err := os.Lstat(to); err == nil {
+		mv.parked = append(mv.parked, move{from, to})
 		return os.RemoveAll(from)
 	}
 	if _, err := os.Lstat(from); os.IsNotExist(err) {
+		mv.parked = append(mv.parked, move{from, to})
 		return nil
 	}
-	return os.Rename(from, to)
+	// public/uploads 这种嵌套的目录：停放目录里先建好它的父目录。
+	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
+		return err
+	}
+	if err := os.Rename(from, to); err != nil {
+		return err
+	}
+	mv.parked = append(mv.parked, move{from, to})
+	return nil
 }
 
 // undo 倒着撤回；有一步撤不回就把错误带回去（这时原件还在停放目录里，由人处理）。
@@ -307,7 +317,7 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// restoreFiles 把 master.key、subscribes/、rule_templates/ 移进 replaced/，再放入备份里的（目录 0700、文件 0600）。
+// restoreFiles 把 master.key、subscribes/、rule_templates/、public/uploads/ 移进 replaced/，再放入备份里的（目录 0700、文件 0600）。
 func restoreFiles(zr *zip.Reader, dataDir, replaced string, mv *mover) error {
 	for _, name := range append(append([]string{}, restoredFiles...), restoredDirs...) {
 		if err := mv.park(filepath.Join(dataDir, name), filepath.Join(replaced, name)); err != nil {

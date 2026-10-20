@@ -36,6 +36,7 @@
 | `security events list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/security/events` |
 | `security unban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/unban/{ip}` |
 | `settings gates set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/gates/set` |
+| `settings image upload` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/image/upload` |
 | `settings master-url set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/master-url/set` |
 | `settings rollback` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/rollback/{snapshot}` |
 | `settings set` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/set` |
@@ -64,6 +65,7 @@
 | `backup download` | 下载 |
 | `backup upload` | 上传 |
 | `database migrate` | 长任务 |
+| `settings image upload` | 上传 |
 | `setup restore` | 上传 |
 | `update apply` | 长任务 |
 

@@ -39,10 +39,12 @@ const (
 	// SubscribesDir 是订阅文件目录，RuleTemplatesDir 是规则模板目录，PublicDir 是 /public/ 对外提供的静态文件目录；
 	// LogsDir 是 serve 的日志目录，LogFile 是其中当前在写的日志文件（master-logs）；BackupsDir 是本机备份目录，
 	// RecoveryCodesDir 放恢复之后新恢复码的明文，RestorePendingFile 是待恢复标记（master-backup）；
-	// 都在数据目录下（第 08 章的数据目录布局与备份内容表；socket、public/、logs/、backups/、recovery-codes/ 不进备份）。
+	// 都在数据目录下（第 08 章的数据目录布局与备份内容表；socket、public/ 里 uploads/ 以外的文件、logs/、backups/、recovery-codes/ 不进备份）。
+	// UploadsDir 是 public/ 下放上传图片的目录（master-settings「上传图片」），它进备份。
 	SubscribesDir      = "subscribes"
 	RuleTemplatesDir   = "rule_templates"
 	PublicDir          = "public"
+	UploadsDir         = PublicDir + "/uploads"
 	LogsDir            = "logs"
 	LogFile            = "satchel.log"
 	BackupsDir         = "backups"

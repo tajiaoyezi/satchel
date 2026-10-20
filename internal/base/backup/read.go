@@ -84,7 +84,7 @@ func Validate(path string, driver db.Driver) (*Manifest, error) {
 	var total uint64
 	for _, f := range zr.File {
 		if !entryAllowed(f.Name) {
-			return nil, v1.Newf(v1.CodeBadRequest, "备份里有不允许的条目 %q", f.Name).WithNext("备份只能含清单、数据库、database.json、config.yaml、master.key、subscribes/ 与 rule_templates/")
+			return nil, v1.Newf(v1.CodeBadRequest, "备份里有不允许的条目 %q", f.Name).WithNext("备份只能含清单、数据库、database.json、config.yaml、master.key、subscribes/、rule_templates/ 与 public/uploads/")
 		}
 		total += f.UncompressedSize64
 	}

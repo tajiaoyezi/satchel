@@ -39,6 +39,8 @@ sudo satchel database test --host 127.0.0.1 --port 5432 --name satchel --user sa
 - 只支持 SQLite 到 PostgreSQL 一个方向。迁移之后原来的 `satchel.db` 留在数据目录里，但不再是最新的。
 - 迁过去之后，备份要 `pg_dump`、恢复要 `psql`。
 
+也可以请人用管理员账号登录网页，在「数据库」页上先试连、再迁移：目标库的密码与当场验证都在网页上输入，页面会显示进度并等主控重启。
+
 执行：这一步只能由人做：请用户在主控本机、用 root 或运行主控的用户、在没有设 `SATCHEL_TOKEN` 与 `SATCHEL_SERVER`、也没用 `satchel login` 存过登录文件的终端里（不是 AI runtime 的终端）执行 `sudo satchel database migrate --host 127.0.0.1 --port 5432 --name satchel --user satchel --verify-user <管理员账号>`，它会先要两遍目标库的密码，再当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署把开头的 `sudo satchel` 换成 `docker compose exec satchel satchel`。
 
 ## 迁移之后

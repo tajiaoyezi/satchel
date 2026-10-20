@@ -66,6 +66,7 @@ description: "管令牌、AI 接入、账号与 IP 封禁时用：看令牌与�
 - 封禁与解封是人类专属：
   - 封禁：这一步只能由人做：请用户在主控本机、用 root 或运行主控的用户、在没有设 `SATCHEL_TOKEN` 与 `SATCHEL_SERVER`、也没用 `satchel login` 存过登录文件的终端里（不是 AI runtime 的终端）执行 `sudo satchel security ban <ip> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署把开头的 `sudo satchel` 换成 `docker compose exec satchel satchel`。默认按 `brute_force_block_minutes` 到期，加 `--permanent` 永久封禁。
   - 解封：这一步只能由人做：请用户在同样的终端里执行 `sudo satchel security unban <ip> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署同样换成 `docker compose exec satchel satchel`。
+  - 两条也可以请人用管理员账号登录网页，在「安全」页上做，当场验证在网页上输入。
 - 安全事件里的封禁记录见 `satchel-troubleshoot`。
 
 ## 注意

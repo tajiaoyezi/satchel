@@ -1,6 +1,6 @@
 ---
 name: satchel-settings
-description: "看与改系统设置时用：日常运维档的设置、写前快照与回滚；主控地址与门这两组要请人改。"
+description: "看与改系统设置时用：日常运维档的设置、logo 与登录壁纸的图片上传、写前快照与回滚；主控地址与门这两组要请人改。"
 ---
 
 # satchel-settings
@@ -39,6 +39,27 @@ description: "看与改系统设置时用：日常运维档的设置、写前快
 4. 版本号对不上是 `version_conflict`（退出码 6）：别人刚改过。重新 `satchel settings show`，在新值的基础上再改；没有跳过比对的写法。
 5. 打码字段写回 `***` 表示保持不变，写空串表示清掉。
 6. 成功返回写后的整个对象，新的版本号在 `metadata.resourceVersion` 里。
+
+## logo 与登录壁纸的图片
+
+`branding_logo_url` 与 `login_wallpaper` 可以填外部图片的地址，也可以先把图片传到主控上：
+
+1. 上传：
+
+   ```
+   satchel settings image upload --file ./logo.png
+   ```
+
+   - 只收 PNG、JPEG、GIF、WebP 与 ICO，最大 5 MiB；主控按文件内容判断类型，不收 SVG。
+   - 输出里的 `url` 是图片的地址（`/public/uploads/` 开头）。同样的图片传两次，地址相同。
+   - 它只放文件，不改设置。它是上传类，MCP 上做不了；这时请人在网页的「系统设置」页点 logo 或登录壁纸旁边的「上传」。
+2. 再把地址写进字段，`<N>` 是当前的版本号：
+
+   ```
+   satchel settings set --set branding_logo_url=/public/uploads/<文件名> --resource-version <N>
+   ```
+
+3. `public/uploads/` 最多留 20 个文件，多的从最旧的删；当前设置与写前快照里用着的不删，所以回滚之后旧图片还在。
 
 ## 快照与回滚
 

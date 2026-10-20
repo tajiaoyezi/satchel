@@ -78,6 +78,20 @@ func (r *Repo) GetSnapshot(ctx context.Context, id int64) (*Snapshot, error) {
 	return &Snapshot{SnapshotMeta: metaOf(&row), Content: row.Content}, nil
 }
 
+// SnapshotContents 取本单例全部快照的内容（不分页）：清理上传的图片时找出快照里还用着的地址（master-settings「上传图片」）。
+func (r *Repo) SnapshotContents(ctx context.Context) ([]json.RawMessage, error) {
+	var rows []model.ConfigSnapshot
+	if err := r.db.NewSelect().Model(&rows).Column("content").
+		Where("object_kind = ? AND object_id = ?", KindName, SingletonID).Scan(ctx); err != nil {
+		return nil, v1.Wrap(v1.CodeDatabase, "读取设置快照失败", err)
+	}
+	out := make([]json.RawMessage, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.Content)
+	}
+	return out, nil
+}
+
 func metaOf(row *model.ConfigSnapshot) SnapshotMeta {
 	return SnapshotMeta{ID: row.ID, ObjectVersion: row.ObjectVersion, CreatedAt: row.CreatedAt, Source: row.Source, ContentHash: row.ContentHash}
 }

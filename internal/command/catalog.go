@@ -27,6 +27,7 @@ var GroupSummaries = map[string]string{
 	"database":               "主控用的数据库：查看、试连 PostgreSQL、从 SQLite 在线迁移（只对管理员开放；迁移要当场验证）",
 	"update":                 "主控自升级：检查更新、升到所选渠道的最新版（只对管理员开放；升级属主控自身类危险操作）",
 	"settings update-cdn":    "更新 CDN 的开关（主控自身类危险操作）",
+	"settings image":         "logo、登录壁纸这类图片字段用的图片：上传之后用 settings set 把地址写进字段",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -217,6 +218,10 @@ func settingsCommands() []*Command {
 		// 用 siteverify 接口里这个值的名字 response。
 		{Path: []string{"settings", "turnstile", "test"}, Summary: "用已保存的 secret 核对网页上 Turnstile 组件给出的 token（只核对，不改设置；只对管理员开放）", Class: ClassAction,
 			Flags: []Flag{{Name: "response", Type: TypeString, Secret: true, Description: "Turnstile 组件拿到的一次性 token"}}},
+		// 上传图片（master-settings「上传图片」）：只放文件、不改设置，写进字段照常用 settings set（有写前快照、能回滚）。
+		{Path: []string{"settings", "image", "upload"}, Summary: "把一张图片放进 public/uploads/，返回它的地址（PNG、JPEG、GIF、WebP 或 ICO，最大 5 MiB；不改设置；只对管理员开放）",
+			Class: ClassAction, Shape: ShapeUpload,
+			Flags: []Flag{{Name: UploadFlag, Type: TypeFile, Description: "本地图片的路径"}}},
 	}
 }
 

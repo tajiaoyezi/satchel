@@ -9,8 +9,9 @@ import (
 	"github.com/satchel/satchel/internal/command"
 )
 
-// requiredPages 是本站（m1-11）必须交付的页面；m1-12 往里加运维页。
-var requiredPages = []string{"login", "setup", "overview", "account", "tokens", "settings"}
+// requiredPages 是 M1 必须交付的页面：m1-11 的六页与 m1-12 的八个运维页。
+var requiredPages = []string{"login", "setup", "overview", "account", "tokens", "settings",
+	"logs", "schedule", "jobs", "audit", "security", "backups", "database", "update"}
 
 // testManifest 是一份能通过核对的小清单：登录页走会话入口，令牌页两条命令。
 func testManifest() *Manifest {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,7 +15,10 @@ import (
 
 	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/db/dbtest"
+	"github.com/satchel/satchel/internal/command"
+	"github.com/satchel/satchel/internal/projection/cli"
 	"github.com/satchel/satchel/internal/projection/web"
+	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
 // withWebFiles 换上一份假的网页产物，测试结束时还原成编进二进制的那份。
@@ -98,4 +102,35 @@ func TestWebEndToEnd(t *testing.T) {
 			}
 		}
 	})
+}
+
+// master-web「运维页提供的人类专属命令」：编进真网页时，带令牌经 CLI 做 backup restore、经 MCP 做 security unban，
+// next 指向对应的运维页。没有编进网页时，设了 SATCHEL_TEST_REQUIRE_WEB=1（CI）就失败，否则跳过。
+func TestOpsPageHints(t *testing.T) {
+	m, err := web.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m == nil {
+		if os.Getenv("SATCHEL_TEST_REQUIRE_WEB") == "1" {
+			t.Fatal("二进制里没有网页：CI 必须先运行 tools/web/build.sh 编进网页")
+		}
+		t.Skip("没有编进网页（运行 tools/web/build.sh 后再测）")
+	}
+	command.SetWebEntries(m.Entries())
+	t.Cleanup(func() { command.SetWebEntries(command.WebEntries{}) })
+	b := bootFrom(t, shortTempDir(t))
+
+	t.Setenv(cli.EnvToken, "sat_any")
+	_, stderr, exit := b.cli("backup", "restore", "satchel-backup-20260925T081500Z.zip", "--verify-user", "admin", "--json")
+	var e v1.Error
+	if err := json.Unmarshal([]byte(stderr), &e); err != nil || exit != v1.ExitHumanRequired || !strings.Contains(e.Next, "在网页的「备份与恢复」页") {
+		t.Fatalf("CLI 带令牌做 backup restore：%d %s", exit, stderr)
+	}
+	os.Unsetenv(cli.EnvToken)
+
+	text, isErr := b.mcpRun("security", "unban", "198.51.100.7")
+	if err := json.Unmarshal([]byte(text), &e); err != nil || !isErr || e.Code != v1.CodeHumanRequired || !strings.Contains(e.Next, "在网页的「安全」页") {
+		t.Fatalf("MCP 做 security unban：%v %s", isErr, text)
+	}
 }

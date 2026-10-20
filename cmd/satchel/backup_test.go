@@ -89,15 +89,37 @@ func userCount(t *testing.T, b *booted) int {
 	return n
 }
 
+// uploadImage 经 CLI 用 settings image upload 传一张 PNG，返回它在 public/uploads/ 里的文件名。
+func uploadImage(t *testing.T, h *harness, tag string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), tag+".png")
+	if err := os.WriteFile(path, []byte(testPNG(tag)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, exit := h.cli("settings", "image", "upload", "--file", path, "--json")
+	var img struct {
+		URL string `json:"url"`
+	}
+	if exit != 0 || json.Unmarshal([]byte(stdout), &img) != nil {
+		t.Fatalf("settings image upload：%d %s %s", exit, stdout, stderr)
+	}
+	return strings.TrimPrefix(img.URL, "/public/uploads/")
+}
+
 // 备份与恢复的端到端（SQLite；PostgreSQL 的导出与恢复要 pg_dump / psql，在 base/backup 里测）：生成、列出、下载要当场验证、
 // 上传比本主控新的被拒、MCP 与普通用户做不了；恢复发起后 serve 停下，「服务管理器」在同一数据目录上重新拉起后数据回到过去，
-// 旧恢复码作废、新恢复码可用，last_restore 与审计都有。
+// 旧恢复码作废、新恢复码可用，last_restore 与审计都有；上传的图片进备份，恢复时换回备份里的。
 func TestBackupRestoreEndToEnd(t *testing.T) {
 	dataDir := shortTempDir(t)
 	b := bootFrom(t, dataDir)
 	base := b.tcpURL
 	admin := setupAdmin(t, base)
 	enableTOTP(t, b)
+	uploads := filepath.Join(dataDir, filepath.FromSlash(db.UploadsDir))
+	imageA := uploadImage(t, b.harness, "A")
+	if err := os.WriteFile(filepath.Join(dataDir, db.PublicDir, "a.txt"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	stdout, stderr, exit := b.cli("backup", "create", "--json")
 	if exit != 0 || !strings.Contains(stdout, `"done"`) {
@@ -108,6 +130,21 @@ func TestBackupRestoreEndToEnd(t *testing.T) {
 		t.Fatalf("应当有一份备份：%v", list)
 	}
 	name := list[0].Name
+
+	// master-backup「上传的图片进备份」：有 public/uploads/ 里的那张，没有 public/a.txt。
+	zr, err := zip.OpenReader(filepath.Join(dataDir, db.BackupsDir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]bool{}
+	for _, f := range zr.File {
+		entries[f.Name] = true
+	}
+	zr.Close()
+	if !entries[db.UploadsDir+"/"+imageA] || entries[db.PublicDir+"/a.txt"] {
+		t.Fatalf("备份里应当有上传的图片、没有 public/a.txt：%v", entries)
+	}
+	imageB := uploadImage(t, b.harness, "B")
 
 	// 下载：不带当场验证是 human_required；带上密码与一枚恢复码后拿到 ZIP 字节。
 	if r := send(t, admin.c, "POST", base+"/api/v1/backup/download/"+name, nil, `{}`); r.status != 403 || r.code() != "human_required" {
@@ -174,6 +211,13 @@ func TestBackupRestoreEndToEnd(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, db.RestorePendingFile)); !os.IsNotExist(err) {
 		t.Fatal("收尾后待恢复标记应当删掉")
+	}
+	// master-backup「恢复换回上传的图片」：只剩 A，B 在这次恢复的停放目录里。
+	if got, _ := os.ReadDir(uploads); len(got) != 1 || got[0].Name() != imageA {
+		t.Fatalf("public/uploads/ 里应当只有 A：%v", got)
+	}
+	if parked, _ := filepath.Glob(filepath.Join(dataDir, db.BackupsDir, "replaced-*", filepath.FromSlash(db.UploadsDir), imageB)); len(parked) != 1 {
+		t.Fatal("B 应当在这次恢复的停放目录里")
 	}
 }
 

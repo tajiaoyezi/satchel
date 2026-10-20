@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sort"
 	"strconv"
+	"sync"
 
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/command"
@@ -22,9 +24,15 @@ type Object = v1.Object[v1.SystemSettingsSpec, v1.SystemSettingsStatus]
 type RevealedObject = v1.Object[map[string]any, map[string]any]
 
 // Service 持有仓储，以及设置写成功之后要通知的回调（装配根登记：门、登录限流、封禁与 Turnstile 按新值生效）。
+// uploads、busy 与 logger 给上传图片用（SetUploads）。images 让清理上传的图片（读引用、删文件）与能改图片字段的写
+// （set、rollback）不交错：清理按读到的引用删，中间不能有一次写把字段改成正要删的那个文件。
 type Service struct {
 	repo    *core.Repo
 	onWrite []func(*core.State)
+	uploads string
+	busy    func() bool
+	logger  *slog.Logger
+	images  sync.Mutex
 }
 
 // New 建服务。
@@ -42,6 +50,7 @@ func (s *Service) Bindings() command.Bindings {
 		"settings master-url set": s.masterURLSet,
 		"settings gates set":      s.gatesSet,
 		"settings update-cdn set": s.updateCDNSet,
+		"settings image upload":   s.imageUpload,
 	}
 }
 
@@ -252,7 +261,9 @@ func (s *Service) set(ctx context.Context, inv *command.Invocation) (any, error)
 	if err != nil {
 		return nil, err
 	}
+	s.images.Lock()
 	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected, Snapshot: true, Source: core.SourceSettings})
+	s.images.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +330,9 @@ func (s *Service) rollback(ctx context.Context, inv *command.Invocation) (any, e
 	if err != nil {
 		return nil, err
 	}
+	s.images.Lock()
 	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected, Snapshot: true, Source: core.SourceRollback})
+	s.images.Unlock()
 	if err != nil {
 		return nil, err
 	}
