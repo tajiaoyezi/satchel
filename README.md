@@ -261,7 +261,7 @@ curl -fsSL https://raw.githubusercontent.com/tajiaoyezi/satchel/main/install.sh 
 
 脚本从 GitHub Release 下载二进制与 `.sig`（直连失败回退 gh-proxy），**用脚本自己内嵌的发布公钥（与 `pkg/release` 同一份）经 openssl 验签、验不过不落盘**——信任锚是这份脚本，不是刚下载的二进制——再装到 `/usr/local/bin/satchel`，数据目录 `/var/lib/satchel`，服务名 `satchel`。目前只有预发布版：一键脚本要加 `--prerelease`。
 
-Docker Compose：仓库根的 `docker-compose.yml` 与 `.env.example`（`cp .env.example .env` 后 `docker compose up -d`；`--profile postgres` 起本机的 PostgreSQL，主控走 host 网络所以 `SATCHEL_DATABASE_HOST=127.0.0.1`；`SATCHEL_LISTEN` 改监听地址）。镜像 `ghcr.io/tajiaoyezi/satchel`，入口脚本先跑 `db migrate` 再执行传入的子命令（默认 `serve`），`HEALTHCHECK` 打 `/api/v1/healthz`；容器内不原地替换二进制，升级换镜像 tag。
+Docker Compose：仓库根的 `docker-compose.yml` 与 `.env.example`（`cp .env.example .env` 后 `docker compose up -d`；`--profile postgres` 起本机的 PostgreSQL，主控走 host 网络所以 `SATCHEL_DATABASE_HOST=127.0.0.1`；`SATCHEL_LISTEN` 改监听地址）。compose 把宿主的 `/etc/localtime` 挂进容器以继承时区；宿主没有这个文件时（例如没装 tzdata 的 Alpine）要删掉这一行（容器用 UTC）或先设好宿主时区（Alpine 上是 `apk add tzdata` 后执行 `setup-timezone`；只装 tzdata 不会生成这个文件），否则 docker compose 会建一个同名空目录去挂、容器起不来——一键脚本的 Docker 路会自己判断，没有时不挂。镜像 `ghcr.io/tajiaoyezi/satchel`，入口脚本先跑 `db migrate` 再执行传入的子命令（默认 `serve`），`HEALTHCHECK` 打 `/api/v1/healthz`；容器内不原地替换二进制，升级换镜像 tag。
 
 裸二进制：从 Release 下载对应平台的文件与 `.sig`，用已装的 `satchel __verify <file> <sig>`（或 openssl 加仓库里的公钥）核对后放到 PATH 里；`__verify` 是自升级用的验签入口，别拿刚下载的文件验它自己。六个平台里只有 Linux 两个承诺能跑主控，其它四个只保证客户端部分可用。
 

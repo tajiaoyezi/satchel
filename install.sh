@@ -391,6 +391,14 @@ install_docker_engine() {
 write_compose() {
     mkdir -p "$INSTALL_DIR"
     tag="${VERSION#v}"
+    # 宿主的 /etc/localtime 是文件才挂（继承宿主时区）：没有时（没装 tzdata 的 Alpine 等）compose 会在宿主上建一个同名空目录去挂，
+    # 容器起不来。上次失败留下的空目录也不算。
+    localtime_mount=""
+    if [ -f /etc/localtime ]; then
+        localtime_mount="      - /etc/localtime:/etc/localtime:ro"
+    else
+        info "宿主没有 /etc/localtime，容器用 UTC 时区；要用本地时区，先设好宿主时区（Alpine 上是 apk add tzdata 后执行 setup-timezone），再重跑本脚本"
+    fi
     cat > "${INSTALL_DIR}/docker-compose.yml" <<EOF
 services:
   satchel:
@@ -412,7 +420,7 @@ services:
       - SATCHEL_DATABASE_SSLMODE=\${SATCHEL_DATABASE_SSLMODE:-}
     volumes:
       - ./data:/var/lib/satchel
-      - /etc/localtime:/etc/localtime:ro
+${localtime_mount}
 
   postgres:
     image: postgres:18-alpine
