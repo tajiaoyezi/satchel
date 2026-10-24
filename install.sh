@@ -20,8 +20,6 @@
 #   --no-start          只装不起（容器里没有 init 时用）
 #   --install-dir <dir> Docker 路的安装目录（默认 /opt/satchel）
 #   --help
-#
-# M0 状态：satchel serve 随 M1 交付，现在装完服务起不来是预期的；二进制、数据目录、服务文件的形状已定。
 set -eu
 
 GITHUB_REPO="tajiaoyezi/satchel"
@@ -347,6 +345,13 @@ start_service() {
     fi
 }
 
+# print_next_steps 打印装完之后怎样打开网页、建第一个管理员（两条路共用）；$1 是建管理员那条命令的开头。
+print_next_steps() {
+    info "网页：http://<这台机器的地址>:12889/（默认端口）；本机检查：curl http://127.0.0.1:12889/api/v1/healthz"
+    info "第一次安装时先建第一个管理员：$1 setup init --username <用户名>，或在网页的初始化向导里建"
+    info "初始化之前谁都能建管理员：请先在本机或内网完成这一步，再把主控暴露到公网"
+}
+
 install_native() {
     check_architecture
     detect_package_manager
@@ -360,7 +365,7 @@ install_native() {
     start_service
     echo
     info "安装完成。二进制 ${BIN_DIR}/${SERVICE_NAME}，数据目录 ${DATA_DIR}，服务名 ${SERVICE_NAME}。"
-    info "M0 阶段还没有 serve 子命令，服务要到 M1 才能真正启动（访问地址随 M1 给出）；现在可用：satchel version、satchel db status --data-dir ${DATA_DIR}"
+    print_next_steps "sudo satchel"
 }
 
 # ---------- Docker 路 ----------
@@ -456,7 +461,9 @@ install_docker() {
         return 0
     fi
     (cd "$INSTALL_DIR" && docker compose pull && docker compose up -d)
-    info "容器已启动；数据在 ${INSTALL_DIR}/data。M0 阶段没有 serve，容器会在跑完迁移后退出，这是预期的。"
+    info "容器已启动；数据在 ${INSTALL_DIR}/data。"
+    # .env 是 root 的 0600、装 Docker 时也没把谁加进 docker 组：回到普通用户的 shell 也要 sudo。目录加引号，含空格时照抄也能用。
+    print_next_steps "cd '${INSTALL_DIR}' && sudo docker compose exec satchel satchel"
 }
 
 main() {

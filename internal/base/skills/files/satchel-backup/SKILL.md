@@ -40,7 +40,7 @@ satchel backup upload --file <本地备份文件>
 
 - 下载：这一步只能由人做：请用户在主控本机、用 root 或运行主控的用户、在没有设 `SATCHEL_TOKEN` 与 `SATCHEL_SERVER`、也没用 `satchel login` 存过登录文件的终端里（不是 AI runtime 的终端）执行 `sudo satchel backup download <备份名> --output <本地路径> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署把开头的 `sudo satchel` 换成 `docker compose exec satchel satchel`。备份里有主控通信密钥与全部数据，下载下来的文件要妥善保管。
 - 恢复：这一步只能由人做：请用户在同样的终端里执行 `sudo satchel backup restore <备份名> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署同样换成 `docker compose exec satchel satchel`。
-- 下载与恢复也可以请人用管理员账号登录网页，在「备份与恢复」页上做，当场验证在网页上输入；恢复之后页面会等主控重启，再回到登录页。
+- 下载与恢复也可以请人用管理员账号登录网页，在「备份与恢复」页上做，当场验证在网页上输入；恢复之后页面会等主控重启，再整页重新加载；恢复成功时所有会话都没了，会落到登录页。
 
 恢复之前先把后果告诉人：
 
@@ -51,7 +51,7 @@ satchel backup upload --file <本地备份文件>
 
 ## 恢复之后
 
-- 恢复码全部换新：开了两步验证的账号各生成一批新的，明文在主控数据目录的 `recovery-codes/` 下（0600）。提醒人拿到码登录后删掉那个文件。
+- 恢复码全部换新：开了两步验证的账号各生成一批新的，明文在主控数据目录的 `recovery-codes/` 下（0600）。提醒人拿到码登录后删掉那个文件。没有账号开两步验证时不写这个文件，`last_restore` 里也没有 `recovery_codes_file`。
 - 所有人要重新登录；两步验证的密钥也回到备份那一刻。
 - 结果在 `satchel settings show` 的 `status` 里的 `last_restore`；审计里也有一条。
 

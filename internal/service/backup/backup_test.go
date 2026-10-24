@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -302,6 +303,36 @@ func TestFinalize(t *testing.T) {
 		}
 		if after := codesOf(t, bdb, "admin"); after[0] != before[0] {
 			t.Fatal("失败的恢复不应当换码")
+		}
+	})
+}
+
+// master-backup「没有账号开两步验证」：旧码照样作废，但不写恢复码文件、last_restore 不记路径、不打那条 warn。
+func TestFinalizeWithoutTwoFactor(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		f := newFixture(t, bdb)
+		var logs bytes.Buffer
+		f.s.d.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+		seedUser(t, bdb, "admin", false, []string{"left1"})
+		m := &archive.Marker{Backup: "b.zip", Source: archive.SourceManual, Actor: "root", Phase: archive.PhaseRestored}
+		archive.WriteMarker(f.dataDir, m)
+		if err := f.s.Finalize(context.Background(), m); err != nil {
+			t.Fatal(err)
+		}
+		if codes := codesOf(t, bdb, "admin"); len(codes) != 0 {
+			t.Fatalf("旧码应当作废：%v", codes)
+		}
+		if l := lastRestore(t, bdb); l.Result != "ok" || l.RecoveryCodesFile != "" {
+			t.Fatalf("last_restore 不应当带恢复码文件：%+v", l)
+		}
+		if entries, err := os.ReadDir(filepath.Join(f.dataDir, db.RecoveryCodesDir)); err != nil || len(entries) != 0 {
+			t.Fatalf("不应当写恢复码文件：%v %v", entries, err)
+		}
+		if strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "没有新恢复码") {
+			t.Fatalf("日志：%s", logs.String())
+		}
+		if m, _ := archive.ReadMarker(f.dataDir); m != nil {
+			t.Fatal("收尾后标记应当删掉")
 		}
 	})
 }

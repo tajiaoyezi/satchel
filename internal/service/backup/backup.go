@@ -401,7 +401,8 @@ type LastRestore struct {
 
 // Finalize 是恢复之后的收尾（serve 迁移之后、开始监听之前调；m 是 base/backup.Startup 返回的标记，nil 时什么都不做）：
 // restored 时在一个事务里作废全部恢复码、给开了两步验证的账号换新、写 last_restore、插审计；提交后写恢复码明文文件，
-// 最后删标记。中途崩溃时标记还在，下次从头再来。failed 时只写 last_restore 与一条失败的审计，再删标记。
+// 最后删标记。没有账号拿到新码（没人开两步验证）时不写文件，last_restore 里也不记路径。中途崩溃时标记还在，下次从头再来。
+// failed 时只写 last_restore 与一条失败的审计，再删标记。
 func (s *Service) Finalize(ctx context.Context, m *archive.Marker) error {
 	if m == nil || (m.Phase != archive.PhaseRestored && m.Phase != archive.PhaseFailed) {
 		return nil
@@ -416,7 +417,6 @@ func (s *Service) Finalize(ctx context.Context, m *archive.Marker) error {
 	var codesFile string
 	if m.Phase == archive.PhaseRestored {
 		codesFile = filepath.Join(s.d.DataDir, db.RecoveryCodesDir, "recovery-codes-"+now.Format("20060102T150405Z")+".txt")
-		last.RecoveryCodesFile = codesFile
 	} else {
 		last.Result, last.Error = "failed", m.Error
 	}
@@ -425,6 +425,9 @@ func (s *Service) Finalize(ctx context.Context, m *archive.Marker) error {
 			var err error
 			if codes, err = s.d.Users.ResetRecoveryCodes(ctx, tx, s.d.GenerateCodes); err != nil {
 				return err
+			}
+			if len(codes) > 0 {
+				last.RecoveryCodesFile = codesFile
 			}
 		}
 		raw, _ := json.Marshal(last)
@@ -439,10 +442,14 @@ func (s *Service) Finalize(ctx context.Context, m *archive.Marker) error {
 		return err
 	}
 	if m.Phase == archive.PhaseRestored {
-		if err := writeCodes(codesFile, codes); err != nil {
-			return err
+		if len(codes) == 0 {
+			s.d.Logger.Info("已从备份恢复：全部恢复码作废；没有开两步验证的账号，没有新恢复码", "backup", m.Backup)
+		} else {
+			if err := writeCodes(codesFile, codes); err != nil {
+				return err
+			}
+			s.d.Logger.Warn("已从备份恢复：全部恢复码作废，开了两步验证的账号的新恢复码在这个文件里，用完请删掉", "file", codesFile, "backup", m.Backup)
 		}
-		s.d.Logger.Warn("已从备份恢复：全部恢复码作废，开了两步验证的账号的新恢复码在这个文件里，用完请删掉", "file", codesFile, "backup", m.Backup)
 	}
 	return archive.RemoveMarker(s.d.DataDir)
 }
