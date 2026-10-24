@@ -26,7 +26,8 @@ services:
       - ./data:/var/lib/satchel
       # 继承宿主时区，否则按本地时间的功能（每日流量通知等）会差时区。
       # 宿主没有 /etc/localtime（例如没装 tzdata 的 Alpine）时删掉这一行（容器用 UTC）或先设好宿主时区（Alpine 上是 apk add tzdata 后执行 setup-timezone）：
-      # 否则 docker compose 会在宿主上建一个同名空目录去挂，容器起不来。
+      # 否则 docker compose 会在宿主上建一个同名空目录去挂，容器起不来。已经被建成目录时，先 rm -r /etc/localtime 再设时区
+      # （setup-timezone 遇到目录不报错，只会把链接放进目录里）。
       - /etc/localtime:/etc/localtime:ro
 
   # PostgreSQL 供首次初始化或「系统设置 → 数据库」在线迁移用，只监听本机。

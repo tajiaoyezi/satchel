@@ -392,10 +392,12 @@ write_compose() {
     mkdir -p "$INSTALL_DIR"
     tag="${VERSION#v}"
     # 宿主的 /etc/localtime 是文件才挂（继承宿主时区）：没有时（没装 tzdata 的 Alpine 等）compose 会在宿主上建一个同名空目录去挂，
-    # 容器起不来。上次失败留下的空目录也不算。
+    # 容器起不来。上次失败留下的目录也不算，单独提示先删掉它：setup-timezone 遇到目录不报错，只会把链接放进目录里。
     localtime_mount=""
     if [ -f /etc/localtime ]; then
         localtime_mount="      - /etc/localtime:/etc/localtime:ro"
+    elif [ -d /etc/localtime ]; then
+        info "宿主的 /etc/localtime 是个目录（多半是以前 docker compose 挂载失败时建的），不挂它，容器用 UTC 时区；要用本地时区，先删掉这个目录（rm -r /etc/localtime），再设好宿主时区，然后重跑本脚本"
     else
         info "宿主没有 /etc/localtime，容器用 UTC 时区；要用本地时区，先设好宿主时区（Alpine 上是 apk add tzdata 后执行 setup-timezone），再重跑本脚本"
     fi
