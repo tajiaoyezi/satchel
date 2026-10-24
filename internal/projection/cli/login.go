@@ -181,7 +181,7 @@ type logoutOutput struct {
 	Note      string `json:"note"`
 }
 
-const logoutNote = "令牌在主控上仍然有效；要让它失效，用 satchel token revoke <id> 吊销（id 见 satchel token list）"
+const logoutNote = "令牌在主控上仍然有效；要让它失效，在主控本机执行 satchel token revoke <id> --verify-user <管理员账号> 吊销（id 见 satchel token list）"
 
 // logoutCommand 是 satchel logout：只删登录文件，不吊销令牌（吊销要当场验证，是另一件事）。
 func logoutCommand(context.Context, *command.Invocation) (any, error) {

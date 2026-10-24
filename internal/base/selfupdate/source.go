@@ -55,7 +55,7 @@ type Release struct {
 	Notes      string
 	URL        string // 发布页
 	Prerelease bool
-	Source     string // 版本信息从哪里来：cdn 或 github
+	Source     string // 版本信息从哪里来：cdn、github 或 gh-proxy
 }
 
 // CDNStatus 说明这一次有没有用 CDN、没用的原因。
@@ -65,8 +65,8 @@ type CDNStatus struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
-// Latest 按 CDN → GitHub 的顺序取 channel 的最新版本（master-self-update「版本信息从哪里来」）。cdnEnabled 是系统设置
-// update_cdn_enabled 的值。两处都取不到时返回的错误带各处的原因。
+// Latest 按 CDN → GitHub → gh-proxy 的顺序取 channel 的最新版本（master-self-update「版本信息从哪里来」）。cdnEnabled 是系统设置
+// update_cdn_enabled 的值。直连 GitHub 失败时在同样的地址前加 gh-proxy 前缀再取一次（Proxy 为空时不取）。都取不到时返回的错误带各处的原因。
 func Latest(ctx context.Context, src Sources, channel string, cdnEnabled bool) (*Release, CDNStatus, error) {
 	cdn := CDNStatus{Enabled: cdnEnabled}
 	var reasons []string
@@ -84,12 +84,19 @@ func Latest(ctx context.Context, src Sources, channel string, cdnEnabled bool) (
 		cdn.Reason = "更新 CDN 不可用：" + err.Error()
 		reasons = append(reasons, "CDN："+err.Error())
 	}
-	rel, err := latestGitHub(ctx, src, channel)
-	if err != nil {
-		reasons = append(reasons, "GitHub："+err.Error())
-		return nil, cdn, errors.New(strings.Join(reasons, "；"))
+	rel, err := latestGitHub(ctx, src, src.API, channel, SourceGitHub)
+	if err == nil {
+		return rel, cdn, nil
 	}
-	return rel, cdn, nil
+	reasons = append(reasons, "GitHub："+err.Error())
+	if src.Proxy != "" {
+		rel, err := latestGitHub(ctx, src, src.Proxy+src.API, channel, SourceProxy)
+		if err == nil {
+			return rel, cdn, nil
+		}
+		reasons = append(reasons, "gh-proxy："+err.Error())
+	}
+	return nil, cdn, errors.New(strings.Join(reasons, "；"))
 }
 
 // cdnMeta 是 CDN 上 satchel/channels/<渠道>/version.json 的格式（由发布线用 jq 生成）。
@@ -147,8 +154,9 @@ type ghRelease struct {
 }
 
 // latestGitHub：stable 取 releases/latest；prerelease 取最近 30 个里不是草稿、版本号最大的一个（正式版也算）。
-func latestGitHub(ctx context.Context, src Sources, channel string) (*Release, error) {
-	base := src.API + "/repos/" + src.Repo + "/releases"
+// api 是 GitHub API 的地址，经 gh-proxy 时是加了前缀的地址；source 记进结果。
+func latestGitHub(ctx context.Context, src Sources, api, channel, source string) (*Release, error) {
+	base := api + "/repos/" + src.Repo + "/releases"
 	var best *ghRelease
 	if channel == ChannelPrerelease {
 		var list []ghRelease
@@ -177,7 +185,7 @@ func latestGitHub(ctx context.Context, src Sources, channel string) (*Release, e
 		}
 		best = &r
 	}
-	return &Release{Version: Normalize(best.TagName), Tag: best.TagName, Notes: best.Body, URL: best.HTMLURL, Prerelease: best.Prerelease, Source: SourceGitHub}, nil
+	return &Release{Version: Normalize(best.TagName), Tag: best.TagName, Notes: best.Body, URL: best.HTMLURL, Prerelease: best.Prerelease, Source: source}, nil
 }
 
 func getJSON(ctx context.Context, src Sources, timeout time.Duration, url string, out any) error {

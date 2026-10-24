@@ -106,7 +106,7 @@ func (s *Service) turnstileTest(ctx context.Context, inv *command.Invocation) (a
 	v, site, secret := s.turnstile.snapshot()
 	if v == nil || site == "" || secret == "" {
 		return nil, v1.New(v1.CodeConflict, "Turnstile 没有启用：turnstile_site_key 与 turnstile_secret_key 两个都填了才能测试").
-			WithNext("先用 satchel settings gates set 保存两个 key，再测试")
+			WithNext("先在主控本机执行 satchel settings gates set --set turnstile_site_key=<site key> --set turnstile_secret_key=<secret key> --resource-version <N> --verify-user <管理员账号> 保存两个 key，再测试")
 	}
 	token := strings.TrimSpace(inv.String("response", ""))
 	if token == "" {

@@ -142,3 +142,31 @@ func TestGatedEnteredStillRecords(t *testing.T) {
 		t.Fatalf("没登记进门的只记日志：%d %s", len(rec.entries), logs.String())
 	}
 }
+
+// master-command-table「执行链兜住处理函数的 panic」：panic 转成 internal 四字段错误、照常写审计、日志里有命令名与堆栈；
+// 本地命令 panic 也兜住，但照旧不记审计。
+func TestPanicRecovered(t *testing.T) {
+	rec := &memRecorder{}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	boom := command.RunnerFunc(func(context.Context, *command.Invocation) (any, error) { panic("boom secret") })
+	r := Wrap(rec, table(t), logger, boom)
+	admin := v1.WithIdentity(context.Background(), v1.LocalAdmin("root"))
+	got, err := r.Run(admin, &command.Invocation{Path: []string{"whoami"}})
+	e := v1.AsError(err)
+	if got != nil || e.Code != v1.CodeInternal || strings.Contains(e.Reason, "boom") || e.Next == "" {
+		t.Fatalf("panic 应当转成不带原文的 internal：%v %+v", got, e)
+	}
+	if len(rec.entries) != 1 || rec.entries[0].Result != "internal" || rec.entries[0].Command != "whoami" {
+		t.Fatalf("应当照常写一条 result 为 internal 的审计：%+v", rec.entries)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "command=whoami") || !strings.Contains(out, "boom secret") || !strings.Contains(out, "goroutine") {
+		t.Fatalf("日志里应当有命令名、panic 的值与堆栈：\n%s", out)
+	}
+	if _, err := r.Run(admin, &command.Invocation{Path: []string{"version"}}); v1.AsError(err).Code != v1.CodeInternal {
+		t.Fatalf("本地命令 panic 也应当兜住：%v", err)
+	}
+	if len(rec.entries) != 1 {
+		t.Fatalf("本地命令照旧不记审计：%+v", rec.entries)
+	}
+}

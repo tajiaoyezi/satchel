@@ -28,6 +28,8 @@ go build ./cmd/satchel
 | `SATCHEL_LISTEN` | TCP 监听地址，对应 `config.yaml` 的 `listen` | `0.0.0.0:12889` |
 | `SATCHEL_LOG_LEVEL` | 日志级别 `debug` / `info` / `warn` / `error`，对应 `log_level`；日志同时写 stderr 与 `<数据目录>/logs/satchel.log`，见「日志与定时任务」 | `info` |
 | `SATCHEL_DATABASE_DRIVER` 等 | 数据库连接，见「数据库」一节 | SQLite |
+| `SATCHEL_DATABASE_MAX_OPEN_CONNS` | PostgreSQL 连接池最多打开的连接数（正整数）。只对 PostgreSQL 生效，不写进 `database.json`，也不算覆盖了连接参数（不挡在线迁移）；compose 没有透传，Docker 部署要用就自己加进 `environment` | `30` |
+| `SATCHEL_DATABASE_MAX_IDLE_CONNS` | PostgreSQL 连接池最多保留的空闲连接数（非负整数），其余同上 | `10` |
 | `SATCHEL_OUTPUT` | 设为 `json` 时 CLI 默认 JSON 输出（等价于 `--json`） | 文本 |
 | `SATCHEL_SERVER` | CLI 要连的远程主控地址（等价于 `--server`），见「令牌与远程接入」 | 本机 socket |
 | `SATCHEL_TOKEN` | CLI 带的 API 令牌（等价于 `--token`） | 不带 |
@@ -218,7 +220,7 @@ go build ./cmd/satchel
 
 ### 升级主控与更新 CDN
 
-- **检查更新**：`satchel update check [--channel stable|prerelease]`（只对管理员开放）报出当前版本、所选渠道的最新版本、发布说明、版本信息从哪来（更新 CDN 或 GitHub），以及这台主控能不能自升级（`can_apply` 与原因）。
+- **检查更新**：`satchel update check [--channel stable|prerelease]`（只对管理员开放）报出当前版本、所选渠道的最新版本、发布说明、版本信息从哪来（更新 CDN、GitHub，直连 GitHub 不通时经 gh-proxy），以及这台主控能不能自升级（`can_apply` 与原因）。
 - **升级**：`satchel update apply <版本号> --confirm <版本号>`，长任务（CLI 跟到结束）。它属于第 05 章危险操作的「主控自身类」：令牌要单独开这一类，每次都要带 `--confirm`。版本号必须等于 `update check` 看到的最新版本，不能降级、不能跳到中间版本。
   - 过程：按更新 CDN → GitHub → gh-proxy 的顺序下载二进制与签名（二进制与签名必须来自同一个源，一个源不对就整对换下一个）→ 用正在运行的主控编进去的公钥验签 → 试跑新二进制确认版本号 → 暂停写入（这期间只能查 job）→ 生成 `before-upgrade-<时间>.zip` → 写升级标记 `upgrade-pending.json` → 把旧二进制留成 `satchel.bak`，原子替换 → 优雅停止后原地 exec 新二进制（PID 不变，手工前台跑的也行）。
   - 新版本起来之后先经本机的 socket 请求一次自己的 `healthz`（不受「关闭公网访问」与反代登记影响），拿到 200，再确认 TCP 监听有回应（门的拒绝也算有回应），才算成功：job 写成 `done`，删掉升级标记。健康检查通过之前新版本只放行查 job、不收写入（这时还可能回退，回退会换回升级前的库），通常只有一两秒。跟着的 CLI 在主控重启的那几秒里接着等（最多 2 分钟；经反向代理访问时，代理这几秒回的 502 / 503 / 504、Cloudflare 回源失败的 520–524 也当作在重启）。

@@ -310,7 +310,7 @@ func (s *Service) ban(ctx context.Context, inv *command.Invocation) (any, error)
 	cfg, now := s.config()
 	if cfg.SkipLocalIP && ipaddr.IsLocalOrPrivate(ip) {
 		return nil, v1.Newf(v1.CodeBadRequest, "%s 是本地或内网地址，skip_local_ip 开着时这样的地址不受封禁，这条封禁不会生效", ip).
-			WithNext("确实要封，先用 satchel settings gates set --set skip_local_ip=false 关掉这个开关")
+			WithNext("确实要封，先关掉这个开关：在主控本机执行 satchel settings gates set --set skip_local_ip=false --resource-version <N> --verify-user <管理员账号>")
 	}
 	permanent := inv.Bool("permanent")
 	actor := v1.IdentityFrom(ctx).Actor

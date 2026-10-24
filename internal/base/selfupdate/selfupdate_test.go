@@ -125,6 +125,44 @@ func TestLatest(t *testing.T) {
 	}
 }
 
+// master-self-update「直连 GitHub 不通时经 gh-proxy」：直连成功不碰代理；直连失败时在同样的地址前加 gh-proxy 前缀再取一次，
+// source 记 gh-proxy；都失败时错误里有各个源的原因；Proxy 为空时不回退。
+func TestLatestViaProxy(t *testing.T) {
+	ctx := context.Background()
+	gh := newServer(t)
+	src := sources(nil, gh)
+	direct := "/api/repos/o/satchel/releases?per_page=30"
+	proxied := "/proxy/" + src.API + "/repos/o/satchel/releases?per_page=30"
+	list := []byte(`[{"tag_name":"v0.1.0-beta.2","prerelease":true}]`)
+
+	gh.files[direct], gh.files[proxied] = list, list
+	if rel, _, err := Latest(ctx, src, ChannelPrerelease, false); err != nil || rel.Source != SourceGitHub || gh.hits[proxied] != 0 {
+		t.Fatalf("直连成功时不该碰代理：%+v %v，代理被请求 %d 次", rel, err, gh.hits[proxied])
+	}
+	delete(gh.files, direct)
+	rel, _, err := Latest(ctx, src, ChannelPrerelease, false)
+	if err != nil || rel.Source != SourceProxy || rel.Version != "0.1.0-beta.2" || gh.hits[proxied] != 1 {
+		t.Fatalf("直连失败时应当经 gh-proxy 取到：%+v %v", rel, err)
+	}
+	delete(gh.files, proxied)
+	if _, _, err := Latest(ctx, src, ChannelPrerelease, false); err == nil || !strings.Contains(err.Error(), "GitHub：") || !strings.Contains(err.Error(), "gh-proxy：") {
+		t.Fatalf("都取不到时错误里应当有两个源的原因：%v", err)
+	}
+	// CDN 开着却取不到时，三个源的原因按 CDN、GitHub、gh-proxy 的顺序都在。
+	_, _, err = Latest(ctx, sources(newServer(t), gh), ChannelPrerelease, true)
+	if err == nil {
+		t.Fatal("三个源都取不到时应当报错")
+	}
+	msg := err.Error()
+	if i, j, k := strings.Index(msg, "CDN："), strings.Index(msg, "GitHub："), strings.Index(msg, "gh-proxy："); i < 0 || !(i < j && j < k) {
+		t.Fatalf("错误里应当依次有 CDN、GitHub、gh-proxy 的原因：%s", msg)
+	}
+	src.Proxy = ""
+	if _, _, err := Latest(ctx, src, ChannelPrerelease, false); err == nil || strings.Contains(err.Error(), "gh-proxy") {
+		t.Fatalf("Proxy 为空时不该回退：%v", err)
+	}
+}
+
 type signer struct {
 	pub  ed25519.PublicKey
 	priv ed25519.PrivateKey

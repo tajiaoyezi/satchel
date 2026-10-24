@@ -69,7 +69,19 @@ type Config struct {
 	User     string `json:"user,omitempty"`
 	Password string `json:"password,omitempty"`
 	SSLMode  string `json:"sslmode,omitempty"`
+	// PostgreSQL 的连接池：只从环境变量来，不进 database.json（在线迁移改写它时不用管）；SQLite 不用它们（storage-dual-database）。
+	// LoadConfig 之后两项都是最终值；没经过 LoadConfig 的配置 MaxOpenConns 为 0，Open 时两项都用默认值。
+	MaxOpenConns int `json:"-"`
+	MaxIdleConns int `json:"-"`
 }
+
+// 连接池的两个环境变量与默认值（与 mmwx 相同）。它们只调连接池、不改连哪个库，不在 dbEnvVars 里。
+const (
+	EnvMaxOpenConns = "SATCHEL_DATABASE_MAX_OPEN_CONNS"
+	EnvMaxIdleConns = "SATCHEL_DATABASE_MAX_IDLE_CONNS"
+	pgMaxOpenConns  = 30
+	pgMaxIdleConns  = 10
+)
 
 // DataDir 解析数据目录：flag 非空用 flag，否则用环境变量 SATCHEL_DATA_DIR，再否则 /var/lib/satchel。
 func DataDir(flag string) string {
@@ -211,6 +223,21 @@ func (c *Config) applyEnv() error {
 	set("SATCHEL_DATABASE_USER", &c.User)
 	set("SATCHEL_DATABASE_PASSWORD", &c.Password)
 	set("SATCHEL_DATABASE_SSLMODE", &c.SSLMode)
+	c.MaxOpenConns, c.MaxIdleConns = pgMaxOpenConns, pgMaxIdleConns
+	if v := os.Getenv(EnvMaxOpenConns); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return v1.Newf(v1.CodeConfig, "%s=%q 不是正整数", EnvMaxOpenConns, v)
+		}
+		c.MaxOpenConns = n
+	}
+	if v := os.Getenv(EnvMaxIdleConns); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return v1.Newf(v1.CodeConfig, "%s=%q 不是非负整数", EnvMaxIdleConns, v)
+		}
+		c.MaxIdleConns = n
+	}
 	return nil
 }
 

@@ -5,13 +5,17 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
 var envVars = []string{
 	"SATCHEL_DATABASE_DRIVER", "SATCHEL_DATABASE_PATH", "SATCHEL_DATABASE_HOST", "SATCHEL_DATABASE_PORT",
 	"SATCHEL_DATABASE_NAME", "SATCHEL_DATABASE_USER", "SATCHEL_DATABASE_PASSWORD", "SATCHEL_DATABASE_SSLMODE", EnvDataDir,
+	EnvMaxOpenConns, EnvMaxIdleConns,
 }
 
 // clearEnv 把本包关心的环境变量清空，免得开发机上的设置漏进测试。
@@ -55,6 +59,7 @@ func TestLoadConfigFromFilePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want.MaxOpenConns, want.MaxIdleConns = pgMaxOpenConns, pgMaxIdleConns // 连接池不在文件里，读回的是默认值
 	if cfg != want {
 		t.Fatalf("读回的配置不对：\n得到 %+v\n想要 %+v", cfg, want)
 	}
@@ -86,6 +91,40 @@ func TestEnvOverridesFile(t *testing.T) {
 	t.Setenv("SATCHEL_DATABASE_DRIVER", "mysql")
 	if _, err := LoadConfig(dir); err == nil {
 		t.Fatal("不支持的驱动应当报错")
+	}
+}
+
+// storage-dual-database「Driver selection」：连接池的两个变量有默认值、可以覆盖、不合法时 config 错误；
+// 它们不进 database.json，也不算覆盖了连接参数（EnvOverride 照旧为 false，在线迁移不受影响）。
+func TestPoolEnv(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	if err := SaveConfig(dir, Config{Driver: DriverPostgres, Host: "db", MaxOpenConns: 5, MaxIdleConns: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, ConfigFile)); strings.Contains(string(data), "conns") {
+		t.Fatalf("连接池不该写进 database.json：%s", data)
+	}
+	cfg, err := LoadConfig(dir)
+	if err != nil || cfg.MaxOpenConns != 30 || cfg.MaxIdleConns != 10 {
+		t.Fatalf("没设时应当是默认的 30 与 10：%+v %v", cfg, err)
+	}
+	t.Setenv(EnvMaxOpenConns, "5")
+	t.Setenv(EnvMaxIdleConns, "0")
+	if cfg, err = LoadConfig(dir); err != nil || cfg.MaxOpenConns != 5 || cfg.MaxIdleConns != 0 {
+		t.Fatalf("环境变量应当覆盖默认值，空闲数可以是 0：%+v %v", cfg, err)
+	}
+	if EnvOverride() {
+		t.Fatal("只设了连接池变量不算覆盖连接参数")
+	}
+	for name, bad := range map[string]string{EnvMaxOpenConns: "0", EnvMaxIdleConns: "abc"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, bad)
+			_, err := LoadConfig(dir)
+			if e := v1.AsError(err); err == nil || e.Code != v1.CodeConfig || !strings.Contains(e.Reason, name) {
+				t.Fatalf("%s=%s 应当是点名这个变量的 config 错误：%v", name, bad, err)
+			}
+		})
 	}
 }
 

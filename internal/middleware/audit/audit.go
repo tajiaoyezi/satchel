@@ -5,7 +5,9 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"time"
 	"unicode/utf8"
 
@@ -35,7 +37,7 @@ func WrapGated(rec Recorder, t *command.Table, logger *slog.Logger, gate *db.Wri
 		logger = slog.Default()
 	}
 	return command.RunnerFunc(func(ctx context.Context, inv *command.Invocation) (any, error) {
-		result, err := next.Run(ctx, inv)
+		result, err := runRecovered(ctx, inv, next, logger)
 		id := v1.IdentityFrom(ctx)
 		cmd, known := t.Lookup(inv.Name())
 		// anonymous 被拒的请求不记（扫描器会刷满）；但标了不要身份的命令（setup *）执行了就要记。
@@ -70,6 +72,24 @@ func WrapGated(rec Recorder, t *command.Table, logger *slog.Logger, gate *db.Wri
 		}
 		return result, err
 	})
+}
+
+// runRecovered 跑 next；处理函数 panic 时接住它，转成 PanicError、在日志里记下命令名与堆栈，主控进程不退出
+// （master-command-table「执行链兜住处理函数的 panic」）。它在「记不记审计」的判断之前，不记审计的命令也兜住。
+func runRecovered(ctx context.Context, inv *command.Invocation, next command.Runner, logger *slog.Logger) (result any, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			logger.Error("命令处理时 panic", "command", inv.Name(), "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+			result, err = nil, PanicError()
+		}
+	}()
+	return next.Run(ctx, inv)
+}
+
+// PanicError 是处理函数 panic 时给调用方的四字段错误：reason 不带 panic 的原文。MCP 的工具处理函数兜底时用同一个。
+func PanicError() *v1.Error {
+	return v1.New(v1.CodeInternal, "命令执行时出了内部错误").
+		WithNext("这是主控的缺陷；主控日志里有这次的堆栈，请附上日志反馈")
 }
 
 // derefID 把可空的 id 变成日志里可读的值：nil 打 <nil>。

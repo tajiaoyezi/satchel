@@ -76,6 +76,7 @@ description: "主控出问题时用：看日志、内置定时任务的运行记
 2. 改回门的设置。这一步只能由人做：请用户在主控本机、用 root 或运行主控的用户、在没有设 `SATCHEL_TOKEN` 与 `SATCHEL_SERVER`、也没用 `satchel login` 存过登录文件的终端里（不是 AI runtime 的终端）执行 `sudo satchel settings gates set --set master_local_only=false --set silent_mode=false --resource-version <N> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署把开头的 `sudo satchel` 换成 `docker compose exec satchel satchel`。`<N>` 是 `sudo satchel settings show` 里的 `metadata.resourceVersion`。
 3. 解封一个 IP。这一步只能由人做：请用户在同样的终端里执行 `sudo satchel security unban <ip> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署同样换成 `docker compose exec satchel satchel`。
 4. 静默模式也可以重启主控后，在开放期（`silent_mode_timeout` 分钟）里进去改。
+5. 只是被「关闭公网访问」挡住、本机 CLI 又用起来不方便时，可以请人给主控服务加上环境变量 `SATCHEL_FORCE_PUBLIC_ACCESS=1` 再重启（systemd 用 `sudo systemctl edit satchel` 加一行 `Environment=SATCHEL_FORCE_PUBLIC_ACCESS=1`；Docker 加进 compose 的 `environment`）。这个进程跳过这一道门，静默模式与封禁照常；它只在 `serve` 启动时读，不改设置。进来之后按第 2 步关掉 `master_local_only`，再去掉这个变量重启。
 
 ## 注意
 

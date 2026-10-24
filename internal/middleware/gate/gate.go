@@ -204,7 +204,7 @@ func bannedError(b coresecurity.Ban) *v1.Error {
 	} else if b.ExpiresAt != nil {
 		e = e.WithState("until", b.ExpiresAt.UTC().Format(time.RFC3339))
 	}
-	return e.WithNext("等封禁到期；管理员可以在主控本机执行 satchel security unban " + b.IP)
+	return e.WithNext("等封禁到期；管理员可以在主控本机执行 satchel security unban " + b.IP + " --verify-user <管理员账号>")
 }
 
 // writeError 写四字段错误（门在中间件层，不能引用投影层的 rest.WriteError，状态码同样按 v1.HTTPStatusOf 折算）。

@@ -208,6 +208,11 @@ func TestGatesEndToEnd(t *testing.T) {
 		if r := send(t, nil, "GET", base+"/api/v1/healthz", map[string]string{"Host": "panel.example.com" + port}, ""); r.status != 200 {
 			t.Fatalf("带主控域名的请求应当放行：%d %s", r.status, r.body)
 		}
+		initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
+		mcpHeaders := map[string]string{"Host": "panel.example.com" + port, "Accept": "application/json, text/event-stream"}
+		if r := send(t, nil, "POST", base+"/mcp", mcpHeaders, initialize); r.status != 200 {
+			t.Fatalf("经登记的同机反代、带主控域名访问 /mcp 应当与直连一样（master-mcp）：%d %s", r.status, r.body)
+		}
 		other := map[string]string{"Host": "203.0.113.5:12889"}
 		if r := send(t, nil, "GET", base+"/api/v1/healthz", other, ""); r.status != 403 || r.code() != "forbidden" || len(r.fields) != 4 {
 			t.Fatalf("带 IP 的 healthz 应当 403 四字段：%d %s", r.status, r.body)

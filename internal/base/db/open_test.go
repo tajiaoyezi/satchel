@@ -3,8 +3,10 @@ package db_test
 import (
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -154,5 +156,29 @@ func TestOpenPostgresUTC(t *testing.T) {
 	}
 	if db.DialectOf(bdb) != schema.Postgres {
 		t.Fatal("方言应当是 postgres")
+	}
+}
+
+// storage-dual-database「PostgreSQL 连接池的上限」：OpenDSN 用默认的 30；Open 按配置里的两项设。
+func TestPostgresPool(t *testing.T) {
+	bdb := dbtest.OpenPostgres(t)
+	if got := bdb.Stats().MaxOpenConnections; got != 30 {
+		t.Fatalf("默认最多 30 个连接，得到 %d", got)
+	}
+	u, err := url.Parse(os.Getenv(dbtest.EnvDSN))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(u.Port())
+	password, _ := u.User.Password()
+	cfg := db.Config{Driver: db.DriverPostgres, Host: u.Hostname(), Port: port, Name: strings.TrimPrefix(u.Path, "/"),
+		User: u.User.Username(), Password: password, SSLMode: u.Query().Get("sslmode"), MaxOpenConns: 5, MaxIdleConns: 1}
+	opened, err := db.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	if got := opened.Stats().MaxOpenConnections; got != 5 {
+		t.Fatalf("按配置应当最多 5 个连接，得到 %d", got)
 	}
 }

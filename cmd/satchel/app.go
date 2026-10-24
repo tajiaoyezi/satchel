@@ -318,7 +318,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	gates := gate.New(entryRoutes, guard, http.HandlerFunc(hiddenPath), cfg.ForcePublicAccess)
 	if cfg.ForcePublicAccess {
 		logger.Warn("环境变量 " + db.EnvForcePublicAccess + " 已打开：本进程跳过「关闭公网访问」这一道门（静默模式与封禁照常）；" +
-			"进来之后用 satchel settings gates set --set master_local_only=false 关掉，再去掉这个环境变量")
+			"进来之后在主控本机执行 satchel settings gates set --set master_local_only=false --resource-version <N> --verify-user <管理员账号> 关掉，再去掉这个环境变量")
 	}
 	// 门这一组的设置：启动时加载一次，之后每次设置写成功就推给门、登录限流、令牌猜测的封禁与 Turnstile，不用重启。
 	apply := func(s *coresettings.State) {

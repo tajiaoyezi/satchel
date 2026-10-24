@@ -226,7 +226,7 @@ func runMCPInit(ctx context.Context, inv *command.Invocation, env runtimeEnv) (a
 	if tok.Issued && !printOnly {
 		if err := verifyIssued(ctx, url, plain, *tok.ID); err != nil {
 			return nil, v1.Newf(v1.CodePartialFailure, "令牌已签发（id %d），但写进 runtime 配置的地址 %s 不认这把令牌（%s），它多半不是签发令牌的那个主控；mcp init 没有写配置",
-				*tok.ID, url, v1.AsError(err).Reason).WithNext(fmt.Sprintf("执行 satchel token revoke %d 吊销它，检查 --url 后重跑", *tok.ID))
+				*tok.ID, url, v1.AsError(err).Reason).WithNext(fmt.Sprintf("执行 satchel token revoke %d --verify-user <管理员账号> 吊销它，检查 --url 后重跑", *tok.ID))
 		}
 	}
 	out := initOutput{Runtime: name, URL: url, Token: tok, Files: []initFile{}, Commands: []string{}, Notes: []string{},
@@ -310,7 +310,7 @@ func writeFailure(err error, tok initToken, plain, snippet string, written []ini
 	} else {
 		e = v1.Newf(v1.CodePartialFailure, "令牌已签发（id %d），但写 runtime 的配置失败：%s", deref64(tok.ID), reason).
 			WithState("token", plain).WithState("snippet", strings.Split(snippet, "\n")).WithState("written", written).
-			WithNext(fmt.Sprintf("按 state.snippet 手工加上；不想要这把令牌就 satchel token revoke %d", deref64(tok.ID)) + skillsOnlyHint(runtime))
+			WithNext(fmt.Sprintf("按 state.snippet 手工加上；不想要这把令牌就执行 satchel token revoke %d --verify-user <管理员账号>", deref64(tok.ID)) + skillsOnlyHint(runtime))
 	}
 	if previous != "" {
 		e = e.WithState("previous_registration", previous).
@@ -487,7 +487,7 @@ func verifyIssued(ctx context.Context, url, plain string, id int64) error {
 
 // replacedTokenNote 是原来的配置里有一把别的令牌时给的提示：mcp init 不吊销它。
 func replacedTokenNote(path string) string {
-	return path + " 里原来有一把别的令牌，mcp init 没有吊销它；它若仍有效又不再用，用 satchel mcp status 或 token list 找到它的 id 后执行 satchel token revoke <id>（它的明文还留在备份里，备份权限 0600）"
+	return path + " 里原来有一把别的令牌，mcp init 没有吊销它；它若仍有效又不再用，用 satchel mcp status 或 token list 找到它的 id 后执行 satchel token revoke <id> --verify-user <管理员账号>（它的明文还留在备份里，备份权限 0600）"
 }
 
 // applyPlan 按计划写文件（改已有文件前先备份，原子写、保留原权限，新文件 0600、新目录 0700），再跑命令。

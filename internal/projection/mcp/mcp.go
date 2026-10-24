@@ -6,7 +6,10 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -14,6 +17,7 @@ import (
 
 	"github.com/satchel/satchel/internal/base/buildinfo"
 	"github.com/satchel/satchel/internal/command"
+	"github.com/satchel/satchel/internal/middleware/audit"
 	"github.com/satchel/satchel/internal/middleware/authz"
 	"github.com/satchel/satchel/internal/projection/cli"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
@@ -50,14 +54,17 @@ func NewHandler(opts cli.Options) http.Handler {
 	sdk.AddTool(server, &sdk.Tool{
 		Name:        "satchel_run",
 		Description: "跑一条 satchel 命令（参数是命令数组，不经 shell），返回该命令 --json 的输出；失败时返回 code / reason / state / next 四字段错误。",
-	}, runTool(opts))
+	}, recovered("satchel_run", runTool(opts)))
 	sdk.AddTool(server, &sdk.Tool{
 		Name:        "satchel_explain",
 		Description: "解释一条命令（参数、类别、权限范围、REST 映射）或一个 kind（字段与分档）；不带 target 列出全部。",
-	}, explainTool(opts.Table))
+	}, recovered("satchel_explain", explainTool(opts.Table)))
 	return sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
 		Stateless:    true,
 		JSONResponse: true,
+		// SDK 默认拒绝「进到回环、Host 不是回环」的请求（防 DNS rebinding），同机反代转来的正是这种请求。/mcp 能不能进来
+		// 只由三道门决定（master-access-gates）；跑命令要令牌或面板域名的 cookie，rebinding 用的域名拿不到（master-mcp）。
+		DisableLocalhostProtection: true,
 	})
 }
 
@@ -100,6 +107,20 @@ func explainTool(t *command.Table) sdk.ToolHandlerFor[explainInput, any] {
 			return errorResult(err), nil, nil
 		}
 		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: strings.TrimSpace(string(out))}}}, nil, nil
+	}
+}
+
+// recovered 给工具处理函数兜底：SDK 在单独的 goroutine 里调它、没人接 panic，不兜住整个主控会退出（master-command-table
+// 「执行链兜住处理函数的 panic」）。执行链里的 panic 已由留痕那一层转成错误，这里兜的是解析命令数组、组装输出这些链外的代码。
+func recovered[In any](tool string, h sdk.ToolHandlerFor[In, any]) sdk.ToolHandlerFor[In, any] {
+	return func(ctx context.Context, req *sdk.CallToolRequest, in In) (res *sdk.CallToolResult, out any, err error) {
+		defer func() {
+			if p := recover(); p != nil {
+				slog.Default().Error("MCP 工具处理时 panic", "tool", tool, "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+				res, out, err = errorResult(audit.PanicError()), nil, nil
+			}
+		}()
+		return h(ctx, req, in)
 	}
 }
 

@@ -79,5 +79,5 @@ func (c *Client) Verify(ctx context.Context, secret, token, remoteIP string) (Re
 
 func unavailable(cause error) *v1.Error {
 	return v1.Wrap(v1.CodeUnavailable, "连不上 Cloudflare 的人机验证服务，暂时无法核对验证码", cause).
-		WithNext("稍后重试；主控本机的 CLI 不受影响，可以用 satchel settings gates set 清掉 Turnstile 的 key 关掉验证码")
+		WithNext("稍后重试；主控本机的 CLI 不受影响，要关掉验证码就在主控本机执行 satchel settings gates set --set turnstile_site_key= --set turnstile_secret_key= --resource-version <N> --verify-user <管理员账号>")
 }

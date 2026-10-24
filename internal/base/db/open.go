@@ -41,12 +41,20 @@ func SQLiteDSN(path string) string {
 	return "file:" + strings.Join(segments, "/") + "?" + sqliteParams
 }
 
-// Open 按配置打开数据库并 ping 一次。
+// Open 按配置打开数据库并 ping 一次。PostgreSQL 的连接池按配置里的两项设（没经过 LoadConfig 的配置用默认值）。
 func Open(ctx context.Context, cfg Config) (*bun.DB, error) {
-	return OpenDSN(ctx, cfg.Driver, cfg.DSN())
+	bdb, err := OpenDSN(ctx, cfg.Driver, cfg.DSN())
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Driver == DriverPostgres && cfg.MaxOpenConns > 0 {
+		bdb.SetMaxOpenConns(cfg.MaxOpenConns)
+		bdb.SetMaxIdleConns(cfg.MaxIdleConns)
+	}
+	return bdb, nil
 }
 
-// OpenDSN 用连接串打开数据库。PostgreSQL 会话强制 UTC，读回的时间也是 UTC。
+// OpenDSN 用连接串打开数据库。PostgreSQL 会话强制 UTC，读回的时间也是 UTC，连接池用默认的上限。
 // 失败返回四字段错误，驱动原文只在 Unwrap 链里。
 func OpenDSN(ctx context.Context, driver Driver, dsn string) (*bun.DB, error) {
 	var bdb *bun.DB
@@ -67,6 +75,8 @@ func OpenDSN(ctx context.Context, driver Driver, dsn string) (*bun.DB, error) {
 		}
 		cfg.RuntimeParams["TimeZone"] = "UTC"
 		sqldb := stdlib.OpenDB(*cfg, stdlib.OptionAfterConnect(scanTimeInUTC))
+		sqldb.SetMaxOpenConns(pgMaxOpenConns)
+		sqldb.SetMaxIdleConns(pgMaxIdleConns)
 		bdb = bun.NewDB(sqldb, pgdialect.New())
 	default:
 		return nil, v1.Newf(v1.CodeConfig, "不支持的数据库驱动 %q，只认 sqlite 与 postgres", driver)
