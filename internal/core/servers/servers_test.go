@@ -135,3 +135,38 @@ func TestStatusWrites(t *testing.T) {
 		}
 	})
 }
+
+// 内核那几列：只写给定的列，core_boot_count 写的是绝对值（同一个值写两次不变），不碰心跳写的列，不抬 resourceVersion；ByID 取得到。
+func TestCoreWrites(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		r, ctx := repo(bdb), context.Background()
+		s, _ := r.Create(ctx, "hk-1", "websocket")
+		id := s.Metadata.ID
+		if err := r.MarkOnline(ctx, id, "203.0.113.5", false, ts(1), ts(2)); err != nil {
+			t.Fatal(err)
+		}
+		t1, t2 := ts(10), ts(20)
+		if err := r.MarkCore(ctx, id, true, "1.14.4", &t1, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.MarkCore(ctx, id, true, "1.14.4", &t2, 1); err != nil {
+			t.Fatal(err)
+		}
+		for range 2 { // 同一个绝对值写两次
+			if err := r.MarkCore(ctx, id, false, "", nil, 3); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := r.ByID(ctx, id)
+		if err != nil || got.Spec.Name != "hk-1" {
+			t.Fatalf("ByID 应当取得到：%v %v", got, err)
+		}
+		st := got.Status
+		if st.CoreRunning || st.CoreVersion != "" || st.CoreBootTime == nil || !st.CoreBootTime.Equal(t2) || st.CoreBootCount != 3 {
+			t.Fatalf("内核那几列不对：running=%v version=%q boot=%v count=%d", st.CoreRunning, st.CoreVersion, st.CoreBootTime, st.CoreBootCount)
+		}
+		if st.Status != StatusConnected || !st.LastHeartbeat.Equal(ts(2)) || got.Metadata.ResourceVersion != 1 {
+			t.Fatalf("不应当碰心跳写的列，也不抬 resourceVersion：%+v rv=%d", st, got.Metadata.ResourceVersion)
+		}
+	})
+}

@@ -86,6 +86,15 @@ func (r *Repo) one(ctx context.Context, where string, arg any) (*model.Server, e
 }
 
 // ByName 按名字取一台服务器；没有时返回 ErrNotFound。
+// ByID 按 id 取服务器。
+func (r *Repo) ByID(ctx context.Context, id int64) (*Server, error) {
+	m, err := r.one(ctx, "id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	return object(m), nil
+}
+
 func (r *Repo) ByName(ctx context.Context, name string) (*Server, error) {
 	m, err := r.one(ctx, "name = ?", name)
 	if err != nil {
@@ -159,6 +168,20 @@ func (r *Repo) MarkOffline(ctx context.Context, id int64, at time.Time) (bool, e
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// MarkCore 记内核的状态（node-traffic「主控侧的累计与重启基线」）：只写 core_running、core_version、core_boot_count 与
+// core_boot_time（bootTime 为空时不动它）。core_boot_count 给的是绝对值，不是「读出来加上」：写进去了却没收到应答时，
+// 重试写的是同一个值，一次重启不会被记两次。只有流量拉取这一处写这几列。不抬 resourceVersion。
+func (r *Repo) MarkCore(ctx context.Context, id int64, running bool, version string, bootTime *time.Time, bootCount int64) error {
+	m := &model.Server{ID: id, CoreRunning: running, CoreVersion: version, CoreBootCount: bootCount}
+	cols := []string{"core_running", "core_version", "core_boot_count"}
+	if bootTime != nil {
+		b := bootTime.UTC().Truncate(time.Microsecond)
+		m.CoreBootTime = &b
+		cols = append(cols, "core_boot_time")
+	}
+	return r.store.UpdateStatus(ctx, m, cols)
 }
 
 // SweepOffline 把 status 为 connected 而最近心跳早于 before 的服务器标为离线，返回标了几台。

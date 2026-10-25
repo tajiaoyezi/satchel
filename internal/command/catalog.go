@@ -28,7 +28,8 @@ var GroupSummaries = map[string]string{
 	"update":                 "主控自升级：检查更新、升到所选渠道的最新版（只对管理员开放；升级属主控自身类危险操作）",
 	"settings update-cdn":    "更新 CDN 的开关（主控自身类危险操作）",
 	"settings image":         "logo、登录壁纸这类图片字段用的图片：上传之后用 settings set 把地址写进字段",
-	"server":                 "服务器（节点）：加服务器、取安装命令、看在线状态",
+	"server":                 "服务器（节点）：加服务器、取安装命令、看在线状态，经通道临时限速、踢线、看连接与流量",
+	"server limit":           "主控临时限速：设与撤（只动「主控临时」那一份来源）",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -56,6 +57,8 @@ func catalogCommands() []*Command {
 // Server 的修改与删除等 plan/apply 到了再加；安装命令里的 token 原文只给带密钥读取的身份。
 func serverCommands() []*Command {
 	name := Arg{Name: "name", Description: "服务器的名字（server list 里的 name）"}
+	inbound := Flag{Name: "inbound", Type: TypeString, Description: "入站的 tag（节点 kernel.json 里的 inbounds[].tag）"}
+	credential := Flag{Name: "credential", Type: TypeString, Description: "凭据名（入站里用户的名字）"}
 	return []*Command{
 		{Path: []string{"server", "add"}, Summary: "加一台服务器并生成它的 token（这一版连接模式只有 websocket；建了以后暂时改不了也删不了）", Class: ClassConfig,
 			Args:  []Arg{name},
@@ -65,6 +68,19 @@ func serverCommands() []*Command {
 		{Path: []string{"server", "list"}, Summary: "列出服务器与在线状态（pending 还没连上过，connected 在线，offline 离线）", Class: ClassRead, List: true,
 			Columns: []string{"id", "name", "connection_mode", "status", "last_heartbeat", "ip_address"}},
 		{Path: []string{"server", "get"}, Summary: "查看一台服务器的完整对象（token 一律打码）", Class: ClassRead,
+			Args: []Arg{name}},
+		{Path: []string{"server", "limit", "set"}, Summary: "给一台在线服务器上「入站 × 凭据」设主控临时限速（0 表示这一份显式不限速；结果里有三份来源与生效值）", Class: ClassAction,
+			Args: []Arg{name}, Flags: []Flag{inbound, credential,
+				{Name: "mbps", Type: TypeInt, Description: "限速值，单位 Mbps，不小于 0；0 表示这一份显式不限速"},
+				{Name: "expires-in", Type: TypeDuration, Description: "多久之后自动撤掉，如 30m；不给或为 0 表示一直有效"}}},
+		{Path: []string{"server", "limit", "clear"}, Summary: "撤掉一台在线服务器上「入站 × 凭据」的主控临时限速（让这一份退出合成，与设成 0 不同）", Class: ClassAction,
+			Args: []Arg{name}, Flags: []Flag{inbound, credential}},
+		{Path: []string{"server", "kick"}, Summary: "踢掉一台在线服务器上某个凭据的连接（不给 --inbound 时踢它在所有入站上的连接；踢线不是封禁）", Class: ClassAction,
+			Args: []Arg{name}, Flags: []Flag{credential, {Name: "inbound", Type: TypeString, Description: "入站的 tag；不给时作用到所有入站"}}},
+		{Path: []string{"server", "connections"}, Summary: "列出一台在线服务器上「入站 × 凭据」的活动连接", Class: ClassRead, List: true,
+			Args: []Arg{name}, Flags: []Flag{inbound, credential},
+			Columns: []string{"id", "network", "peer", "outbound", "start"}},
+		{Path: []string{"server", "traffic"}, Summary: "看主控收上来的流量累计（按入站、出站、凭据分上下行；在主控内存里，主控重启后从零开始）与内核重启次数", Class: ClassRead,
 			Args: []Arg{name}},
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -527,6 +528,18 @@ func (m *Manager) Call(ctx context.Context, serverID int64, method string, param
 		return nil, ErrOffline
 	}
 	return s.caller.Call(ctx, s.conn, method, params, timeout)
+}
+
+// ConnectedIDs 列出现在有连接（已登记）的服务器 id，从小到大。
+func (m *Manager) ConnectedIDs() []int64 {
+	m.mu.Lock()
+	ids := make([]int64, 0, len(m.conns))
+	for id := range m.conns {
+		ids = append(ids, id)
+	}
+	m.mu.Unlock()
+	slices.Sort(ids)
+	return ids
 }
 
 // Connected 报告这台服务器现在有没有连接。

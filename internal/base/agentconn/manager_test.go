@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,10 +39,16 @@ type fakeDir struct {
 var errDBClosed = errors.New("数据库已关闭")
 
 func (d *fakeDir) Lookup(_ context.Context, token string) (Node, bool, error) {
+	if token == "tok2" { // 第二台，只有 TestConnectedIDs 用；在线状态只记第一台的
+		return Node{ID: 2, Name: "hk-2"}, true, nil
+	}
 	return Node{ID: 1, Name: "hk-1"}, token == "tok", nil
 }
 
-func (d *fakeDir) Online(ctx context.Context, _ int64, ip string, _ bool, boot, _ time.Time) error {
+func (d *fakeDir) Online(ctx context.Context, id int64, ip string, _ bool, boot, _ time.Time) error {
+	if id != 1 {
+		return nil
+	}
 	if d.isClosed() {
 		return errDBClosed
 	}
@@ -60,7 +67,10 @@ func (d *fakeDir) Online(ctx context.Context, _ int64, ip string, _ bool, boot, 
 	return nil
 }
 
-func (d *fakeDir) Offline(context.Context, int64, time.Time) error {
+func (d *fakeDir) Offline(_ context.Context, id int64, _ time.Time) error {
+	if id != 1 {
+		return nil
+	}
 	if d.isClosed() {
 		return errDBClosed
 	}
@@ -125,8 +135,13 @@ type testAgent struct {
 	conn *xrpc.Conn
 }
 
-// connect 握手并认证，返回认证结果；连接在认证前后被关掉时 err 非空。
+// connect 以 token tok 握手并认证，返回认证结果；连接在认证前后被关掉时 err 非空。
 func connect(t *testing.T, url, ip string, pub ed25519.PublicKey) (*testAgent, xrpc.AuthResult, error) {
+	t.Helper()
+	return connectAs(t, url, ip, pub, "tok")
+}
+
+func connectAs(t *testing.T, url, ip string, pub ed25519.PublicKey, token string) (*testAgent, xrpc.AuthResult, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -139,7 +154,7 @@ func connect(t *testing.T, url, ip string, pub ed25519.PublicKey) (*testAgent, x
 	if err := xrpc.ClientHandshake(ctx, a.conn, pub); err != nil {
 		return a, xrpc.AuthResult{}, err
 	}
-	if err := a.conn.Write(ctx, xrpc.TypeAuth, xrpc.Auth{Token: "tok", AgentVersion: "1.0.0", ControlProtocol: xrpc.ControlProtocol}); err != nil {
+	if err := a.conn.Write(ctx, xrpc.TypeAuth, xrpc.Auth{Token: token, AgentVersion: "1.0.0", ControlProtocol: xrpc.ControlProtocol}); err != nil {
 		return a, xrpc.AuthResult{}, err
 	}
 	m, err := a.conn.Read(ctx)
@@ -444,6 +459,21 @@ func TestPingTimeoutClosesConnection(t *testing.T) {
 		status, _, _ := dir.state()
 		return status == "offline" && !m.Connected(1)
 	})
+}
+
+// ConnectedIDs 只列出已登记的连接：两台连上后列出两台，一台断开后只剩另一台。
+func TestConnectedIDs(t *testing.T) {
+	m, url, pub := serveManager(t, Config{Directory: &fakeDir{}})
+	mustConnect(t, url, "10.0.0.1", pub)
+	b, res, err := connectAs(t, url, "10.0.0.2", pub, "tok2")
+	if err != nil || !res.OK {
+		t.Fatalf("第二台应当认证成功：%+v %v", res, err)
+	}
+	if ids := m.ConnectedIDs(); !slices.Equal(ids, []int64{1, 2}) {
+		t.Fatalf("应当列出两台：%v", ids)
+	}
+	b.ws.Close(websocket.StatusNormalClosure, "bye")
+	waitFor(t, "断开的那台不再列出", func() bool { return slices.Equal(m.ConnectedIDs(), []int64{1}) })
 }
 
 // 认证失败记录会过期：一万个来源各失败一次后过了 24 小时，再来一个来源时旧记录全部清掉。

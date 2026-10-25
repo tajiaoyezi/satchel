@@ -36,9 +36,14 @@
 | `security events list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/security/events` |
 | `security unban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/unban/{ip}` |
 | `server add` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/add/{name}` |
+| `server connections` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server/connections/{name}` |
 | `server get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/get/{name}` |
 | `server install-command` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/install-command/{name}` |
+| `server kick` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/kick/{name}` |
+| `server limit clear` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/limit/clear/{name}` |
+| `server limit set` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/limit/set/{name}` |
 | `server list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server` |
+| `server traffic` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/traffic/{name}` |
 | `settings gates set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/gates/set` |
 | `settings image upload` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/image/upload` |
 | `settings master-url set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/master-url/set` |

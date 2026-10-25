@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -177,10 +178,14 @@ func (a *fakeAgent) heartbeat(boot time.Time) []byte {
 
 // serveCalls 让假节点在后台回应主控的请求（agent.info，不认识的方法照规矩回错误），并跳过心跳确认。
 // 之后这条连接只能由它读；返回的通道在读到错误（连接被断开）时关闭。
-func (a *fakeAgent) serveCalls() <-chan struct{} {
+func (a *fakeAgent) serveCalls() <-chan struct{} { return a.serveMethods(nil) }
+
+// serveMethods 同 serveCalls，另外按 extra 回别的方法（m2-03 的连接管控与流量）。
+func (a *fakeAgent) serveMethods(extra xrpc.Methods) <-chan struct{} {
 	methods := xrpc.Methods{xrpc.MethodAgentInfo: func(context.Context, json.RawMessage) (any, error) {
 		return xrpc.AgentInfo{AgentVersion: "0.2.0-test", ControlProtocol: xrpc.ControlProtocol}, nil
 	}}
+	maps.Copy(methods, extra)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

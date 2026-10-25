@@ -33,7 +33,7 @@ func TestSkillsDelivered(t *testing.T) {
 	}
 }
 
-// master-skills「satchel-servers 讲到四条命令与主控地址」。
+// master-skills「satchel-servers 讲到四条命令与主控地址」与「satchel-servers 讲到连接管控与流量的五条命令」。
 func TestServersSkillMentions(t *testing.T) {
 	skills, _, err := Load(Files())
 	if err != nil {
@@ -43,7 +43,9 @@ func TestServersSkillMentions(t *testing.T) {
 		if s.Name != "satchel-servers" {
 			continue
 		}
-		for _, want := range []string{"satchel server add", "satchel server install-command", "satchel server list", "satchel server get", "settings master-url set"} {
+		for _, want := range []string{"satchel server add", "satchel server install-command", "satchel server list", "satchel server get", "settings master-url set",
+			"satchel server limit set", "satchel server limit clear", "satchel server kick", "satchel server connections", "satchel server traffic",
+			"设成 0 与撤掉不是一回事"} {
 			if !strings.Contains(s.Content, want) {
 				t.Errorf("satchel-servers 里应当有 %s", want)
 			}
@@ -91,8 +93,8 @@ func TestCurrentCommandsCovered(t *testing.T) {
 			visible++
 		}
 	}
-	if visible != 61 || !used["overview"] || !used["token create"] || !used["serve"] {
-		t.Fatalf("应当覆盖 61 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
+	if visible != 66 || !used["overview"] || !used["token create"] || !used["serve"] {
+		t.Fatalf("应当覆盖 66 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
 	}
 	extra := command.MustNew(append(command.Catalog().All(), &command.Command{Path: []string{"demo", "ping"}, Summary: "测试", Class: command.ClassRead})...)
 	if missing := Coverage(extra, refs); strings.Join(missing, ",") != "demo ping" {

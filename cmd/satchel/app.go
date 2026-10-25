@@ -180,7 +180,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		return nil, err
 	}
 	masterPub := masterKey.Public().(ed25519.PublicKey)
-	serversSvc := svcservers.New(coreservers.New(bdb, st), settingsRepo, masterPub)
+	serversSvc := svcservers.New(coreservers.New(bdb, st), settingsRepo, masterPub, logger)
 	conns := agentconn.New(agentconn.Config{Identity: masterKey, Directory: serversSvc.Directory(), Version: buildinfo.Version, Logger: logger,
 		OfflineThreshold: cfg.OfflineThreshold,
 		HeartbeatInterval: func(ctx context.Context) time.Duration {
@@ -190,6 +190,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 			}
 			return s.HeartbeatInterval()
 		}})
+	serversSvc.SetConns(conns)
 	// 内置任务的运行记录：上次主控停止时还在跑的记录先收尾，再装配任务（master-scheduler）。
 	schedules := schedule.New(taskruns.New(bdb), logger)
 	if err := schedules.MarkInterrupted(context.Background()); err != nil {

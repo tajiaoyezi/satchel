@@ -69,6 +69,8 @@ func Tasks(d Deps) []Task {
 			Run: pruned(d.Jobs.Prune)},
 		{Info: schedule.TaskInfo{Name: "server_offline_sweep", Summary: "把心跳超过离线阈值的在线服务器标为离线", Every: 30 * time.Second},
 			Run: d.Servers.SweepOffline(threshold, time.Now)},
+		{Info: schedule.TaskInfo{Name: "server_traffic_collect", Summary: "到了 traffic_collect_interval 就向在线的服务器拉一次流量快照，收进主控内存里的累计", Every: 10 * time.Second},
+			Run: d.Servers.CollectTraffic(time.Now)},
 	}
 	if db.DialectOf(d.DB) == schema.SQLite {
 		tasks = append(tasks, Task{Info: schedule.TaskInfo{Name: "db_checkpoint", Summary: "把 SQLite 的 WAL 写回主库", Every: 5 * time.Minute},

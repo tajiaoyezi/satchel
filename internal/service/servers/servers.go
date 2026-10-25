@@ -1,5 +1,6 @@
-// Package servers 是服务器的业务（m2-02 node-pairing、node-channel）：server add / install-command / list / get 四条命令，
-// 以及给节点连接管理（base/agentconn）用的服务器仓储适配。
+// Package servers 是服务器的业务：server add / install-command / list / get 四条命令与给节点连接管理（base/agentconn）用的
+// 服务器仓储适配（m2-02 node-pairing、node-channel），以及经通道指挥节点的限速、踢线、列连接与流量的拉取和累计
+// （m2-03 node-limiter、node-traffic）。
 package servers
 
 import (
@@ -7,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -27,11 +29,18 @@ type Service struct {
 	repo      *core.Repo
 	settings  *coresettings.Repo
 	masterKey ed25519.PublicKey
+	logger    *slog.Logger
+	conns     Conns // 建好连接管理之后由 SetConns 设上
+	trafficState
 }
 
-// New 建服务；masterKey 是主控通信身份的公钥（安装命令里要带它）。
-func New(repo *core.Repo, settings *coresettings.Repo, masterKey ed25519.PublicKey) *Service {
-	return &Service{repo: repo, settings: settings, masterKey: masterKey}
+// New 建服务；masterKey 是主控通信身份的公钥（安装命令里要带它）；logger 为空时不记日志。
+func New(repo *core.Repo, settings *coresettings.Repo, masterKey ed25519.PublicKey, logger *slog.Logger) *Service {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return &Service{repo: repo, settings: settings, masterKey: masterKey, logger: logger,
+		trafficState: trafficState{accs: map[int64]*accumulator{}, lastPull: map[int64]time.Time{}}}
 }
 
 // Bindings 是本服务的命令处理函数。
@@ -41,6 +50,11 @@ func (s *Service) Bindings() command.Bindings {
 		"server install-command": s.installCommand,
 		"server list":            s.list,
 		"server get":             s.get,
+		"server limit set":       s.limitSet,
+		"server limit clear":     s.limitClear,
+		"server kick":            s.kick,
+		"server connections":     s.connections,
+		"server traffic":         s.traffic,
 	}
 }
 

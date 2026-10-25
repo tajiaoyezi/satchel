@@ -3,6 +3,7 @@ package scheduler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/uptrace/bun"
 
+	"github.com/satchel/satchel/internal/base/agentconn"
 	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/db/dbtest"
 	"github.com/satchel/satchel/internal/base/schema"
@@ -24,6 +26,7 @@ import (
 	coresecurity "github.com/satchel/satchel/internal/core/security"
 	coreservers "github.com/satchel/satchel/internal/core/servers"
 	"github.com/satchel/satchel/internal/core/sessions"
+	coresettings "github.com/satchel/satchel/internal/core/settings"
 	"github.com/satchel/satchel/internal/core/taskruns"
 	"github.com/satchel/satchel/internal/core/users"
 	"github.com/satchel/satchel/internal/service/audit"
@@ -43,6 +46,12 @@ func TestTasksPerDriver(t *testing.T) {
 		db.EnsureDataDir(dataDir)
 		// backups/ 里放一份刚生成的（假）备份：backup_local 这一轮跳过，不用真的导出（PostgreSQL 的导出要 pg_dump）。
 		os.WriteFile(filepath.Join(dataDir, db.BackupsDir, "satchel-backup-x.zip"), []byte("x"), 0o600)
+		settingsRepo := coresettings.New(bdb, st, schema.Default())
+		if err := settingsRepo.EnsureSingleton(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		srvs := servers.New(coreservers.New(bdb, st), settingsRepo, nil, nil)
+		srvs.SetConns(noConns{})
 		tasks := Tasks(Deps{
 			DB:       bdb,
 			Auth:     auth.New(users.New(bdb, st), sessions.New(bdb)),
@@ -51,7 +60,7 @@ func TestTasksPerDriver(t *testing.T) {
 			Schedule: schedule.New(taskruns.New(bdb), nil),
 			Backup:   svcbackup.New(svcbackup.Deps{DataDir: dataDir, DB: bdb}),
 			Jobs:     jobs.New(corejobs.New(bdb, st), command.Catalog(), nil, nil),
-			Servers:  servers.New(coreservers.New(bdb, st), nil, nil),
+			Servers:  srvs,
 		})
 		var names []string
 		for _, task := range tasks {
@@ -63,7 +72,7 @@ func TestTasksPerDriver(t *testing.T) {
 				t.Fatalf("%s 跑一次应当成功并给一句结果：%q %v", task.Info.Name, detail, err)
 			}
 		}
-		want := []string{"session_cleanup", "audit_cleanup", "security_event_cleanup", "task_run_cleanup", "ban_sweep", "login_limit_sweep", "backup_local", "job_cleanup", "server_offline_sweep"}
+		want := []string{"session_cleanup", "audit_cleanup", "security_event_cleanup", "task_run_cleanup", "ban_sweep", "login_limit_sweep", "backup_local", "job_cleanup", "server_offline_sweep", "server_traffic_collect"}
 		if db.DialectOf(bdb) == schema.SQLite {
 			want = append(want, "db_checkpoint")
 		}
@@ -73,6 +82,15 @@ func TestTasksPerDriver(t *testing.T) {
 		}
 	})
 }
+
+// noConns 是没有任何节点连着的连接管理。
+type noConns struct{}
+
+func (noConns) Call(context.Context, int64, string, any, time.Duration) (json.RawMessage, error) {
+	return nil, agentconn.ErrOffline
+}
+
+func (noConns) ConnectedIDs() []int64 { return nil }
 
 // db_health：好变坏记 error、坏变好记 info，状态不变时不重复记。
 func TestHealthCheckTransitions(t *testing.T) {
@@ -137,7 +155,7 @@ func TestServerOfflineSweep(t *testing.T) {
 		now := time.Now().UTC().Truncate(time.Microsecond)
 		_ = repo.MarkOnline(ctx, stale.Metadata.ID, "", false, time.Time{}, now.Add(-2*time.Minute))
 		_ = repo.MarkOnline(ctx, fresh.Metadata.ID, "", false, time.Time{}, now.Add(-10*time.Second))
-		run := servers.New(repo, nil, nil).SweepOffline(90*time.Second, func() time.Time { return now })
+		run := servers.New(repo, nil, nil, nil).SweepOffline(90*time.Second, func() time.Time { return now })
 		detail, err := run(ctx)
 		if err != nil || detail != "标为离线 1 台" {
 			t.Fatalf("应当标为离线 1 台：%q %v", detail, err)

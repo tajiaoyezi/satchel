@@ -13,3 +13,15 @@ func (st *State) HeartbeatInterval() time.Duration {
 	}
 	return heartbeatIntervalDefault * time.Second
 }
+
+// trafficCollectIntervalDefault 是 system_config.traffic_collect_interval 列的库默认值（tables_ops.go）。
+const trafficCollectIntervalDefault = 60
+
+// TrafficCollectInterval 是主控向节点拉取计数快照的间隔（node-traffic「定时拉取计数快照」）。
+// 写入时已保证不小于 10；不是正数时（导入或手改的坏值）按默认 60 秒取。
+func (st *State) TrafficCollectInterval() time.Duration {
+	if n, ok := st.Values["traffic_collect_interval"].(int64); ok && n >= 1 {
+		return time.Duration(n) * time.Second
+	}
+	return trafficCollectIntervalDefault * time.Second
+}
