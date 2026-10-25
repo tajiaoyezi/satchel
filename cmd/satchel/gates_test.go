@@ -208,6 +208,10 @@ func TestGatesEndToEnd(t *testing.T) {
 		if r := send(t, nil, "GET", base+"/api/v1/healthz", map[string]string{"Host": "panel.example.com" + port}, ""); r.status != 200 {
 			t.Fatalf("带主控域名的请求应当放行：%d %s", r.status, r.body)
 		}
+		// master-access-gates「节点通道是机器入口」：关闭公网访问照常作用于节点通道。
+		if r := send(t, nil, "GET", base+"/api/remote/install.sh", map[string]string{"Host": "panel.example.com" + port}, ""); r.status != 200 {
+			t.Fatalf("带主控域名取安装脚本应当放行：%d %s", r.status, r.body)
+		}
 		initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
 		mcpHeaders := map[string]string{"Host": "panel.example.com" + port, "Accept": "application/json, text/event-stream"}
 		if r := send(t, nil, "POST", base+"/mcp", mcpHeaders, initialize); r.status != 200 {
@@ -216,6 +220,9 @@ func TestGatesEndToEnd(t *testing.T) {
 		other := map[string]string{"Host": "203.0.113.5:12889"}
 		if r := send(t, nil, "GET", base+"/api/v1/healthz", other, ""); r.status != 403 || r.code() != "forbidden" || len(r.fields) != 4 {
 			t.Fatalf("带 IP 的 healthz 应当 403 四字段：%d %s", r.status, r.body)
+		}
+		if r := send(t, nil, "GET", base+"/api/remote/install.sh", other, ""); r.status != 403 || r.code() != "forbidden" {
+			t.Fatalf("带 IP 取安装脚本应当 403：%d %s", r.status, r.body)
 		}
 		if r := send(t, nil, "GET", base+"/some/page?x=1", other, ""); r.status != 307 || r.header.Get("Location") != "https://panel.example.com/some/page?x=1" {
 			t.Fatalf("网页请求应当 307 到主控地址：%d %s", r.status, r.header.Get("Location"))
@@ -267,6 +274,9 @@ func TestGatesEndToEnd(t *testing.T) {
 		decodeInto(t, text, &viaMCP)
 		if isErr || viaMCP.ActorKind != "token" {
 			t.Fatalf("MCP 在锁定期照常：%s", text)
+		}
+		if r := send(t, nil, "GET", base+"/api/remote/install.sh", nil, ""); r.status != 200 || !strings.HasPrefix(r.body, "#!/bin/sh") {
+			t.Fatalf("静默模式不拦节点通道：%d", r.status)
 		}
 		if r := send(t, nil, "GET", base+"/api/v1/healthz", nil, ""); r.status != 200 {
 			t.Fatalf("healthz 在锁定期照常：%d", r.status)

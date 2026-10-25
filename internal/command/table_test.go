@@ -35,6 +35,7 @@ func TestCatalog(t *testing.T) {
 		"security ban": ClassAction, "security unban": ClassAction,
 		"settings set": ClassMasterSettings, "settings rollback": ClassMasterSettings, "settings master-url set": ClassMasterSettings,
 		"settings gates set": ClassMasterSettings, "settings turnstile test": ClassAction, "settings image upload": ClassAction,
+		"server add": ClassConfig, "server install-command": ClassRead, "server list": ClassRead, "server get": ClassRead,
 	}
 	if len(table.All()) != len(want) {
 		t.Fatalf("目录里应当恰好 %d 条命令，得到 %v", len(want), table.Names())

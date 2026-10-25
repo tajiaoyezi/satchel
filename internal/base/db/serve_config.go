@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -27,9 +28,13 @@ const (
 	// 两个只认环境变量、不进 config.yaml 的开关（master-access-gates），只在启动时读。
 	EnvForcePublicAccess = "SATCHEL_FORCE_PUBLIC_ACCESS"
 	EnvAllowedOrigins    = "SATCHEL_ALLOWED_ORIGINS"
+	// 节点心跳超过这么多秒算离线（node-channel「心跳与在线状态」），只认环境变量。
+	EnvOfflineThreshold = "SATCHEL_OFFLINE_THRESHOLD_SECONDS"
 
-	DefaultListen   = "0.0.0.0:12889"
-	DefaultLogLevel = "info"
+	DefaultListen           = "0.0.0.0:12889"
+	DefaultLogLevel         = "info"
+	DefaultOfflineThreshold = 90 * time.Second
+	minOfflineThreshold     = 30 * time.Second
 )
 
 // ServeConfig 是 config.yaml 的内容，加两个只认环境变量的开关（yaml:"-"，写进文件是未知键）。
@@ -40,6 +45,8 @@ type ServeConfig struct {
 	ForcePublicAccess bool `yaml:"-"`
 	// AllowedOrigins 是允许跨域调用的来源：归一后的 origin 列表，或单独一个 *；空表示只允许同源。
 	AllowedOrigins []string `yaml:"-"`
+	// OfflineThreshold 是节点的离线阈值：心跳超过它算离线。
+	OfflineThreshold time.Duration `yaml:"-"`
 }
 
 var logLevels = map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
@@ -102,7 +109,25 @@ func LoadServeConfig(dataDir, override string) (ServeConfig, error) {
 		return cfg, err
 	}
 	cfg.AllowedOrigins = origins
+	threshold, err := parseOfflineThreshold(os.Getenv(EnvOfflineThreshold))
+	if err != nil {
+		return cfg, err
+	}
+	cfg.OfflineThreshold = threshold
 	return cfg, nil
+}
+
+// parseOfflineThreshold 解析 SATCHEL_OFFLINE_THRESHOLD_SECONDS：空用默认 90 秒，否则必须是不小于 30 的整数秒，别的值是 config。
+func parseOfflineThreshold(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultOfflineThreshold, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || time.Duration(n)*time.Second < minOfflineThreshold {
+		return 0, v1.Newf(v1.CodeConfig, "环境变量 %s 的值 %q 不合法：要写不小于 %d 的整数秒", EnvOfflineThreshold, raw, int(minOfflineThreshold/time.Second))
+	}
+	return time.Duration(n) * time.Second, nil
 }
 
 // parseSwitch 解析开关类环境变量：1 / true / yes / on 为真，0 / false / no / off 与空为假，不分大小写；别的值是 config。

@@ -16,6 +16,7 @@ import (
 	"github.com/satchel/satchel/internal/service/jobs"
 	"github.com/satchel/satchel/internal/service/schedule"
 	"github.com/satchel/satchel/internal/service/security"
+	"github.com/satchel/satchel/internal/service/servers"
 )
 
 // healthTimeout 是 db_health 单次的时限（照 mmwx）。
@@ -33,7 +34,10 @@ type Deps struct {
 	Schedule *schedule.Service
 	Backup   *svcbackup.Service
 	Jobs     *jobs.Service
-	Logger   *slog.Logger
+	Servers  *servers.Service
+	// OfflineThreshold 是节点的离线阈值（SATCHEL_OFFLINE_THRESHOLD_SECONDS）；为零时用 db.DefaultOfflineThreshold。
+	OfflineThreshold time.Duration
+	Logger           *slog.Logger
 }
 
 // Tasks 是本站的内置任务（master-scheduler「本站的内置任务」）；db_checkpoint 只在 SQLite 下加入。
@@ -41,6 +45,10 @@ func Tasks(d Deps) []Task {
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+	threshold := d.OfflineThreshold
+	if threshold <= 0 {
+		threshold = db.DefaultOfflineThreshold
 	}
 	tasks := []Task{
 		{Info: schedule.TaskInfo{Name: "session_cleanup", Summary: "删掉过期的会话", Every: time.Hour},
@@ -59,6 +67,8 @@ func Tasks(d Deps) []Task {
 			Run: backupLocal(d.Backup)},
 		{Info: schedule.TaskInfo{Name: "job_cleanup", Summary: "删掉 7 天以前、已经结束的长任务", Every: time.Hour},
 			Run: pruned(d.Jobs.Prune)},
+		{Info: schedule.TaskInfo{Name: "server_offline_sweep", Summary: "把心跳超过离线阈值的在线服务器标为离线", Every: 30 * time.Second},
+			Run: d.Servers.SweepOffline(threshold, time.Now)},
 	}
 	if db.DialectOf(d.DB) == schema.SQLite {
 		tasks = append(tasks, Task{Info: schedule.TaskInfo{Name: "db_checkpoint", Summary: "把 SQLite 的 WAL 写回主库", Every: 5 * time.Minute},

@@ -56,7 +56,10 @@ func notExist(t *testing.T, path string) {
 	}
 }
 
-// master-mcp「接入时装上 skills」：七个 satchel-* 与二进制里的相同，别的 skill 不动；files 里只有配置文件，skills 单独一项；
+// skillCount 是编进二进制的 skills 份数（M1 的七份加 M2 的 satchel-servers）。
+const skillCount = 8
+
+// master-mcp「接入时装上 skills」：编进二进制的每一份 satchel-*（目前八份）与二进制里的相同，别的 skill 不动；files 里只有配置文件，skills 单独一项；
 // 提示有重启生效与会被覆盖，没有「skills 随 m1-10 交付」。
 func TestMcpInitInstallsSkills(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -79,7 +82,7 @@ func TestMcpInitInstallsSkills(t *testing.T) {
 	if len(out.Files) != 1 || !strings.HasSuffix(out.Files[0].Path, "settings.json") {
 		t.Fatalf("files 里只有配置文件：%+v", out.Files)
 	}
-	if out.Skills.Dir != dir || len(out.Skills.Written) != 7 || len(out.Skills.Unchanged) != 0 {
+	if out.Skills.Dir != dir || len(out.Skills.Written) != skillCount || len(out.Skills.Unchanged) != 0 {
 		t.Fatalf("skills 一项：%+v", out.Skills)
 	}
 	notes := strings.Join(out.Notes, "\n")
@@ -195,8 +198,8 @@ func TestMcpInitSkillsOnly(t *testing.T) {
 		t.Fatalf("--skills-only：%d %s", code, stderr)
 	}
 	out := decodeSkillsOnly(t, stdout)
-	if out.Runtime != "hermes" || out.Skills.Dir != dir || len(out.Skills.Written) != 7 || len(fp.labels) != 0 {
-		t.Fatalf("第一次写出七份：%s", stdout)
+	if out.Runtime != "hermes" || out.Skills.Dir != dir || len(out.Skills.Written) != skillCount || len(fp.labels) != 0 {
+		t.Fatalf("第一次写出全部八份：%s", stdout)
 	}
 	wantSkillsIn(t, dir)
 	notExist(t, filepath.Join(home, ".hermes", ".env"))
@@ -214,7 +217,7 @@ func TestMcpInitSkillsOnly(t *testing.T) {
 	}
 
 	stdout, _, _ = runWith(t, opts, "mcp", "init", "--runtime", "hermes", "--skills-only", "--json")
-	if out := decodeSkillsOnly(t, stdout); len(out.Skills.Written) != 0 || len(out.Skills.Unchanged) != 7 {
+	if out := decodeSkillsOnly(t, stdout); len(out.Skills.Written) != 0 || len(out.Skills.Unchanged) != skillCount {
 		t.Fatalf("第二次什么都不写：%s", stdout)
 	}
 
@@ -222,7 +225,7 @@ func TestMcpInitSkillsOnly(t *testing.T) {
 	put(t, basics, "改过\n")
 	put(t, filepath.Join(dir, "satchel-basics", "notes.md"), "我的笔记\n")
 	stdout, _, _ = runWith(t, opts, "mcp", "init", "--runtime", "hermes", "--skills-only", "--json")
-	if out := decodeSkillsOnly(t, stdout); len(out.Skills.Written) != 1 || out.Skills.Written[0] != basics || len(out.Skills.Unchanged) != 6 {
+	if out := decodeSkillsOnly(t, stdout); len(out.Skills.Written) != 1 || out.Skills.Written[0] != basics || len(out.Skills.Unchanged) != skillCount-1 {
 		t.Fatalf("第三次只覆盖改过的那份：%s", stdout)
 	}
 	wantSkillsIn(t, dir)
@@ -418,7 +421,7 @@ func TestWriteSkillsDoesNotFollowSwappedLinks(t *testing.T) {
 	for _, swapFile := range []bool{false, true} {
 		dir := filepath.Join(t.TempDir(), "skills")
 		edits, unchanged, err := planSkills(dir)
-		if err != nil || len(edits) != 7 {
+		if err != nil || len(edits) != skillCount {
 			t.Fatalf("预检：%v %d", err, len(edits))
 		}
 		elsewhere := t.TempDir()

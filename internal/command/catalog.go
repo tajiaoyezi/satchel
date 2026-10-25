@@ -28,6 +28,7 @@ var GroupSummaries = map[string]string{
 	"update":                 "主控自升级：检查更新、升到所选渠道的最新版（只对管理员开放；升级属主控自身类危险操作）",
 	"settings update-cdn":    "更新 CDN 的开关（主控自身类危险操作）",
 	"settings image":         "logo、登录壁纸这类图片字段用的图片：上传之后用 settings set 把地址写进字段",
+	"server":                 "服务器（节点）：加服务器、取安装命令、看在线状态",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -47,7 +48,25 @@ func catalogCommands() []*Command {
 	all = append(all, backupCommands()...)
 	all = append(all, databaseCommands()...)
 	all = append(all, updateCommands()...)
+	all = append(all, serverCommands()...)
 	return all
+}
+
+// serverCommands 是 m2-02 的服务器命令（node-pairing、node-channel）。server add 是配置类，plan/apply 实现之前直接建对象，
+// Server 的修改与删除等 plan/apply 到了再加；安装命令里的 token 原文只给带密钥读取的身份。
+func serverCommands() []*Command {
+	name := Arg{Name: "name", Description: "服务器的名字（server list 里的 name）"}
+	return []*Command{
+		{Path: []string{"server", "add"}, Summary: "加一台服务器并生成它的 token（这一版连接模式只有 websocket；建了以后暂时改不了也删不了）", Class: ClassConfig,
+			Args:  []Arg{name},
+			Flags: []Flag{{Name: "mode", Type: TypeString, Default: "websocket", Description: "连接模式：这一版只支持 websocket"}}},
+		{Path: []string{"server", "install-command"}, Summary: "给出这台服务器的一键安装命令（主控地址必须是 https；token 原文要密钥读取）", Class: ClassRead,
+			Args: []Arg{name}},
+		{Path: []string{"server", "list"}, Summary: "列出服务器与在线状态（pending 还没连上过，connected 在线，offline 离线）", Class: ClassRead, List: true,
+			Columns: []string{"id", "name", "connection_mode", "status", "last_heartbeat", "ip_address"}},
+		{Path: []string{"server", "get"}, Summary: "查看一台服务器的完整对象（token 一律打码）", Class: ClassRead,
+			Args: []Arg{name}},
+	}
 }
 
 // updateCommands 是 m1-09 的主控自升级与更新 CDN 命令（master-self-update）。升级与改更新 CDN 开关是第 05 章危险操作的

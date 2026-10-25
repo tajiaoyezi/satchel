@@ -14,8 +14,8 @@ import (
 
 // 这里的测试用编进二进制的真实 skills 与真实命令表（master-skills「M1 交付的 skills」与对照表）。
 
-// master-skills「七份 skills 都在」：恰好七份，每份都通过格式检查。
-func TestSevenSkillsDelivered(t *testing.T) {
+// master-skills「七份 skills 都在」与「八份 skills」：M1 的七份加 M2 的 satchel-servers，每份都通过格式检查。
+func TestSkillsDelivered(t *testing.T) {
 	skills, problems, err := Load(Files())
 	if err != nil {
 		t.Fatal(err)
@@ -27,10 +27,30 @@ func TestSevenSkillsDelivered(t *testing.T) {
 	for _, s := range skills {
 		names = append(names, s.Name)
 	}
-	want := "satchel-access,satchel-backup,satchel-basics,satchel-database,satchel-settings,satchel-troubleshoot,satchel-upgrade"
+	want := "satchel-access,satchel-backup,satchel-basics,satchel-database,satchel-servers,satchel-settings,satchel-troubleshoot,satchel-upgrade"
 	if strings.Join(names, ",") != want {
-		t.Fatalf("应当恰好是七份 skills：%v", names)
+		t.Fatalf("应当恰好是 M1 的七份加 satchel-servers：%v", names)
 	}
+}
+
+// master-skills「satchel-servers 讲到四条命令与主控地址」。
+func TestServersSkillMentions(t *testing.T) {
+	skills, _, err := Load(Files())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range skills {
+		if s.Name != "satchel-servers" {
+			continue
+		}
+		for _, want := range []string{"satchel server add", "satchel server install-command", "satchel server list", "satchel server get", "settings master-url set"} {
+			if !strings.Contains(s.Content, want) {
+				t.Errorf("satchel-servers 里应当有 %s", want)
+			}
+		}
+		return
+	}
+	t.Fatal("没有 satchel-servers")
 }
 
 // master-skills「basics 写明几条通用规则」。
@@ -71,8 +91,8 @@ func TestCurrentCommandsCovered(t *testing.T) {
 			visible++
 		}
 	}
-	if visible != 57 || !used["overview"] || !used["token create"] || !used["serve"] {
-		t.Fatalf("应当覆盖 57 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
+	if visible != 61 || !used["overview"] || !used["token create"] || !used["serve"] {
+		t.Fatalf("应当覆盖 61 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
 	}
 	extra := command.MustNew(append(command.Catalog().All(), &command.Command{Path: []string{"demo", "ping"}, Summary: "测试", Class: command.ClassRead})...)
 	if missing := Coverage(extra, refs); strings.Join(missing, ",") != "demo ping" {

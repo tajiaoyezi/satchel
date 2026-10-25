@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/uptrace/bun"
 
+	"github.com/satchel/satchel/internal/base/agentconn"
 	archive "github.com/satchel/satchel/internal/base/backup"
 	"github.com/satchel/satchel/internal/base/buildinfo"
 	"github.com/satchel/satchel/internal/base/captcha"
@@ -29,6 +31,7 @@ import (
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
 	corejobs "github.com/satchel/satchel/internal/core/jobs"
 	coresecurity "github.com/satchel/satchel/internal/core/security"
+	coreservers "github.com/satchel/satchel/internal/core/servers"
 	"github.com/satchel/satchel/internal/core/sessions"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
 	"github.com/satchel/satchel/internal/core/taskruns"
@@ -38,6 +41,7 @@ import (
 	"github.com/satchel/satchel/internal/middleware/authn"
 	"github.com/satchel/satchel/internal/middleware/authz"
 	"github.com/satchel/satchel/internal/middleware/gate"
+	"github.com/satchel/satchel/internal/projection/agent"
 	"github.com/satchel/satchel/internal/projection/cli"
 	"github.com/satchel/satchel/internal/projection/mcp"
 	"github.com/satchel/satchel/internal/projection/rest"
@@ -52,6 +56,7 @@ import (
 	svcoverview "github.com/satchel/satchel/internal/service/overview"
 	"github.com/satchel/satchel/internal/service/schedule"
 	svcsecurity "github.com/satchel/satchel/internal/service/security"
+	svcservers "github.com/satchel/satchel/internal/service/servers"
 	svcsettings "github.com/satchel/satchel/internal/service/settings"
 	svctokens "github.com/satchel/satchel/internal/service/tokens"
 	svcupdate "github.com/satchel/satchel/internal/service/update"
@@ -67,6 +72,7 @@ const shutdownTimeout = 10 * time.Second
 var entryRoutes = []gate.Route{
 	{Pattern: command.APIPrefix + "healthz", Entry: gate.EntryMachine},
 	{Pattern: web.PublicPrefix, Entry: gate.EntryMachine},
+	{Pattern: agent.Prefix, Entry: gate.EntryMachine},
 	{Pattern: mcp.Path, Entry: gate.EntryMCP},
 	{Pattern: command.APIPrefix, Entry: gate.EntryPanel},
 	{Pattern: "/", Entry: gate.EntryPanel},
@@ -90,6 +96,8 @@ type app struct {
 	backups   *svcbackup.Service
 	writeGate *db.WriteGate
 	databases *svcdatabase.Service
+	conns     *agentconn.Manager
+	servers   *svcservers.Service
 
 	// stopMu 与 stopServe：发起恢复之后让 serve 优雅停止（serve 开始时设）。execPath：自升级或回退时，停止之后要 exec 的二进制。
 	stopMu      sync.Mutex
@@ -166,6 +174,22 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		return nil, err
 	}
 	settings := svcsettings.New(settingsRepo)
+	// 节点通道（node-channel）：主控通信身份在监听之前就绪，master.key 坏了就拒绝启动；连接管理按 token 认节点、写在线状态。
+	masterKey, err := agentconn.LoadIdentity(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	masterPub := masterKey.Public().(ed25519.PublicKey)
+	serversSvc := svcservers.New(coreservers.New(bdb, st), settingsRepo, masterPub)
+	conns := agentconn.New(agentconn.Config{Identity: masterKey, Directory: serversSvc.Directory(), Version: buildinfo.Version, Logger: logger,
+		OfflineThreshold: cfg.OfflineThreshold,
+		HeartbeatInterval: func(ctx context.Context) time.Duration {
+			s, err := settingsRepo.Load(ctx)
+			if err != nil {
+				return 30 * time.Second
+			}
+			return s.HeartbeatInterval()
+		}})
 	// 内置任务的运行记录：上次主控停止时还在跑的记录先收尾，再装配任务（master-scheduler）。
 	schedules := schedule.New(taskruns.New(bdb), logger)
 	if err := schedules.MarkInterrupted(context.Background()); err != nil {
@@ -239,7 +263,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	})
 	identity.SetSetupGuard(backups.SetupGuard)
 	sched := scheduler.New(scheduler.Tasks(scheduler.Deps{DB: bdb, Auth: identity, Audit: audits, Security: guard, Schedule: schedules,
-		Backup: backups, Jobs: jobsSvc, Logger: logger}), schedules, logger)
+		Backup: backups, Jobs: jobsSvc, Servers: serversSvc, OfflineThreshold: cfg.OfflineThreshold, Logger: logger}), schedules, logger)
 	schedules.SetTasks(sched.Infos())
 
 	bindings := command.Bindings{
@@ -282,6 +306,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	for name, h := range svcoverview.New().Bindings() {
 		bindings[name] = h
 	}
+	for name, h := range serversSvc.Bindings() {
+		bindings[name] = h
+	}
 	if err := table.CheckBindings(bindings); err != nil {
 		return nil, v1.Wrap(v1.CodeInternal, "命令表与处理函数的绑定不一致", err)
 	}
@@ -306,6 +333,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		{command.APIPrefix, rest.NewHandler(table, runner, identity)},
 		{mcp.Path, mcp.NewHandler(opts)},
 		{web.PublicPrefix, web.PublicHandler(filepath.Join(dataDir, db.PublicDir))},
+		{agent.Prefix, agent.NewHandler(conns, agent.Script(masterPub, release.PublicKeys), http.HandlerFunc(notFoundPath))},
 		{"/", console},
 	}
 	var patterns []string
@@ -342,7 +370,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	// → SameOrigin（管住所有浏览器发来的写请求：REST、/mcp、会话入口）→ mux。
 	handler := gates.Wrap(rest.CORS(cfg.AllowedOrigins, authn.Middleware(identity, tokens, guard, rest.SameOrigin(gatedSessions(writeGate, mux)))))
 	a = &app{table: table, runner: runner, handler: handler, mounts: patterns, db: bdb, dataDir: dataDir, logger: logger,
-		gate: gates, guard: guard, identity: identity, sched: sched, schedules: schedules, jobs: jobsSvc, backups: backups, writeGate: writeGate, databases: databases}
+		gate: gates, guard: guard, identity: identity, sched: sched, schedules: schedules, jobs: jobsSvc, backups: backups, writeGate: writeGate, databases: databases, conns: conns, servers: serversSvc}
 	return a, nil
 }
 
@@ -454,6 +482,10 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 		_ = srv.Close()
 	}
 	<-schedDone
+	// 节点的 websocket 连接不归 http.Server 管：HTTP 停下（监听已关）之后关掉它们，等各条连接把服务器标为离线，再关库。
+	connsCtx, cancelConns := context.WithTimeout(context.Background(), 5*time.Second)
+	a.conns.Shutdown(connsCtx)
+	cancelConns()
 	// 请求都停了，占着写锁的事务也就没了：把结束时没改成功的 running 行再写一次。
 	flushCtx, cancelFlush := context.WithTimeout(context.Background(), 5*time.Second)
 	a.schedules.Flush(flushCtx)

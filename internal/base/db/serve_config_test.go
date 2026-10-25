@@ -6,13 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
 func clearServeEnv(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{EnvConfigPath, EnvListen, EnvLogLevel, EnvForcePublicAccess, EnvAllowedOrigins} {
+	for _, name := range []string{EnvConfigPath, EnvListen, EnvLogLevel, EnvForcePublicAccess, EnvAllowedOrigins, EnvOfflineThreshold} {
 		t.Setenv(name, "")
 	}
 }
@@ -159,6 +160,8 @@ func TestLoadServeConfigRejectsSwitches(t *testing.T) {
 		"端口越界":     {EnvAllowedOrigins, "https://a.example:99999"},
 		"没有主机":     {EnvAllowedOrigins, "https://"},
 		"星号与来源混写":  {EnvAllowedOrigins, "*,https://a.example"},
+		"离线阈值太小":   {EnvOfflineThreshold, "10"},
+		"离线阈值不是整数": {EnvOfflineThreshold, "abc"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -178,5 +181,18 @@ func TestLoadServeConfigRejectsSwitches(t *testing.T) {
 	}
 	if _, err := LoadServeConfig(dir, ""); err == nil || v1.AsError(err).Code != v1.CodeConfig {
 		t.Fatalf("config.yaml 里写自救开关应当是未知键：%v", err)
+	}
+}
+
+// node-channel「心跳与在线状态」：离线阈值默认 90 秒，环境变量可改成不小于 30 的整数秒（不合法的值见上面的拒绝用例）。
+func TestOfflineThreshold(t *testing.T) {
+	clearServeEnv(t)
+	dir := t.TempDir()
+	if cfg, err := LoadServeConfig(dir, ""); err != nil || cfg.OfflineThreshold != DefaultOfflineThreshold {
+		t.Fatalf("默认应当是 90 秒：%v %v", cfg.OfflineThreshold, err)
+	}
+	t.Setenv(EnvOfflineThreshold, "30")
+	if cfg, err := LoadServeConfig(dir, ""); err != nil || cfg.OfflineThreshold != 30*time.Second {
+		t.Fatalf("30 应当可以：%v %v", cfg.OfflineThreshold, err)
 	}
 }

@@ -11,6 +11,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `satchel-backup` | 备份与恢复主控时用：生成、列出、上传备份；下载与恢复要请人做；新装的主控用初始化向导建管理员或从备份恢复。 |
 | `satchel-basics` | 用 Satchel 之前先读：开局看总览与身份，怎么学命令、看输出与错误，危险操作与只有人能做的操作怎么处理，MCP 上怎么调用。 |
 | `satchel-database` | 看或更换主控的数据库时用：看当前的数据库、试连 PostgreSQL、从 SQLite 在线迁移。 |
+| `satchel-servers` | 加服务器（节点）、取安装命令、看节点是否在线时用：安装命令要 https 主控地址，token 原文要请人取。 |
 | `satchel-settings` | 看与改系统设置时用：日常运维档的设置、logo 与登录壁纸的图片上传、写前快照与回滚；主控地址与门这两组要请人改。 |
 | `satchel-troubleshoot` | 主控出问题时用：看日志、内置定时任务的运行记录、长任务、审计与安全事件，主控起不来或被挡在门外时请人在主控本机处理。 |
 | `satchel-upgrade` | 升级主控时用：检查更新、升到所选渠道的最新版、更新 CDN 的开关、升级失败时的自动回退。 |
@@ -41,7 +42,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `explain` | `satchel-basics`、`satchel-settings` |
 | `job get` | `satchel-backup`、`satchel-basics`、`satchel-database`、`satchel-troubleshoot`、`satchel-upgrade` |
 | `job list` | `satchel-basics`、`satchel-troubleshoot` |
-| `login` | `satchel-access`、`satchel-backup`、`satchel-basics`、`satchel-database`、`satchel-settings`、`satchel-troubleshoot` |
+| `login` | `satchel-access`、`satchel-backup`、`satchel-basics`、`satchel-database`、`satchel-servers`、`satchel-settings`、`satchel-troubleshoot` |
 | `logout` | `satchel-basics` |
 | `logs files list` | `satchel-troubleshoot` |
 | `logs list` | `satchel-troubleshoot` |
@@ -56,12 +57,16 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `security events list` | `satchel-troubleshoot` |
 | `security unban` | `satchel-access`、`satchel-troubleshoot` |
 | `serve` | `satchel-backup`、`satchel-database`、`satchel-troubleshoot` |
+| `server add` | `satchel-servers` |
+| `server get` | `satchel-servers` |
+| `server install-command` | `satchel-servers` |
+| `server list` | `satchel-servers` |
 | `settings gates set` | `satchel-settings`、`satchel-troubleshoot` |
 | `settings image upload` | `satchel-settings` |
-| `settings master-url set` | `satchel-settings` |
+| `settings master-url set` | `satchel-servers`、`satchel-settings` |
 | `settings rollback` | `satchel-settings` |
 | `settings set` | `satchel-settings` |
-| `settings show` | `satchel-backup`、`satchel-settings`、`satchel-troubleshoot`、`satchel-upgrade` |
+| `settings show` | `satchel-backup`、`satchel-servers`、`satchel-settings`、`satchel-troubleshoot`、`satchel-upgrade` |
 | `settings snapshots list` | `satchel-settings` |
 | `settings turnstile test` | `satchel-settings` |
 | `settings update-cdn set` | `satchel-upgrade` |
