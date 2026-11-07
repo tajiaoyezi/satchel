@@ -198,11 +198,14 @@ jobs:
         with:
           path: satchel
 
-      - name: 检出 satchel-agent（按 test/acceptance/SATCHEL_AGENT_REF）
-        run: |
-          ref=$(tr -d ' \r\n' < satchel/test/acceptance/SATCHEL_AGENT_REF)
-          git -c advice.detachedHead=false clone --depth 1 --branch "$ref" \
-            https://github.com/tajiaoyezi/satchel-agent.git satchel-agent
+      - name: 读取 test/acceptance/SATCHEL_AGENT_REF
+        run: echo "SATCHEL_AGENT_REF=$(tr -d '[:space:]' < satchel/test/acceptance/SATCHEL_AGENT_REF)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: tajiaoyezi/satchel-agent
+          ref: ${{ env.SATCHEL_AGENT_REF }}
+          path: satchel-agent
 
       - uses: actions/setup-go@v7
         with:

@@ -54,8 +54,11 @@ if [ -z "$AGENT_DIR" ]; then
   else
     AGENT_DIR="$BUILD_DIR/satchel-agent-src"
     echo "==> 检出 satchel-agent ($AGENT_REF)"
-    git -c advice.detachedHead=false clone --depth 1 --branch "$AGENT_REF" \
-      https://github.com/tajiaoyezi/satchel-agent.git "$AGENT_DIR"
+    mkdir -p "$AGENT_DIR"
+    git -C "$AGENT_DIR" init -q
+    git -C "$AGENT_DIR" remote add origin https://github.com/tajiaoyezi/satchel-agent.git
+    git -C "$AGENT_DIR" fetch -q --depth 1 origin "$AGENT_REF"
+    git -C "$AGENT_DIR" -c advice.detachedHead=false checkout -q FETCH_HEAD
   fi
 fi
 
