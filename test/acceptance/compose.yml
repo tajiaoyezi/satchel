@@ -1,0 +1,78 @@
+name: satchel-acceptance
+
+services:
+  master:
+    build:
+      context: ./.build
+      dockerfile: ../Dockerfile
+      target: master
+    container_name: satchel-acceptance-master
+    networks:
+      acceptance:
+        ipv4_address: 172.30.204.10
+    volumes:
+      - master-data:/var/lib/satchel
+      - shared:/shared
+
+  https:
+    image: caddy:2-alpine
+    container_name: satchel-acceptance-https
+    command: ["caddy", "reverse-proxy", "--from", "master.test", "--to", "172.30.204.10:12889", "--internal-certs"]
+    depends_on:
+      - master
+    networks:
+      acceptance:
+        ipv4_address: 172.30.204.11
+        aliases:
+          - master.test
+    volumes:
+      - caddy-data:/data
+
+  node:
+    build:
+      context: ./.build
+      dockerfile: ../Dockerfile
+      target: node
+    container_name: satchel-acceptance-node
+    depends_on:
+      - https
+    networks:
+      acceptance:
+        ipv4_address: 172.30.204.20
+    volumes:
+      - node-config:/etc/satchel-agent
+      - caddy-data:/caddy-data:ro
+      - shared:/shared:ro
+
+  driver:
+    build:
+      context: ./.build
+      dockerfile: ../Dockerfile
+      target: driver
+    container_name: satchel-acceptance-driver
+    profiles: ["driver"]
+    entrypoint: ["sh", "-c", "exec /usr/local/bin/acceptance.test -test.v -test.timeout=35m $${ACCEPTANCE_TEST_ARGS:-}"]
+    environment:
+      - ACCEPTANCE_QUICK=${ACCEPTANCE_QUICK:-}
+      - ACCEPTANCE_TEST_ARGS=${ACCEPTANCE_TEST_ARGS:-}
+      - SSL_CERT_FILE=/caddy-data/caddy/pki/authorities/local/root.crt
+    networks:
+      acceptance:
+        ipv4_address: 172.30.204.30
+    volumes:
+      - caddy-data:/caddy-data:ro
+      - shared:/shared:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+
+networks:
+  acceptance:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.204.0/24
+
+volumes:
+  master-data:
+  caddy-data:
+  node-config:
+  shared:

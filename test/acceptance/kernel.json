@@ -1,0 +1,66 @@
+{
+  "log": {
+    "level": "error"
+  },
+  "inbounds": [
+    {
+      "type": "vless",
+      "tag": "in1",
+      "listen": "0.0.0.0",
+      "listen_port": 8443,
+      "users": [
+        {
+          "name": "A",
+          "uuid": "6a4f1c2e-3b5d-4e7f-8a9b-0c1d2e3f4a5b"
+        },
+        {
+          "name": "B",
+          "uuid": "7b5e2d3f-4c6e-4f80-9bac-1d2e3f4a5b6c"
+        }
+      ]
+    },
+    {
+      "type": "hysteria2",
+      "tag": "in2",
+      "listen": "0.0.0.0",
+      "listen_port": 8444,
+      "up_mbps": 2000,
+      "down_mbps": 2000,
+      "users": [
+        {
+          "name": "A",
+          "password": "pw-A"
+        },
+        {
+          "name": "B",
+          "password": "pw-B"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "certificate_path": "/etc/satchel-agent/cert.pem",
+        "key_path": "/etc/satchel-agent/key.pem"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "out1"
+    },
+    {
+      "type": "direct",
+      "tag": "out2"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "port": [17002],
+        "action": "route",
+        "outbound": "out2"
+      }
+    ],
+    "final": "out1"
+  }
+}

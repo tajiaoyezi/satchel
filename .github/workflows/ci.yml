@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   check:
@@ -80,9 +81,9 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null
-          shellcheck --severity=error install.sh docker-entrypoint.sh tools/web/build.sh
+          shellcheck --severity=error install.sh docker-entrypoint.sh tools/web/build.sh test/acceptance/*.sh
           # 全量输出只作提示，不阻断（spec 的口径是没有 error 级问题）。
-          shellcheck install.sh docker-entrypoint.sh tools/web/build.sh || true
+          shellcheck install.sh docker-entrypoint.sh tools/web/build.sh test/acceptance/*.sh || true
 
   docker:
     name: docker build
@@ -186,3 +187,41 @@ jobs:
             ${{ env.SATCHEL_WEB_KEEP }}/playwright-report
             ${{ env.SATCHEL_WEB_KEEP }}/test-results
           retention-days: 7
+
+  acceptance:
+    name: m2 formal acceptance
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: satchel
+
+      - name: 检出 satchel-agent（按 test/acceptance/SATCHEL_AGENT_REF）
+        run: |
+          ref=$(tr -d ' \r\n' < satchel/test/acceptance/SATCHEL_AGENT_REF)
+          git -c advice.detachedHead=false clone --depth 1 --branch "$ref" \
+            https://github.com/tajiaoyezi/satchel-agent.git satchel-agent
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: satchel/go.mod
+          cache-dependency-path: |
+            satchel/go.sum
+            satchel/test/acceptance/go.sum
+            satchel-agent/go.sum
+
+      - name: gofmt & go vet (test/acceptance)
+        working-directory: satchel/test/acceptance
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "以下文件未经 gofmt：" && echo "$files"
+            exit 1
+          fi
+          GOWORK=off go vet -tags with_quic ./...
+
+      - name: 运行 M2 正式验收
+        working-directory: satchel
+        run: ./test/acceptance/run.sh

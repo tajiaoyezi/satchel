@@ -247,7 +247,18 @@ go build ./cmd/satchel
 - **MCP**：`/mcp`（Streamable HTTP，无状态），只有两个工具：`satchel_run`（`args` 命令数组 + 可选 `confirm`，输出恒为 JSON）与 `satchel_explain`（`target`）。命令数组交给与 CLI 相同的解析器、不经 shell；身份只来自这次连接（本机 socket，或经 TCP 带 `Authorization: Bearer <令牌>`），`args` 里的 `--token` / `--server` / `--data-dir`、本地命令（`version`、`db`、`serve`、`admin reset-password`）、只在 CLI 里有的 `login` / `logout` / `mcp *`、人类专属命令（含 `token create` / `update` / `revoke`）、初始化向导的 `setup *`、文件路径参数一律拒绝。只支持本地进程方式的 runtime 用 `satchel mcp stdio` 垫片（见「令牌与远程接入」）。
 - **审计**：每条经主控执行的命令（含被权限、confirm 或当场验证拒绝的）写一条 `audit_logs`，`satchel audit list` 看（只对管理员开放）；`password` 类型的 flag 在摘要里打码，`object` 类型的 flag 按所属 kind 的打码字段逐键打码，当场验证的值不进摘要。令牌身份的记录带 `token_id`，`actor` 是签发者。无身份与带无效凭据的请求被拒时不记，但不要身份的 `setup status` / `setup init` 执行了就记（`actor_kind` 为 `anonymous`）；`explain`、`healthz`、`/public/`、会话入口不记；被三道门拦下的请求到不了命令执行链，也不记（猜密码与猜令牌另记在安全事件里）。
 
-现有经主控的命令：`whoami`（身份对象）、`audit list`（`--actor` / `--command` / `--since` / `--limit` / `--cursor`）、`explain [target]`、`setup *`、`account *`、`settings show` / `set` / `snapshots list` / `rollback` / `master-url set` / `gates set` / `turnstile test`、`token create` / `list` / `update` / `revoke`、`mcp status`、`security events list` / `bans list` / `ban` / `unban`。
+现有经主控的命令：`whoami`（身份对象）、`overview`、`audit list`（`--actor` / `--command` / `--since` / `--limit` / `--cursor`）、`explain [target]`、`setup *`、`account *`、`settings show` / `set` / `snapshots list` / `rollback` / `master-url set` / `gates set` / `turnstile test` / `image upload` / `update-cdn set`、`token create` / `list` / `update` / `revoke`、`mcp status`、`security events list` / `bans list` / `ban` / `unban`、`server list` / `get` / `add` / `delete` / `install-command` / `rekey` / `connections` / `kick` / `traffic` / `restart-kernel`、`apply`、`logs *`、`schedule *`、`job *`、`backup *`、`database *`、`update *`。
+
+### M2 正式验收（`test/acceptance/run.sh`）
+
+`test/acceptance/` 用 Docker Compose 起四个容器（`master`、`https`、`node`、`driver`），对真实主控（`satchel serve`）与真实节点（`satchel-agent` + sing-box 七种入站）执行 M2 的五项正式黑盒验收：按用户单流/多流 180 秒稳态限速（±5%）、按入站与用户的在线连接列表、按入站/用户踢连接（含 TCP 1 秒内 RST/FIN 与立即重连）、流量计数单调累加与节点/内核重启边界（`server restart-kernel` 与 `docker kill -s KILL`）、主控与节点双向重启 15 秒内重连恢复。
+
+```sh
+./test/acceptance/run.sh            # 正式口径（限速每场景 180 秒稳态采样）
+./test/acceptance/run.sh --quick    # 开发快速回归（限速采样缩短至 15 秒）
+```
+
+脚本按 `test/acceptance/SATCHEL_AGENT_REF` 检出或复用同级 `../satchel-agent` 工作区，按当前 Docker 守护进程架构交叉编译 `satchel`、`satchel-agent` 与 `acceptance.test`，测试结束后无论成败一律 `docker compose down -v --remove-orphans` 清理容器、网络与卷。CI 的 `acceptance` 任务在 `push main` 与手动 `workflow_dispatch` 时运行正式口径。
 
 ## 安装
 
