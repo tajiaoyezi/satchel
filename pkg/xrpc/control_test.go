@@ -61,3 +61,27 @@ func TestTrafficSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("内核没在跑时不应当带版本与启动时间：%s", idle)
 	}
 }
+
+func TestKernelRestartedRoundTrip(t *testing.T) {
+	started := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
+	for _, in := range []KernelRestarted{
+		{Running: true, Version: "1.14.4", StartedAt: &started, Inbounds: []string{"in1", "in2"}},
+		{Running: false, Inbounds: []string{}},
+	} {
+		raw, err := json.Marshal(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "started_at") != (in.StartedAt != nil) {
+			t.Fatalf("started_at 省略与带上不对：%s", raw)
+		}
+		var out KernelRestarted
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Running != in.Running || out.Version != in.Version || len(out.Inbounds) != len(in.Inbounds) ||
+			(out.StartedAt == nil) != (in.StartedAt == nil) || (in.StartedAt != nil && !out.StartedAt.Equal(*in.StartedAt)) {
+			t.Fatalf("往返之后不一样：%+v → %s → %+v", in, raw, out)
+		}
+	}
+}

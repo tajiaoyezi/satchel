@@ -55,6 +55,7 @@ func (s *Service) Bindings() command.Bindings {
 		"server kick":            s.kick,
 		"server connections":     s.connections,
 		"server traffic":         s.traffic,
+		"server restart-kernel":  s.restartKernel,
 	}
 }
 

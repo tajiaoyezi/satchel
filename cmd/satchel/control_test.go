@@ -21,11 +21,13 @@ import (
 // fakeNode 是测试里节点一侧的连接管控：按 node-limiter 的规则记三份来源（入站只有 vless-in），回固定的 5 条连接，
 // 回测试设好的快照，并记下每次收到的参数。
 type fakeNode struct {
-	mu      sync.Mutex
-	sources map[string]xrpc.LimitSource // 凭据 → 来源 → 值；入站只有 vless-in
-	last    map[string]json.RawMessage  // 方法 → 最近一次的参数
-	snap    xrpc.TrafficSnapshot
-	pulls   int
+	mu         sync.Mutex
+	sources    map[string]xrpc.LimitSource // 凭据 → 来源 → 值；入站只有 vless-in
+	last       map[string]json.RawMessage  // 方法 → 最近一次的参数
+	snap       xrpc.TrafficSnapshot
+	pulls      int
+	restarts   int
+	restartErr error
 }
 
 func newFakeNode() *fakeNode {
@@ -49,6 +51,42 @@ func (n *fakeNode) pullCount() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.pulls
+}
+
+func (n *fakeNode) restartCount() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.restarts
+}
+
+func (n *fakeNode) setRestartErr(err error) {
+	n.mu.Lock()
+	n.restartErr = err
+	n.mu.Unlock()
+}
+
+type connsSpy struct {
+	svcservers.Conns
+	mu       sync.Mutex
+	timeouts map[string]time.Duration
+	forceErr error
+}
+
+func (c *connsSpy) Call(ctx context.Context, serverID int64, method string, params any, timeout time.Duration) (json.RawMessage, error) {
+	c.mu.Lock()
+	c.timeouts[method] = timeout
+	ferr := c.forceErr
+	c.mu.Unlock()
+	if ferr != nil {
+		return nil, ferr
+	}
+	return c.Conns.Call(ctx, serverID, method, params, timeout)
+}
+
+func (c *connsSpy) timeout(method string) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.timeouts[method]
 }
 
 // state 按「已设且大于 0 的来源里取最小」算出这份凭据的回复（调用方持锁）。
@@ -125,6 +163,14 @@ func (n *fakeNode) methods() xrpc.Methods {
 			n.pulls++
 			return n.snap, nil
 		}),
+		xrpc.MethodKernelRestart: handle(xrpc.MethodKernelRestart, func(json.RawMessage) (any, error) {
+			n.restarts++
+			if n.restartErr != nil {
+				return nil, n.restartErr
+			}
+			started := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
+			return xrpc.KernelRestarted{Running: true, Version: "1.14.4", StartedAt: &started, Inbounds: []string{"vless-in", "hy2-in"}}, nil
+		}),
 	}
 }
 
@@ -132,10 +178,17 @@ func (n *fakeNode) methods() xrpc.Methods {
 func TestServerControlCommands(t *testing.T) {
 	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
 		h := start(t, bdb)
+		spy := &connsSpy{Conns: h.app.conns, timeouts: map[string]time.Duration{}}
+		h.app.servers.SetConns(spy)
 		base, pub := h.tcpURL, masterPub(t, h)
 		admin := setupAdmin(t, base)
 		ro := issueToken(t, admin, base, "readonly")
 		ops := issueToken(t, admin, base, "ops")
+		status, fields, _ := admin.call("POST", base+"/api/v1/token/create", `{"name":"restart","danger":["restart"],"verify-password":"secret12"}`, nil)
+		if status != 200 {
+			t.Fatalf("token create restart：%d %v", status, fields)
+		}
+		restartTok := str(fields["token"])
 		node := newFakeNode()
 		a := mustDial(t, h)
 		if !a.authenticate(pub, h.addServer("hk-1"), xrpc.ControlProtocol).OK {
@@ -266,6 +319,65 @@ func TestServerControlCommands(t *testing.T) {
 		if e := h.cliErr("server", "traffic", "nope"); e.Code != v1.CodeNotFound {
 			t.Fatalf("服务器不存在应当 not_found：%+v", e)
 		}
+
+		// 重启内核（agent-kernel「重启内核」）：没给 confirm、confirm 不等于服务器名、日常运维令牌没开重启类时都拒绝，且节点没收到请求。
+		if e := h.cliErr("server", "restart-kernel", "hk-1"); e.Code != v1.CodeConfirmRequired || !strings.Contains(e.Reason, "confirm") {
+			t.Fatalf("不带 confirm 应当 confirm_required：%+v", e)
+		}
+		if e := h.cliErr("server", "restart-kernel", "hk-1", "--confirm", "hk-2"); e.Code != v1.CodeConfirmRequired || !strings.Contains(e.Next, "hk-1") {
+			t.Fatalf("confirm 不是服务器名应当 confirm_required：%+v", e)
+		}
+		if r := send(t, nil, "POST", base+"/api/v1/server/restart-kernel/hk-1", map[string]string{"Authorization": "Bearer " + ops}, `{"confirm":"hk-1"}`); r.status != 403 || r.code() != "forbidden" {
+			t.Fatalf("日常运维令牌没开重启类应当 forbidden：%d %s", r.status, r.body)
+		}
+		if node.restartCount() != 0 {
+			t.Fatalf("confirm 或权限没过时节点不应当收到 kernel.restart：%d", node.restartCount())
+		}
+		// CLI 与 REST 成功，结果字段对得上。
+		stdout, stderr, code = h.cli("server", "restart-kernel", "hk-1", "--confirm", "hk-1", "--json")
+		if code != 0 {
+			t.Fatalf("server restart-kernel：%s", stderr)
+		}
+		var restarted svcservers.RestartResult
+		if err := json.Unmarshal([]byte(stdout), &restarted); err != nil {
+			t.Fatalf("结果解不开：%v %s", err, stdout)
+		}
+		if restarted.Server != "hk-1" || !restarted.Running || restarted.Version != "1.14.4" || restarted.StartedAt == nil ||
+			strings.Join(restarted.Inbounds, ",") != "vless-in,hy2-in" || node.restartCount() != 1 {
+			t.Fatalf("CLI 重启内核结果不对：%+v count=%d", restarted, node.restartCount())
+		}
+		if r := send(t, nil, "POST", base+"/api/v1/server/restart-kernel/hk-1", map[string]string{"Authorization": "Bearer " + restartTok}, `{"confirm":"hk-1"}`); r.status != 200 ||
+			!strings.Contains(r.body, `"server":"hk-1"`) || !strings.Contains(r.body, `"version":"1.14.4"`) || node.restartCount() != 2 {
+			t.Fatalf("开了重启类的令牌经 REST 重启内核：%d %s count=%d", r.status, r.body, node.restartCount())
+		}
+		// 错误与超时：不在线 unavailable、bad_params → bad_request、failed → internal、unknown_method → conflict；超时是 60 秒而普通命令是 10 秒。
+		if e := h.cliErr("server", "restart-kernel", "hk-2", "--confirm", "hk-2"); e.Code != v1.CodeUnavailable {
+			t.Fatalf("不在线应当 unavailable：%+v", e)
+		}
+		node.setRestartErr(&xrpc.Error{Code: xrpc.CodeBadParams, Message: "kernel.json 解析失败"})
+		if e := h.cliErr("server", "restart-kernel", "hk-1", "--confirm", "hk-1"); e.Code != v1.CodeBadRequest || !strings.Contains(e.Reason, "kernel.json 解析失败") {
+			t.Fatalf("bad_params 应当 bad_request 并带原因：%+v", e)
+		}
+		node.setRestartErr(errors.New("listen tcp :8443: address already in use"))
+		if e := h.cliErr("server", "restart-kernel", "hk-1", "--confirm", "hk-1"); e.Code != v1.CodeInternal || !strings.Contains(e.Reason, "address already in use") {
+			t.Fatalf("failed 应当 internal 并带原因：%+v", e)
+		}
+		node.setRestartErr(nil)
+		if e := h.cliErr("server", "restart-kernel", "hk-3", "--confirm", "hk-3"); e.Code != v1.CodeConflict || !strings.Contains(e.Reason, "satchel-agent") {
+			t.Fatalf("旧版 agent 应当 conflict：%+v", e)
+		}
+		if gotRestart, gotLimit := spy.timeout(xrpc.MethodKernelRestart), spy.timeout(xrpc.MethodLimiterSet); gotRestart != 60*time.Second || gotLimit != 10*time.Second {
+			t.Fatalf("restart-kernel 超时应当是 60s、普通命令是 10s：restart=%v limit=%v", gotRestart, gotLimit)
+		}
+		spy.mu.Lock()
+		spy.forceErr = xrpc.ErrTimeout
+		spy.mu.Unlock()
+		if e := h.cliErr("server", "restart-kernel", "hk-1", "--confirm", "hk-1"); e.Code != v1.CodeUnavailable || !strings.Contains(e.Next, "server traffic hk-1") {
+			t.Fatalf("restart-kernel 超时应当 unavailable 且 next 指向 server traffic：%+v", e)
+		}
+		spy.mu.Lock()
+		spy.forceErr = nil
+		spy.mu.Unlock()
 
 		// 拉取与累计：还没收到快照时组合为空。
 		traffic := func(name string) svcservers.TrafficView {

@@ -29,8 +29,10 @@ type Conns interface {
 func (s *Service) SetConns(c Conns) { s.conns = c }
 
 const (
-	// callTimeout 是命令与拉取每次调节点的超时（m2-03 design 第 5 条）。
+	// callTimeout 是普通命令与拉取每次调节点的超时（m2-03 design 第 5 条）。
 	callTimeout = 10 * time.Second
+	// restartTimeout 是重启内核命令等回复的超时（m2-04 design 第 1 条：内核启动可能要下载远程规则集）。
+	restartTimeout = 60 * time.Second
 	// collectParallel 是一次拉取最多同时向几台节点要快照。
 	collectParallel = 8
 	// bitsPerMbps：命令里的 --mbps 是 Mbps，通道上是比特每秒。
@@ -38,10 +40,10 @@ const (
 )
 
 // call 向一台服务器发请求，把节点与连接的错误换成四字段错误（m2-03 design 第 5 条，node-limiter「这几条命令的前提与错误」）。
-func (s *Service) call(ctx context.Context, srv *core.Server, method string, params, result any) error {
-	raw, err := s.conns.Call(ctx, srv.Metadata.ID, method, params, callTimeout)
+func (s *Service) call(ctx context.Context, srv *core.Server, method string, params, result any, timeout time.Duration) error {
+	raw, err := s.conns.Call(ctx, srv.Metadata.ID, method, params, timeout)
 	if err != nil {
-		return nodeError(srv.Spec.Name, method, err)
+		return nodeError(srv.Spec.Name, method, timeout, err)
 	}
 	if result == nil {
 		return nil
@@ -52,15 +54,19 @@ func (s *Service) call(ctx context.Context, srv *core.Server, method string, par
 	return nil
 }
 
-func nodeError(name, method string, err error) error {
+func nodeError(name, method string, timeout time.Duration, err error) error {
 	var xe *xrpc.Error
 	switch {
 	case errors.Is(err, agentconn.ErrOffline):
 		return v1.Newf(v1.CodeUnavailable, "服务器 %q 现在没有连接", name).
 			WithNext(fmt.Sprintf("用 server get %s 看在线状态，等它连上再试", name))
 	case errors.Is(err, xrpc.ErrTimeout):
-		return v1.Newf(v1.CodeUnavailable, "服务器 %q 在 %s 内没有回复 %s", name, callTimeout, method).
-			WithNext(fmt.Sprintf("用 server get %s 看在线状态，稍后再试", name))
+		next := fmt.Sprintf("用 server get %s 看在线状态，稍后再试", name)
+		if method == xrpc.MethodKernelRestart {
+			next = fmt.Sprintf("节点可能还在重启内核，先用 server traffic %s 看内核状态，稍后再试", name)
+		}
+		return v1.Newf(v1.CodeUnavailable, "服务器 %q 在 %s 内没有回复 %s", name, timeout, method).
+			WithNext(next)
 	case errors.As(err, &xe) && xe.Code == xrpc.CodeUnknownMethod:
 		return v1.Newf(v1.CodeConflict, "服务器 %q 上的 satchel-agent 不认识 %s：它比主控旧", name, method).
 			WithNext("升级这台节点的 satchel-agent")
@@ -152,7 +158,7 @@ func (s *Service) limitSet(ctx context.Context, inv *command.Invocation) (any, e
 		params.Deadline = &d
 	}
 	var st xrpc.LimiterState
-	if err := s.call(ctx, srv, xrpc.MethodLimiterSet, params, &st); err != nil {
+	if err := s.call(ctx, srv, xrpc.MethodLimiterSet, params, &st, callTimeout); err != nil {
 		return nil, err
 	}
 	return limitResult(srv.Spec.Name, st), nil
@@ -166,7 +172,7 @@ func (s *Service) limitClear(ctx context.Context, inv *command.Invocation) (any,
 	}
 	var st xrpc.LimiterState
 	params := xrpc.LimiterUnsetParams{Inbound: inbound, Credential: credential, Source: xrpc.SourceMaster}
-	if err := s.call(ctx, srv, xrpc.MethodLimiterUnset, params, &st); err != nil {
+	if err := s.call(ctx, srv, xrpc.MethodLimiterUnset, params, &st, callTimeout); err != nil {
 		return nil, err
 	}
 	return limitResult(srv.Spec.Name, st), nil
@@ -192,7 +198,7 @@ func (s *Service) kick(ctx context.Context, inv *command.Invocation) (any, error
 	}
 	params := xrpc.ConnectionsKickParams{Credential: credential, Inbound: strings.TrimSpace(inv.String("inbound", ""))}
 	var res xrpc.ConnectionsKicked
-	if err := s.call(ctx, srv, xrpc.MethodConnectionsKick, params, &res); err != nil {
+	if err := s.call(ctx, srv, xrpc.MethodConnectionsKick, params, &res, callTimeout); err != nil {
 		return nil, err
 	}
 	return &KickResult{Server: srv.Spec.Name, Credential: credential, Inbound: params.Inbound, Kicked: res.Kicked}, nil
@@ -216,7 +222,7 @@ func (s *Service) connections(ctx context.Context, inv *command.Invocation) (any
 		return nil, err
 	}
 	var list xrpc.ConnectionsList
-	if err := s.call(ctx, srv, xrpc.MethodConnectionsList, xrpc.ConnectionsListParams{Inbound: inbound, Credential: credential}, &list); err != nil {
+	if err := s.call(ctx, srv, xrpc.MethodConnectionsList, xrpc.ConnectionsListParams{Inbound: inbound, Credential: credential}, &list, callTimeout); err != nil {
 		return nil, err
 	}
 	conns := list.Connections
@@ -234,6 +240,32 @@ func (s *Service) connections(ctx context.Context, inv *command.Invocation) (any
 		res.Items, lastID = append(res.Items, c), c.ID
 	}
 	return res, nil
+}
+
+// RestartResult 是 server restart-kernel 的结果（m2-04 design 第 1 条，agent-kernel「重启内核」）。
+type RestartResult struct {
+	Server    string     `json:"server"`
+	Running   bool       `json:"running"`
+	Version   string     `json:"version,omitempty"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	Inbounds  []string   `json:"inbounds"`
+}
+
+// restartKernel 让一台在线服务器重新读 kernel.json 并在同一个进程里重启内核。
+func (s *Service) restartKernel(ctx context.Context, inv *command.Invocation) (any, error) {
+	srv, err := s.byName(ctx, inv.Arg(0))
+	if err != nil {
+		return nil, err
+	}
+	var res xrpc.KernelRestarted
+	if err := s.call(ctx, srv, xrpc.MethodKernelRestart, nil, &res, restartTimeout); err != nil {
+		return nil, err
+	}
+	inbounds := res.Inbounds
+	if inbounds == nil {
+		inbounds = []string{}
+	}
+	return &RestartResult{Server: srv.Spec.Name, Running: res.Running, Version: res.Version, StartedAt: res.StartedAt, Inbounds: inbounds}, nil
 }
 
 // TrafficView 是 server traffic 的结果：主控内存里的累计与库里的内核状态（node-traffic「看累计」）。

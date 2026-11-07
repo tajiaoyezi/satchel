@@ -37,7 +37,7 @@ func TestCatalog(t *testing.T) {
 		"settings gates set": ClassMasterSettings, "settings turnstile test": ClassAction, "settings image upload": ClassAction,
 		"server add": ClassConfig, "server install-command": ClassRead, "server list": ClassRead, "server get": ClassRead,
 		"server limit set": ClassAction, "server limit clear": ClassAction, "server kick": ClassAction,
-		"server connections": ClassRead, "server traffic": ClassRead,
+		"server connections": ClassRead, "server traffic": ClassRead, "server restart-kernel": ClassAction,
 	}
 	if len(table.All()) != len(want) {
 		t.Fatalf("目录里应当恰好 %d 条命令，得到 %v", len(want), table.Names())
@@ -67,6 +67,9 @@ func TestCatalog(t *testing.T) {
 		if c, _ := table.Lookup(name); c.Danger != v1.DangerMaster || c.Confirm == nil || c.Confirm.Kind != ConfirmObject || c.Confirm.Arg != arg {
 			t.Errorf("%s 应当是主控自身类、confirm 取 %s：%+v", name, arg, c)
 		}
+	}
+	if c, _ := table.Lookup("server restart-kernel"); c.Danger != v1.DangerRestart || c.Confirm == nil || c.Confirm.Kind != ConfirmObject || c.Confirm.Arg != "name" {
+		t.Errorf("server restart-kernel 应当是重启类、confirm 取 name：%+v", c)
 	}
 	for _, name := range []string{"backup download", "backup restore"} {
 		if c, _ := table.Lookup(name); !c.HumanOnly {

@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	core "github.com/satchel/satchel/internal/core/settings"
@@ -197,21 +200,53 @@ func imageRef(limit int) func(any) error {
 	}
 }
 
+var domainHostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$`)
+
+func validOriginHostPort(u *url.URL) bool {
+	host, port := u.Hostname(), u.Port()
+	if host == "" {
+		return false
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if ip.Zone() != "" {
+			return false
+		}
+	} else if !domainHostRe.MatchString(host) {
+		return false
+	}
+	if port != "" {
+		for i := 0; i < len(port); i++ {
+			if port[i] < '0' || port[i] > '9' {
+				return false
+			}
+		}
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return false
+		}
+		return u.Host == net.JoinHostPort(host, port)
+	}
+	if strings.Contains(host, ":") {
+		return u.Host == "["+host+"]"
+	}
+	return u.Host == host
+}
+
 // normalizeOrigin 把主控地址或订阅域名归一成干净的 HTTP(S) origin（master-settings「主控地址是人类专属的设置写」）：
-// scheme 是 http / https、有 host、没有路径（单个 / 除外）、查询、片段与用户信息；返回 scheme://host[:port]。空串原样返回（表示清掉）。
+// scheme 是 http / https、有合法域名或 IP 字面量的 host、可选十进制端口、没有路径（单个 / 除外）、查询、片段与用户信息；
+// 拒绝单引号等 RFC 3986 sub-delims，保证 server install-command 的单引号拼接不能被逃逸。空串原样返回（表示清掉）。
 func normalizeOrigin(flag, raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return "", nil
 	}
 	bad := func() (string, error) {
-		return "", v1.Newf(v1.CodeBadRequest, "参数 %s 必须是干净的 HTTP(S) 地址（只有 scheme 与 host，可带端口），得到 %q", flag, raw).
+		return "", v1.Newf(v1.CodeBadRequest, "参数 %s 必须是干净的 HTTP(S) 地址（只有 scheme 与合法域名或 IP，可带端口），得到 %q", flag, raw).
 			WithNext("例如 https://panel.example.com 或 https://panel.example.com:8443")
 	}
 	u, err := url.ParseRequestURI(s)
-	if err != nil || u.Host == "" || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") ||
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") ||
 		u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery || (u.Path != "" && u.Path != "/") || u.RawPath != "" ||
-		strings.HasSuffix(u.Host, ":") { // url 包放过 host: 这种空端口，这里不收
+		!validOriginHostPort(u) {
 		return bad()
 	}
 	return u.Scheme + "://" + u.Host, nil

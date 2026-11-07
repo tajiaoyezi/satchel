@@ -82,6 +82,8 @@ func serverCommands() []*Command {
 			Columns: []string{"id", "network", "peer", "outbound", "start"}},
 		{Path: []string{"server", "traffic"}, Summary: "看主控收上来的流量累计（按入站、出站、凭据分上下行；在主控内存里，主控重启后从零开始）与内核重启次数", Class: ClassRead,
 			Args: []Arg{name}},
+		{Path: []string{"server", "restart-kernel"}, Summary: "让一台在线服务器重新读 kernel.json 并在同一个进程里重启内核（已有连接会断开，计数与限速来源保留）",
+			Class: ClassAction, Danger: v1.DangerRestart, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"}, Args: []Arg{name}},
 	}
 }
 

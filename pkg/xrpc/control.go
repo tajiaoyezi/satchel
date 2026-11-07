@@ -13,6 +13,7 @@ const (
 	MethodConnectionsList = "connections.list" // ConnectionsListParams → ConnectionsList
 	MethodConnectionsKick = "connections.kick" // ConnectionsKickParams → ConnectionsKicked
 	MethodTrafficSnapshot = "traffic.snapshot" // 无参数 → TrafficSnapshot
+	MethodKernelRestart   = "kernel.restart"   // 无参数 → KernelRestarted
 )
 
 // 限速来源：每份「入站 × 凭据」三份，生效值取已设且大于 0 的那几份里最小的一个（技术方案第 10 章）。
@@ -112,4 +113,12 @@ type TrafficSnapshot struct {
 	KernelRunning   bool           `json:"kernel_running"`
 	KernelVersion   string         `json:"kernel_version,omitempty"`
 	KernelStartedAt *time.Time     `json:"kernel_started_at,omitempty"`
+}
+
+// KernelRestarted 是 kernel.restart 的回复。
+type KernelRestarted struct {
+	Running   bool       `json:"running"`
+	Version   string     `json:"version,omitempty"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	Inbounds  []string   `json:"inbounds"`
 }

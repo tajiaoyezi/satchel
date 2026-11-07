@@ -62,6 +62,13 @@ func TestAccumulator(t *testing.T) {
 			{snap("b1", 1, count("vless", "direct", "a", 0, 100)), 0, 100},
 			{snap("b2", 0), 1, 100},
 		},
+		"同一启动标识下计数不回退且忽略负数": {
+			{snap("b1", 1, count("vless", "direct", "a", 10, 100)), 0, 100},
+			{snap("b1", 1, count("vless", "direct", "a", 5, 80)), 0, 100},
+			{snap("b1", 1), 0, 100},
+			{snap("b1", 1, count("vless", "direct", "a", -10, -50)), 0, 100},
+			{snap("b1", 1, count("vless", "direct", "a", 12, 120)), 0, 120},
+		},
 	}
 	now := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
 	for name, steps := range cases {

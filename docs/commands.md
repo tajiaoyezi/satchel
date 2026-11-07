@@ -43,6 +43,7 @@
 | `server limit clear` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/limit/clear/{name}` |
 | `server limit set` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/limit/set/{name}` |
 | `server list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server` |
+| `server restart-kernel` | action | operate | restart | object (name) | 否 | 否 | 否 | `POST /api/v1/server/restart-kernel/{name}` |
 | `server traffic` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/traffic/{name}` |
 | `settings gates set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/gates/set` |
 | `settings image upload` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/image/upload` |

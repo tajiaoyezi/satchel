@@ -521,7 +521,14 @@ func TestMasterURL(t *testing.T) {
 		if err != nil || typed(t, res).Status.SubscriptionURL != "http://Sub.example.com:8080" || typed(t, res).Metadata.ResourceVersion != 4 {
 			t.Fatalf("订阅域名带端口：%v %+v", err, res)
 		}
-		for _, bad := range []string{"https://panel.example.com/admin", "panel.example.com", "https://user@panel.example.com", "https://panel.example.com/?x=1", "https://panel.example.com/#a", "ftp://panel.example.com", "https://", "https://panel.example.com:"} {
+		for _, bad := range []string{
+			"https://panel.example.com/admin", "panel.example.com", "https://user@panel.example.com",
+			"https://panel.example.com/?x=1", "https://panel.example.com/#a", "ftp://panel.example.com",
+			"https://", "https://panel.example.com:",
+			"https://panel'evil.example.com", "https://panel$evil.example.com", "https://-bad.example.com",
+			"https://bad-.example.com", "https://.bad.example.com", "https://panel..example.com",
+			"https://panel.example.com:0", "https://panel.example.com:70000", "https://[::1%25lo0]:8443",
+		} {
 			_, err := f.run(f.admin, "settings master-url set", nil, map[string]any{"url": bad, "resource-version": 4})
 			e := wantCode(t, err, v1.CodeBadRequest)
 			if !strings.Contains(e.Reason, "url") {

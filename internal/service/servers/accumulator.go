@@ -44,20 +44,25 @@ func (a *accumulator) add(s xrpc.TrafficSnapshot, now time.Time) int {
 	restarts := 0
 	switch {
 	case a.base == nil:
-		a.base, a.since = map[trafficKey][2]int64{}, now
+		a.base, a.last, a.since = map[trafficKey][2]int64{}, make(map[trafficKey][2]int64, len(s.Counts)), now
+		a.generation = s.Generation
 	case s.BootID != a.bootID:
 		for k, v := range a.last {
 			b := a.base[k]
 			a.base[k] = [2]int64{b[0] + v[0], b[1] + v[1]}
 		}
+		a.last = make(map[trafficKey][2]int64, len(s.Counts))
 		restarts = int(max(s.Generation, 1))
+		a.generation = s.Generation
 	case s.Generation > a.generation:
 		restarts = int(s.Generation - a.generation)
+		a.generation = s.Generation
 	}
-	a.bootID, a.generation, a.at = s.BootID, s.Generation, now
-	a.last = make(map[trafficKey][2]int64, len(s.Counts))
+	a.bootID, a.at = s.BootID, now
 	for _, c := range s.Counts {
-		a.last[trafficKey{c.Inbound, c.Outbound, c.Credential}] = [2]int64{c.Up, c.Down}
+		k := trafficKey{c.Inbound, c.Outbound, c.Credential}
+		prev := a.last[k]
+		a.last[k] = [2]int64{max(prev[0], max(c.Up, 0)), max(prev[1], max(c.Down, 0))}
 	}
 	return restarts
 }
