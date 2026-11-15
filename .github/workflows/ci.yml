@@ -112,7 +112,7 @@ jobs:
           ref=$(tr -d ' \r\n' < internal/projection/web/SATCHEL_WEB_REF)
           web=$(docker run --rm satchel:ci version --json | jq -r .web)
           [ "$web" = "$ref" ] || { echo "::error::镜像里的网页版本是「$web」，应当是 $ref"; exit 1; }
-          docker run --rm satchel:ci db status --json | jq -e .driver >/dev/null
+          docker run --rm satchel:ci db status --json | jq -e '.schema.consistent and (.applied | length > 0)' >/dev/null
 
       - name: default command serves and turns healthy
         run: |
