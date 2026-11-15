@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/satchel/satchel/internal/base/db"
@@ -99,7 +98,7 @@ type CheckResult struct {
 }
 
 // IsDev 报告 v 是不是开发版构建的版本号：不合法，或是直接 go build 时的默认值那种 -dev 结尾的。开发版不能自升级。
-func IsDev(v string) bool { return !selfupdate.Valid(v) || strings.HasSuffix(v, "-dev") }
+func IsDev(v string) bool { return selfupdate.IsDev(v) }
 
 // blocked 返回这台主控不能自升级的原因（能升时为 nil）：不是 Linux、在 Docker 里、开发版构建。
 func (s *Service) blocked() *v1.Error {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/satchel/satchel/internal/base/db"
+	"github.com/satchel/satchel/internal/base/selfupdate"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -33,13 +34,8 @@ func LoadIdentity(dataDir string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, v1.Wrap(v1.CodeInternal, "生成主控通信密钥失败", err)
 	}
-	// 先写临时文件再改名：写到一半断电不会留下一个长度不对的 master.key。
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, priv.Seed(), 0o600); err != nil {
-		return nil, v1.Wrap(v1.CodeInternal, "写主控通信密钥失败", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	// 先写临时文件并落盘再改名、最后目录落盘：断电不会留下不完整或未落盘的 master.key。
+	if err := selfupdate.WriteFileAtomic(dataDir, path, priv.Seed(), 0o600); err != nil {
 		return nil, v1.Wrap(v1.CodeInternal, "写主控通信密钥失败", err)
 	}
 	return priv, nil

@@ -53,7 +53,7 @@ func planCodex(env runtimeEnv, url, token string) (*initPlan, error) {
 	}
 	var tree map[string]any
 	if _, err := toml.Decode(string(before), &tree); err != nil {
-		return nil, unsupportedf(path, "不是合法的 TOML（%v）", err)
+		return nil, unsupportedWrap(path, "不是合法的 TOML", err)
 	}
 	if err := checkCodexIncludes(path, tree); err != nil {
 		return nil, err
@@ -234,7 +234,7 @@ func mergeInlineTable(path, line, key, what string, vars [][2]string) (string, e
 	var m map[string]any
 	md, err := toml.Decode(key+" = "+table, &m)
 	if err != nil {
-		return "", unsupportedf(path, "%s 解析不了（%v）", what, err)
+		return "", unsupportedWrap(path, what+" 解析不了", err)
 	}
 	values := tomlTable(m, key)
 	var pairs [][2]string
@@ -295,10 +295,10 @@ func setSubtable(lines []string, s int, vars [][2]string) []string {
 func checkCodexTree(path string, before, after []byte, url, token string) error {
 	var b, a map[string]any
 	if _, err := toml.Decode(string(before), &b); err != nil {
-		return unsupportedf(path, "不是合法的 TOML（%v）", err)
+		return unsupportedWrap(path, "不是合法的 TOML", err)
 	}
 	if _, err := toml.Decode(string(after), &a); err != nil {
-		return unsupportedf(path, "改完不是合法的 TOML（%v），多半是写法不在支持范围内", err)
+		return unsupportedWrap(path, "改完不是合法的 TOML，多半是写法不在支持范围内", err)
 	}
 	srv := tomlTable(a, "mcp_servers", "satchel")
 	if srv["url"] != url+"/mcp" || tomlTable(srv, "http_headers")["Authorization"] != "Bearer "+token {

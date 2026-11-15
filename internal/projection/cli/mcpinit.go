@@ -114,12 +114,18 @@ var runtimeSpecs = map[string]runtimeSpec{
 // errUnsupported 是某个文件解析不了或写法不在支持范围内：planner 返回它，mcpInit 包成带片段的 config 错误。
 type errUnsupported struct {
 	path, why string
+	err       error
 }
 
 func (e errUnsupported) Error() string { return e.path + "：" + e.why }
+func (e errUnsupported) Unwrap() error { return e.err }
 
 func unsupportedf(path, format string, args ...any) error {
 	return errUnsupported{path: path, why: fmt.Sprintf(format, args...)}
+}
+
+func unsupportedWrap(path, why string, err error) error {
+	return errUnsupported{path: path, why: why, err: err}
 }
 
 // runtimeTagRe 与 service/tokens 的 runtime 标签字符集相同。
@@ -268,7 +274,7 @@ func runMCPInit(ctx context.Context, inv *command.Invocation, env runtimeEnv) (a
 // skillsFailure 是配置已经写好、写 skills 却失败：partial_failure，不带令牌明文（令牌已经在配置里）；state 带上配置部分的结果，
 // 免得成功时才有的提示（原来的令牌没有吊销、接入后仍是停用的）跟着丢了。
 func skillsFailure(err error, out initOutput) error {
-	e := v1.Newf(v1.CodePartialFailure, "MCP 配置已经写好，但写 skills 失败：%s", skillsErrReason(err)).
+	e := v1.Wrap(v1.CodePartialFailure, fmt.Sprintf("MCP 配置已经写好，但写 skills 失败：%s", skillsErrReason(err)), err).
 		WithState("url", out.URL).WithState("token_id", out.Token.ID).WithState("files", out.Files).WithState("commands", out.Commands).
 		WithState("verify", out.Verify).WithState("notes", out.Notes).WithState("skills", out.Skills).
 		WithNext("修好 " + out.Skills.Dir + " 后执行 satchel mcp init --runtime " + out.Runtime + " --skills-only 装上 skills")
@@ -287,7 +293,7 @@ func skillsOnlyHint(runtime string) string {
 func preflightError(err error, snippet, runtime string) error {
 	var u errUnsupported
 	if errors.As(err, &u) {
-		return v1.Newf(v1.CodeConfig, "%s：%s；mcp init 在签发令牌之前停下，没有改任何文件", u.path, u.why).
+		return v1.Wrap(v1.CodeConfig, fmt.Sprintf("%s：%s；mcp init 在签发令牌之前停下，没有改任何文件", u.path, u.why), err).
 			WithState("snippet", strings.Split(snippet, "\n")).
 			WithNext("按 state.snippet 手工加上（令牌用 satchel token create 签一把），或改好文件后重跑 satchel mcp init" + skillsOnlyHint(runtime))
 	}
@@ -304,11 +310,11 @@ func writeFailure(err error, tok initToken, plain, snippet string, written []ini
 	}
 	var e *v1.Error
 	if !tok.Issued {
-		e = v1.Newf(v1.CodeConfig, "写 runtime 的配置失败：%s", reason).
+		e = v1.Wrap(v1.CodeConfig, fmt.Sprintf("写 runtime 的配置失败：%s", reason), err).
 			WithState("snippet", strings.Split(strings.ReplaceAll(snippet, plain, shownToken), "\n")).WithState("written", written).
 			WithNext("按 state.snippet 手工加上" + skillsOnlyHint(runtime))
 	} else {
-		e = v1.Newf(v1.CodePartialFailure, "令牌已签发（id %d），但写 runtime 的配置失败：%s", deref64(tok.ID), reason).
+		e = v1.Wrap(v1.CodePartialFailure, fmt.Sprintf("令牌已签发（id %d），但写 runtime 的配置失败：%s", deref64(tok.ID), reason), err).
 			WithState("token", plain).WithState("snippet", strings.Split(snippet, "\n")).WithState("written", written).
 			WithNext(fmt.Sprintf("按 state.snippet 手工加上；不想要这把令牌就执行 satchel token revoke %d --verify-user <管理员账号>", deref64(tok.ID)) + skillsOnlyHint(runtime))
 	}
@@ -583,7 +589,7 @@ func readOptional(path string) ([]byte, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, unsupportedf(path, "读不了（%v）", err)
+		return nil, unsupportedWrap(path, "读不了", err)
 	}
 	if raw == nil {
 		raw = []byte{}

@@ -284,3 +284,46 @@ func TestExplainTool(t *testing.T) {
 		t.Fatalf("都不是应当 not_found：%v %s", isErr, text)
 	}
 }
+
+// 回归 M-06：MCP precheck 与 stripJSONFlags 遇到带值 flag 时跳过紧随的参数值，
+// 参数值包含 -h / --token / -f / login / --json 不误触发拦截或被剥离。
+func TestValueFlagArgumentsNotMisclassifiedInMCP(t *testing.T) {
+	opts := testOptions(t)
+	origRemote := opts.Remote
+	var captured []string
+	opts.Remote = func(dir string) command.Runner {
+		inner := origRemote(dir)
+		return runnerFunc(func(ctx context.Context, inv *command.Invocation) (any, error) {
+			if g, ok := inv.Flags["grep"].(string); ok {
+				captured = append(captured, g)
+			}
+			return inner.Run(ctx, inv)
+		})
+	}
+	s := connect(t, opts, admin())
+
+	for _, val := range []string{"-h", "--token", "-f", "login", "--json", "--grep"} {
+		text, isErr := s.run([]string{"logs", "list", "--grep", val}, "")
+		if isErr || !strings.Contains(text, `"logs list"`) {
+			t.Fatalf("--grep %q 被误判或执行失败：isErr=%v text=%s", val, isErr, text)
+		}
+	}
+	want := []string{"-h", "--token", "-f", "login", "--json", "--grep"}
+	if strings.Join(captured, ",") != strings.Join(want, ",") {
+		t.Fatalf("传入执行链的 grep 值序列不对：got=%v want=%v", captured, want)
+	}
+
+	// 独立禁止的 flag 依然按原口径拒绝。
+	for _, args := range [][]string{{"logs", "list", "-h"}, {"logs", "list", "--token", "sat_x"}, {"whoami", "-f", "/x"}} {
+		text, isErr := s.run(args, "")
+		if e := decodeErr(t, text); !isErr || e.Code != v1.CodeBadRequest {
+			t.Errorf("真实违规 %v 应当被拒：isErr=%v text=%s", args, isErr, text)
+		}
+	}
+}
+
+type runnerFunc func(context.Context, *command.Invocation) (any, error)
+
+func (f runnerFunc) Run(ctx context.Context, inv *command.Invocation) (any, error) {
+	return f(ctx, inv)
+}

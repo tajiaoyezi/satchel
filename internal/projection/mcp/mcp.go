@@ -74,7 +74,7 @@ func runTool(opts cli.Options) sdk.ToolHandlerFor[runInput, any] {
 			return errorResult(err), nil, nil
 		}
 		// --json 与 confirm 要放在 -- 之前：-- 之后的一切都是位置参数。
-		head, tail := cli.SplitDashDash(stripJSONFlags(in.Args))
+		head, tail := cli.SplitDashDash(stripJSONFlags(opts, in.Args))
 		args := append([]string{}, head...)
 		if confirm, ok := in.Confirm.(string); ok && confirm != "" {
 			args = append(args, "--confirm", confirm)
@@ -136,7 +136,8 @@ func precheck(opts cli.Options, args []string) error {
 	head, _ := cli.SplitDashDash(args)
 	cmd, resolved := cli.Resolve(opts, head)
 	var words []string
-	for _, a := range head {
+	for i := 0; i < len(head); i++ {
+		a := head[i]
 		name, isFlag := flagName(a)
 		if !isFlag {
 			words = append(words, a)
@@ -153,6 +154,9 @@ func precheck(opts cli.Options, args []string) error {
 		}
 		if isFilePathFlag(name, cmd) {
 			return v1.Newf(v1.CodeBadRequest, "参数 %s 是文件路径：文件只在 CLI 本地读取、内联后发给主控，主控不读服务端路径", a)
+		}
+		if !strings.Contains(a, "=") && cli.TakesValueFlag(cmd, name) {
+			i++
 		}
 	}
 	if len(words) > 0 {
@@ -219,14 +223,21 @@ func isFilePathFlag(name string, cmd *command.Command) bool {
 }
 
 // stripJSONFlags 去掉 -- 之前的 --json / --json=true / --json=false：satchel_run 恒为 JSON，这些 flag 被接受但没有效果。
-func stripJSONFlags(args []string) []string {
+// 带值 flag 紧跟的参数值即便恰好叫 --json 也不得误删。
+func stripJSONFlags(opts cli.Options, args []string) []string {
 	head, tail := cli.SplitDashDash(args)
+	cmd, _ := cli.Resolve(opts, head)
 	out := make([]string, 0, len(args))
-	for _, a := range head {
+	for i := 0; i < len(head); i++ {
+		a := head[i]
 		if a == "--json" || strings.HasPrefix(a, "--json=") {
 			continue
 		}
 		out = append(out, a)
+		if name, isFlag := flagName(a); isFlag && !strings.Contains(a, "=") && cli.TakesValueFlag(cmd, name) && i+1 < len(head) {
+			i++
+			out = append(out, head[i])
+		}
 	}
 	return append(out, tail...)
 }

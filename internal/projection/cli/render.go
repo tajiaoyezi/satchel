@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -89,7 +90,9 @@ func toFields(result any) (map[string]any, error) {
 		return nil, v1.Wrap(v1.CodeInternal, "编码输出失败", err)
 	}
 	var fields map[string]any
-	if err := json.Unmarshal(raw, &fields); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&fields); err != nil {
 		return nil, v1.Wrap(v1.CodeInternal, "输出必须是对象", err)
 	}
 	return fields, nil
@@ -133,14 +136,25 @@ func renderPage(w io.Writer, c *command.Command, fields map[string]any) error {
 	if err := tw.Flush(); err != nil {
 		return err
 	}
-	total, _ := fields["total"].(float64)
+	total := int64Field(fields["total"])
 	next, _ := fields["nextCursor"].(string)
 	if next != "" {
-		_, err := fmt.Fprintf(w, "共 %d 条，还有下一页：--cursor %s\n", int(total), next)
+		_, err := fmt.Fprintf(w, "共 %d 条，还有下一页：--cursor %s\n", total, next)
 		return err
 	}
-	_, err := fmt.Fprintf(w, "共 %d 条\n", int(total))
+	_, err := fmt.Fprintf(w, "共 %d 条\n", total)
 	return err
+}
+
+func int64Field(v any) int64 {
+	switch x := v.(type) {
+	case json.Number:
+		n, _ := x.Int64()
+		return n
+	case float64:
+		return int64(x)
+	}
+	return 0
 }
 
 func formatValue(v any) string {
@@ -149,6 +163,8 @@ func formatValue(v any) string {
 		return "-"
 	case string:
 		return x
+	case json.Number:
+		return x.String()
 	case float64:
 		if x == float64(int64(x)) {
 			return fmt.Sprintf("%d", int64(x))

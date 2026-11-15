@@ -217,7 +217,7 @@ func (s *Service) connections(ctx context.Context, inv *command.Invocation) (any
 	if err := page.Normalize(); err != nil {
 		return nil, err
 	}
-	afterID, err := command.DecodeIDCursor(page.Cursor)
+	afterID, err := command.DecodeUintCursor(page.Cursor)
 	if err != nil {
 		return nil, err
 	}
@@ -230,11 +230,11 @@ func (s *Service) connections(ctx context.Context, inv *command.Invocation) (any
 	res := &command.PageResult{Items: []any{}, Total: len(conns)}
 	var lastID uint64
 	for _, c := range conns {
-		if int64(c.ID) <= afterID {
+		if c.ID <= afterID {
 			continue
 		}
 		if len(res.Items) == page.Limit {
-			res.NextCursor = command.EncodeIDCursor(int64(lastID))
+			res.NextCursor = command.EncodeUintCursor(lastID)
 			break
 		}
 		res.Items, lastID = append(res.Items, c), c.ID
@@ -363,27 +363,30 @@ func (s *Service) collectOne(ctx context.Context, id int64, now func() time.Time
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		return fmt.Errorf("快照解不开：%w", err)
 	}
-	// 先把快照收进累计，再读起点：起点读失败时这份快照也不能丢，否则下一份会被当成第一份、漏掉中间的重启。
+	// 先读起点再把快照收进累计（M-10.1）：读起点失败直接返回，不推进累计器，避免既报错又吞掉首份快照。
 	s.mu.Lock()
 	a := s.accs[id]
-	if a == nil {
-		a = &accumulator{}
-		s.accs[id] = a
-	}
-	a.restarts += int64(a.add(snap, now()))
-	based := a.based
+	based := a != nil && a.based
 	s.mu.Unlock()
+	var bootBase int64
 	if !based {
 		// 以库里现有的 core_boot_count 为起点（主控重启以前记的次数接着往上加）；读失败就下一次拉取再读。
 		srv, err := s.repo.ByID(ctx, id)
 		if err != nil {
 			return err
 		}
-		s.mu.Lock()
-		a.bootBase, a.based = srv.Status.CoreBootCount, true
-		s.mu.Unlock()
+		bootBase = srv.Status.CoreBootCount
 	}
 	s.mu.Lock()
+	a = s.accs[id]
+	if a == nil {
+		a = &accumulator{}
+		s.accs[id] = a
+	}
+	if !a.based {
+		a.bootBase, a.based = bootBase, true
+	}
+	a.restarts += int64(a.add(snap, now()))
 	bootCount := a.bootBase + a.restarts
 	s.mu.Unlock()
 	version := snap.KernelVersion

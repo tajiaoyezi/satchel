@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -260,11 +261,14 @@ func (s *Service) migrate(ctx context.Context, inv *command.Invocation) (any, er
 			WithNext("换一个空库，或先清空目标 schema")
 	}
 	accepted := ctx.Done() // 受理它的请求结束（含写完审计）时关闭
+	var keepLocked atomic.Bool
 	job, err := s.d.StartJob(ctx, inv, func(jctx context.Context) (any, error) {
-		return s.run(jctx, accepted, target, cfg)
+		return s.run(jctx, accepted, target, cfg, &keepLocked)
 	}, func() {
 		closeFn()
-		s.d.Unlock()
+		if !keepLocked.Load() {
+			s.d.Unlock()
+		}
 	})
 	if err != nil {
 		closeFn()
@@ -281,7 +285,7 @@ func firstN(s []string, n int) []string {
 }
 
 // run 是迁移这个长任务的工作（master-db-migration「拷贝期间阻塞写入」到「失败处理」，design 第 1 到 4 条）。
-func (s *Service) run(ctx context.Context, accepted <-chan struct{}, target *bun.DB, cfg db.Config) (res any, err error) {
+func (s *Service) run(ctx context.Context, accepted <-chan struct{}, target *bun.DB, cfg db.Config, keepLocked *atomic.Bool) (res any, err error) {
 	report := func(p Progress) { corejobs.Report(ctx, p) }
 	report(Progress{Phase: "waiting"})
 	select {
@@ -360,6 +364,10 @@ func (s *Service) run(ctx context.Context, accepted <-chan struct{}, target *bun
 		s.d.Logger.Error("database.json 已经改成 PostgreSQL，但数据目录没能落盘；断电前请确认它已经写到磁盘上", "error", err)
 	}
 	committed = true
+	if keepLocked != nil {
+		keepLocked.Store(true)
+	}
+	corejobs.SkipFinish(ctx)
 	s.d.Logger.Warn("已迁移到 PostgreSQL，主控现在停止，由服务管理器拉起后连接新库", "host", cfg.Host, "name", cfg.Name, "tables", rep.Tables, "rows", rep.Rows)
 	if s.d.RequestStop != nil {
 		time.AfterFunc(stopDelay, s.d.RequestStop)

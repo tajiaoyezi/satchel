@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
+	"github.com/satchel/satchel/internal/command"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
@@ -55,5 +57,32 @@ func TestLimitExplicitZeroRejected(t *testing.T) {
 		if e := decodeError(t, stderr); e.Code != v1.CodeBadRequest || !strings.Contains(e.Reason, "limit") {
 			t.Errorf("--limit %s 应当 bad_request 并点名 limit：%+v", limit, e)
 		}
+	}
+}
+
+// 回归 L-01：通用渲染对超过 2^53 的 int64 保持精度，同时保留列表总条数渲染。
+func TestRenderPreservesLargeInt64PrecisionAndPageTotal(t *testing.T) {
+	const big int64 = 9007199254740993 // 2^53 + 1
+	var buf bytes.Buffer
+	c := &command.Command{Path: []string{"demo", "show"}, Columns: []string{"id"}}
+	if err := renderGeneric(&buf, c, map[string]any{"id": big}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "9007199254740993") {
+		t.Fatalf("超过 2^53 的 int64 末位不应丢失精度：\n%s", buf.String())
+	}
+
+	buf.Reset()
+	page := &command.PageResult{
+		Items:      []any{map[string]any{"id": big}},
+		Total:      42,
+		NextCursor: "c2",
+	}
+	if err := renderGeneric(&buf, c, page); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "9007199254740993") || !strings.Contains(out, "共 42 条，还有下一页：--cursor c2") {
+		t.Fatalf("分页输出丢失大整数精度或总条数：\n%s", out)
 	}
 }

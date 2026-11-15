@@ -185,3 +185,24 @@ func DecodeIDCursor(cursor string) (int64, error) {
 	}
 	return 0, v1.Newf(v1.CodeBadRequest, "cursor 不合法，请用上一页返回的 nextCursor")
 }
+
+// EncodeUintCursor 把无符号 keyset 游标（如节点 uint64 连接 id）编成不透明字符串。
+func EncodeUintCursor(id uint64) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("id:" + strconv.FormatUint(id, 10)))
+}
+
+// DecodeUintCursor 解 EncodeUintCursor 的输出；空串表示第一页，返回 0。解不出或值 <= 0 报 bad_request。
+func DecodeUintCursor(cursor string) (uint64, error) {
+	if cursor == "" {
+		return 0, nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err == nil {
+		if n, ok := strings.CutPrefix(string(raw), "id:"); ok {
+			if id, err := strconv.ParseUint(n, 10, 64); err == nil && id > 0 {
+				return id, nil
+			}
+		}
+	}
+	return 0, v1.Newf(v1.CodeBadRequest, "cursor 不合法，请用上一页返回的 nextCursor")
+}

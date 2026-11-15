@@ -926,4 +926,41 @@ func TestRollbackOverwritesOtherRestoreMarker(t *testing.T) {
 	}
 }
 
+// M-02 回归：停机时必须等 watchHealth 及其对数据库的收尾动作彻底退出后，再关闭 a.db。
+func TestHealthWatcherStopsBeforeDBClose(t *testing.T) {
+	u := prepareUpgraded(t)
+	prev := commitUpgrade
+	inCommit := make(chan struct{})
+	var dbErr error
+	commitUpgrade = func(_ *upgradeStart, hctx context.Context, a *app) error {
+		close(inCommit)
+		<-hctx.Done()
+		time.Sleep(50 * time.Millisecond)
+		var n int
+		dbErr = a.db.QueryRowContext(context.Background(), "SELECT count(*) FROM users").Scan(&n)
+		return nil
+	}
+	t.Cleanup(func() { commitUpgrade = prev })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := serveWith(ctx, u.dataDir, u.sqlite(), db.ServeConfig{Listen: "127.0.0.1:0"}, slog.New(slog.NewTextHandler(u.logs, nil)), nopCloser{}, "0.1.1")
+		done <- err
+	}()
+	select {
+	case <-inCommit:
+	case <-time.After(15 * time.Second):
+		t.Fatalf("健康检查应当进入 commitUpgrade：%s", u.logs.String())
+	}
+	cancel()
+	if err := waitDone(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if dbErr != nil {
+		t.Fatalf("watchHealth 退出前 a.db 不应被关闭，得到错误：%v", dbErr)
+	}
+}
+
 var _ io.Closer = nopCloser{}

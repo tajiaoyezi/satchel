@@ -142,6 +142,10 @@ func connect(t *testing.T, url, ip string, pub ed25519.PublicKey) (*testAgent, x
 }
 
 func connectAs(t *testing.T, url, ip string, pub ed25519.PublicKey, token string) (*testAgent, xrpc.AuthResult, error) {
+	return connectWithAuth(t, url, ip, pub, xrpc.Auth{Token: token, AgentVersion: "1.0.0", ControlProtocol: xrpc.ControlProtocol})
+}
+
+func connectWithAuth(t *testing.T, url, ip string, pub ed25519.PublicKey, auth xrpc.Auth) (*testAgent, xrpc.AuthResult, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -154,7 +158,7 @@ func connectAs(t *testing.T, url, ip string, pub ed25519.PublicKey, token string
 	if err := xrpc.ClientHandshake(ctx, a.conn, pub); err != nil {
 		return a, xrpc.AuthResult{}, err
 	}
-	if err := a.conn.Write(ctx, xrpc.TypeAuth, xrpc.Auth{Token: token, AgentVersion: "1.0.0", ControlProtocol: xrpc.ControlProtocol}); err != nil {
+	if err := a.conn.Write(ctx, xrpc.TypeAuth, auth); err != nil {
 		return a, xrpc.AuthResult{}, err
 	}
 	m, err := a.conn.Read(ctx)
@@ -509,5 +513,27 @@ func TestShutdownHonorsDeadline(t *testing.T) {
 	m.Shutdown(ctx)
 	if d := time.Since(began); d > time.Second {
 		t.Fatalf("Shutdown 应当在期限到了之后很快返回，用了 %v", d)
+	}
+}
+
+// M-11 回归：任意 -dev 版本豁免最低主控版本比较；正式版遇到节点上报非法或更高的 MinMasterVersion 一律按 incompatible 拒绝。
+func TestMinMasterVersionChecks(t *testing.T) {
+	authWithMin := func(minVer string) xrpc.Auth {
+		return xrpc.Auth{Token: "tok", AgentVersion: "1.0.0", ControlProtocol: xrpc.ControlProtocol, MinMasterVersion: minVer}
+	}
+	// 1. 自定义 *-dev 版本放行
+	_, devURL, devPub := serveManager(t, Config{Directory: &fakeDir{}, Version: "1.2.3-dev"})
+	if _, res, err := connectWithAuth(t, devURL, "10.0.0.1", devPub, authWithMin("99.0.0")); err != nil || !res.OK {
+		t.Fatalf("-dev 版本应当跳过最低主控版本检查：%+v %v", res, err)
+	}
+	// 2. 正式版 0.1.0 遇到非法 MinMasterVersion 与更高的 0.2.0 都拒绝，遇到 0.1.0 放行
+	_, relURL, relPub := serveManager(t, Config{Directory: &fakeDir{}, Version: "0.1.0"})
+	for _, minVer := range []string{"not-a-semver", "0.2.0"} {
+		if _, res, err := connectWithAuth(t, relURL, "10.0.0.2", relPub, authWithMin(minVer)); err != nil || res.OK || res.Reason != xrpc.AuthIncompatible {
+			t.Fatalf("min=%q 时正式版 0.1.0 应当返回 incompatible：%+v %v", minVer, res, err)
+		}
+	}
+	if _, res, err := connectWithAuth(t, relURL, "10.0.0.3", relPub, authWithMin("0.1.0")); err != nil || !res.OK {
+		t.Fatalf("min=0.1.0 时正式版 0.1.0 应当放行：%+v %v", res, err)
 	}
 }

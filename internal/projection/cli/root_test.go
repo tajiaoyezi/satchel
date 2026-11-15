@@ -210,3 +210,53 @@ func TestTextErrorShape(t *testing.T) {
 		t.Fatalf("连不上库的文本错误应当有 code、reason、下一步与底层原因：\n%s", stderr)
 	}
 }
+
+type captureRunner struct {
+	last *command.Invocation
+}
+
+func (r *captureRunner) Run(_ context.Context, inv *command.Invocation) (any, error) {
+	r.last = inv
+	return map[string]any{"ok": true}, nil
+}
+
+// 回归 M-06：带值 flag 后紧跟的值（即便是 --json、-h 或同名 --grep）不得被误判为选项或重复 flag；
+// `--` 之后的 `--json` 也不得在用法错误渲染时误开 JSON 模式。
+func TestValueFlagValuesNotTreatedAsFlags(t *testing.T) {
+	rec := &captureRunner{}
+	opts := testOptions()
+	opts.Remote = func(string) command.Runner { return rec }
+
+	var out, errOut bytes.Buffer
+	code := Execute(opts, []string{"logs", "list", "--grep", "--grep"}, &out, &errOut)
+	if code != 0 || rec.last == nil || rec.last.Flags["grep"] != "--grep" {
+		t.Fatalf("logs list --grep --grep 应成功且保留值：code=%d stderr=%s inv=%+v", code, errOut.String(), rec.last)
+	}
+	if !strings.Contains(out.String(), "ok：true") || strings.HasPrefix(strings.TrimSpace(out.String()), "{") {
+		t.Fatalf("未传独立 --json 时应走文本输出：%s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Execute(opts, []string{"logs", "list", "--grep", "--json", "extra"}, &out, &errOut)
+	if code != v1.ExitUsage {
+		t.Fatalf("多余参数应返回 2，得到 %d", code)
+	}
+	if strings.HasPrefix(strings.TrimSpace(errOut.String()), "{") {
+		t.Fatalf("--grep --json 的值不应触发 JSON 错误输出：%s", errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Execute(opts, []string{"whoami", "--", "--json"}, &out, &errOut)
+	if code != v1.ExitUsage || strings.HasPrefix(strings.TrimSpace(errOut.String()), "{") {
+		t.Fatalf("-- 之后的 --json 不应触发 JSON 错误输出：code=%d stderr=%s", code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Execute(opts, []string{"logs", "list", "--grep", "-h", "--grep", "y"}, &out, &errOut)
+	if code != v1.ExitUsage || !strings.Contains(errOut.String(), "重复") {
+		t.Fatalf("真正的重复 --grep 仍应被拦截：code=%d stderr=%s", code, errOut.String())
+	}
+}

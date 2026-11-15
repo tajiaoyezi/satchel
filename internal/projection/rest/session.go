@@ -1,8 +1,12 @@
 package rest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"time"
@@ -100,10 +104,29 @@ func mountSessionEndpoints(mux *http.ServeMux, sessions SessionAPI) {
 }
 
 func readJSON(r *http.Request, into any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, MaxBodyBytes))
+	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		return v1.New(v1.CodeBadRequest, "请求体必须是 application/json")
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, MaxBodyBytes))
+	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			return v1.Newf(v1.CodeBadRequest, "请求体超过 %d 字节", MaxBodyBytes)
+		}
+		return v1.Wrap(v1.CodeBadRequest, "读取请求体失败", err)
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return v1.New(v1.CodeBadRequest, "请求体不是预期形状的 JSON 对象")
+	}
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {
 		return v1.Wrap(v1.CodeBadRequest, "请求体不是预期形状的 JSON 对象", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return v1.New(v1.CodeBadRequest, "请求体只能是一个 JSON 对象")
 	}
 	return nil
 }

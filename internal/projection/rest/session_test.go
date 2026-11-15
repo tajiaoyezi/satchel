@@ -360,3 +360,34 @@ func TestSameOriginTokenSources(t *testing.T) {
 		t.Fatalf("无效凭据的跨站写请求被同源检查拒：%d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// 回归 L-06：会话入口 readJSON 与管理 REST 一致，检查 Content-Type、请求体上限，拒绝 null、空体及尾部多余 JSON token。
+func TestSessionReadJSONHardening(t *testing.T) {
+	fs := &fakeSessions{}
+	h := NewHandler(testTable(t), &echo{}, fs)
+
+	// Content-Type 不是 application/json 时 400。
+	rec := raw(t, h, "POST", SessionPath, `{"username":"admin","password":"pw"}`, func(r *http.Request) {
+		r.Header.Set("Content-Type", "text/plain")
+	})
+	if rec.Code != 400 || errorOf(t, fields(t, rec)).Code != v1.CodeBadRequest {
+		t.Fatalf("非 application/json 应当 400：%d %s", rec.Code, rec.Body.String())
+	}
+
+	// null、空体、尾部垃圾或第二个对象均应当 400。
+	for _, body := range []string{`null`, `   `, `{"username":"admin","password":"pw"} {}`, `{"username":"admin","password":"pw"} garbage`} {
+		rec := raw(t, h, "POST", SessionPath, body, func(r *http.Request) {
+			r.Header.Set("Content-Type", "application/json")
+		})
+		if rec.Code != 400 || errorOf(t, fields(t, rec)).Code != v1.CodeBadRequest {
+			t.Errorf("%q 应当 400 bad_request：%d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	// 超大请求体应当 400 bad_request。
+	big := `{"username":"admin","password":"` + strings.Repeat("x", MaxBodyBytes) + `"}`
+	rec = raw(t, h, "POST", SessionPath, big, nil)
+	if rec.Code != 400 || errorOf(t, fields(t, rec)).Code != v1.CodeBadRequest {
+		t.Fatalf("超大请求体应当 400 bad_request：%d %s", rec.Code, rec.Body.String())
+	}
+}

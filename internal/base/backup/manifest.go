@@ -82,7 +82,7 @@ func entryAllowed(name string) bool {
 		return false
 	}
 	for _, seg := range strings.Split(name, "/") {
-		if seg == ".." || seg == "." || seg == "" {
+		if seg == "" || strings.HasPrefix(seg, ".") {
 			return false
 		}
 	}

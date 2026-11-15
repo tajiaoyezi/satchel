@@ -148,6 +148,9 @@ func (s *Service) execute(ctx context.Context, job *core.Job, run func(context.C
 	s.mu.Lock()
 	s.final[job.JobID] = &core.Job{Status: status, ExitCode: &exit, Output: &output, OutputTruncated: truncated, FinishedAt: &now}
 	s.mu.Unlock()
+	if core.ShouldSkipFinish(ctx) {
+		return
+	}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
 	defer cancel()
 	if err := s.repo.Finish(wctx, job.ID, core.StatusRunning, status, exit, output, truncated, now); err != nil {

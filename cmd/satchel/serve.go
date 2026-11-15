@@ -90,9 +90,12 @@ func serveWith(ctx context.Context, dataDir string, dbCfg db.Config, cfg db.Serv
 	hctx, stopHealth := context.WithCancel(ctx)
 	healthDone := make(chan struct{})
 	go func() { defer close(healthDone); up.watchHealth(hctx, a, tcp.Addr()) }()
-	err = a.serve(ctx, tcp, unix)
-	stopHealth()
-	<-healthDone             // 健康检查与收尾都停下、标记不再被改写之后，才按磁盘上的标记判断
+	stopWatchHealth := func() {
+		stopHealth()
+		<-healthDone
+	}
+	err = a.serve(ctx, tcp, unix, stopWatchHealth)
+	stopWatchHealth()        // 兜底保证健康检查完全退出、标记不再被改写之后，才按磁盘上的标记判断
 	up.uncountIfStopped(ctx) // 健康检查通过之前收到停止信号：这次启动不算
 	if err != nil {
 		return nil, err

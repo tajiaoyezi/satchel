@@ -742,3 +742,98 @@ func TestUnreadableDatabaseNotRestored(t *testing.T) {
 		t.Fatalf("不应当触发自动恢复：%+v", m)
 	}
 }
+
+// M-04 回归：校验阶段拒绝任意子目录下的隐藏路径，Validate 对 UncompressedSize64 溢出保护，
+// 多条目累计解压总大小超上限返回 CodeBadRequest，恢复外层保留 bad_request 不吞成 internal。
+func TestBackupBudgetSubdirHiddenAndErrorCode(t *testing.T) {
+	// 1. 子目录下隐藏文件必须被 entryAllowed 拒绝。
+	for _, hidden := range []string{".hidden", "subscribes/.secret", "rule_templates/.sub/a.yaml", "public/uploads/.DS_Store"} {
+		if entryAllowed(hidden) {
+			t.Fatalf("子目录隐藏路径 %q 不应当被允许", hidden)
+		}
+	}
+
+	// 2. 多条目累计实际解压体积超上限（单个条目未超上限，但合计超过 maxExtract）必须在恢复时被截停并保留 CodeBadRequest。
+	old := maxExtract
+	maxExtract = 1024
+	defer func() { maxExtract = old }()
+
+	dataDir, cfg, bdb := sqliteMaster(t)
+	bdb.Close()
+	m := &Manifest{Format: Format, Driver: db.DriverSQLite, Migrations: migrations(t)}
+	// 每个文件 600 字节，在 ZIP 头里的声明也欺骗成较小尺寸以绕过 Validate 的头检查（或各自 400+400+400=1200 > 1024）：
+	// 先建一个含 2 个 600 字节文件的 ZIP，单独看每一条 <= 1024，但恢复过程累计 1200 > 1024。
+	// 若用真实文件构造，Validate 会先拦；这里专门把两个条目的 UncompressedSize64 伪装成 100 的测试或直接测 apply 累计拦截：
+	// 最直接：Validate 对总和 > 1024 返回 CodeBadRequest；再测 apply 直接共享 budget（先将 maxExtract 调大建成合法小包，再调小测多条目合计超限）。
+	maxExtract = 10 << 20
+	smallDB, _ := os.ReadFile(cfg.Path)
+	if len(smallDB) < 1024 {
+		t.Fatalf("SQLite 文件过小：%d", len(smallDB))
+	}
+	subContent := strings.Repeat("a", 600)
+	zipName := buildZip(t, Dir(dataDir), "satchel-backup-multi.zip", m, map[string]string{
+		"subscribes/a.yaml": subContent,
+		"subscribes/b.yaml": subContent,
+		EntrySQLite:         string(smallDB),
+	})
+	maxExtract = int64(len(smallDB)) + 700 // 两条 subscribes 共 1200 + db > maxExtract，但任意单个文件都小于 maxExtract!
+	WriteMarker(dataDir, &Marker{
+		Backup:      filepath.Base(zipName),
+		Source:      SourceManual,
+		Actor:       "root",
+		RequestedAt: time.Now(),
+		Phase:       PhasePending,
+	})
+	got, err := ApplyPending(context.Background(), Target{DataDir: dataDir, Config: cfg}, quiet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Phase != PhaseFailed || !strings.Contains(got.Error, "上限") {
+		t.Fatalf("多条目合计超限应当失败且带上限提示：%+v", got)
+	}
+	// 直接调 apply 确认返回错误码仍为 bad_request（未吞成 internal）。
+	if err := apply(context.Background(), Target{DataDir: dataDir, Config: cfg}, &Marker{Backup: filepath.Base(zipName), Source: SourceAuto, Phase: PhasePending}, quiet); v1.AsError(err).Code != v1.CodeBadRequest {
+		t.Fatalf("多条目超限必须保留 bad_request 错误码，得到 %v", err)
+	}
+}
+
+// M-05 回归：恢复前生成 before-restore 备份后，标记记下 BeforeRestoreDone=true；崩溃重入 apply 时不再重复生成。
+func TestBeforeRestoreDoneIdempotent(t *testing.T) {
+	dataDir, cfg, bdb := sqliteMaster(t)
+	m := &Manifest{Format: Format, Driver: db.DriverSQLite, Migrations: migrations(t)}
+	bdb.Close()
+	rawDB, _ := os.ReadFile(cfg.Path)
+	zipName := buildZip(t, Dir(dataDir), "satchel-backup-good.zip", m, map[string]string{EntrySQLite: string(rawDB)})
+
+	marker := &Marker{
+		Backup:            filepath.Base(zipName),
+		Source:            SourceManual,
+		Actor:             "root",
+		RequestedAt:       time.Now(),
+		Phase:             PhasePending,
+		BeforeRestoreDone: true, // 模拟上次重启前已生成过 before-restore 备份
+	}
+	if err := WriteMarker(dataDir, marker); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ApplyPending(context.Background(), Target{DataDir: dataDir, Config: cfg}, quiet)
+	if err != nil || got.Phase != PhaseRestored {
+		t.Fatalf("重入恢复应当成功：%+v %v", got, err)
+	}
+	matches, _ := filepath.Glob(filepath.Join(Dir(dataDir), PrefixBeforeRestore+"*.zip"))
+	if len(matches) != 0 {
+		t.Fatalf("BeforeRestoreDone=true 重入时不应当重复生成 before-restore 备份：%v", matches)
+	}
+
+	// 若未设 BeforeRestoreDone，则生成恰好 1 份并在 marker 落盘 BeforeRestoreDone=true。
+	marker2 := &Marker{Backup: filepath.Base(zipName), Source: SourceManual, Actor: "root", RequestedAt: time.Now(), Phase: PhasePending}
+	WriteMarker(dataDir, marker2)
+	got2, err := ApplyPending(context.Background(), Target{DataDir: dataDir, Config: cfg}, quiet)
+	if err != nil || got2.Phase != PhaseRestored || !got2.BeforeRestoreDone {
+		t.Fatalf("首次手动恢复应当标记 BeforeRestoreDone=true：%+v %v", got2, err)
+	}
+	matches, _ = filepath.Glob(filepath.Join(Dir(dataDir), PrefixBeforeRestore+"*.zip"))
+	if len(matches) != 1 {
+		t.Fatalf("首次手动恢复应当恰好生成 1 份 before-restore 备份：%v", matches)
+	}
+}

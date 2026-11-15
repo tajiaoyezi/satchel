@@ -10,6 +10,7 @@ import (
 
 	"github.com/uptrace/bun"
 
+	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/db/dbtest"
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/base/store"
@@ -244,4 +245,51 @@ func TestHandedOff(t *testing.T) {
 			t.Fatalf("已经结束的再 Settle 应当 conflict：%v", err)
 		}
 	})
+}
+
+// M-03 回归：标记 core.SkipFinish(ctx) 后 execute 不调用 s.repo.Finish 写源库，不会撞上排他写锁卡死 5 秒，
+// 同时 job get 仍能从内存 final 表读到 done。
+func TestSkipFinishKeepsFinalInMemory(t *testing.T) {
+	bdb := dbtest.OpenSQLite(t)
+	if _, err := db.Migrate(context.Background(), bdb); err != nil {
+		t.Fatal(err)
+	}
+	s := newService(bdb)
+	defer s.Stop(context.Background())
+
+	txStarted := make(chan struct{})
+	var leakedTx bun.Tx
+	t.Cleanup(func() { _ = leakedTx.Rollback() })
+	doneCh := make(chan struct{})
+	start := time.Now()
+	j, err := s.Start(admin(), inv(), func(ctx context.Context) (any, error) {
+		var err error
+		leakedTx, err = bdb.BeginTx(context.Background(), nil)
+		if err != nil {
+			return nil, err
+		}
+		close(txStarted)
+		core.SkipFinish(ctx)
+		return map[string]string{"migrated": "yes"}, nil
+	}, func() { close(doneCh) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-txStarted
+	select {
+	case <-doneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("SkipFinish 后不应卡在 repo.Finish 等锁，耗时 %s", time.Since(start))
+	}
+	if time.Since(start) >= 3*time.Second {
+		t.Fatalf("SkipFinish 耗时过长：%s", time.Since(start))
+	}
+	out, err := call(t, admin(), s, "job get", []string{j.JobID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.(*core.Job)
+	if got.Status != core.StatusDone || got.Output == nil || !strings.Contains(*got.Output, "migrated") {
+		t.Fatalf("job get 应当从内存 final 读到 done：%#v", got)
+	}
 }

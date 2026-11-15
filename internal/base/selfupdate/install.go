@@ -68,7 +68,7 @@ func ReadMarker(dataDir string) (*Marker, error) {
 // WriteMarker 写升级标记（0600）：先写临时文件、落盘，再改名，再把目录落盘。
 func WriteMarker(dataDir string, m *Marker) error {
 	raw, _ := json.MarshalIndent(m, "", "  ")
-	if err := writeFileAtomic(dataDir, markerPath(dataDir), raw, 0o600); err != nil {
+	if err := WriteFileAtomic(dataDir, markerPath(dataDir), raw, 0o600); err != nil {
 		return v1.Wrap(v1.CodeInternal, "写升级标记失败", err)
 	}
 	return nil
@@ -101,7 +101,7 @@ func SavePrevious(target string) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Dir(target), PreviousPath(target), data, 0o755)
+	return WriteFileAtomic(filepath.Dir(target), PreviousPath(target), data, 0o755)
 }
 
 // Install 把 staged（与目标同目录的临时文件）改名到 target：同一文件系统上的改名是原子的；之后把目录落盘。
@@ -122,10 +122,11 @@ func RestorePrevious(target string) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Dir(target), target, data, 0o755)
+	return WriteFileAtomic(filepath.Dir(target), target, data, 0o755)
 }
 
-func writeFileAtomic(dir, path string, data []byte, mode os.FileMode) error {
+// WriteFileAtomic 先在同一目录写临时文件并落盘，再改名到 path 并把目录落盘。
+func WriteFileAtomic(dir, path string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err

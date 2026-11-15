@@ -3,6 +3,8 @@ package servers
 import (
 	"context"
 	"encoding/json"
+	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/satchel/satchel/internal/base/db/dbtest"
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/base/store"
+	"github.com/satchel/satchel/internal/command"
 	core "github.com/satchel/satchel/internal/core/servers"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
 	"github.com/satchel/satchel/pkg/xrpc"
@@ -132,7 +135,7 @@ func TestCollectCoreBootCountUnderWriteFailures(t *testing.T) {
 			t.Fatalf("库里原有 5 次时，再检测到一次重启应当是 6：%d", bootCount())
 		}
 
-		// 第一次读起点失败：那份快照已经收进累计，恢复后同一个进程的下一代照样记一次重启（5 → 6）。
+		// M-10.1：第一次读起点失败时直接返回且未推进累计器；恢复后先收到代数 1 作为起点（仍为 5），下一代代数 2 才记 5 → 6。
 		collect, bootCount, id = node("hk-5")
 		if _, err := bdb.ExecContext(ctx, `UPDATE servers SET core_boot_count = 5 WHERE id = ?`, id); err != nil {
 			t.Fatal(err)
@@ -144,8 +147,17 @@ func TestCollectCoreBootCountUnderWriteFailures(t *testing.T) {
 		if err := svc.collectOne(canceled, id, func() time.Time { return start }); err == nil {
 			t.Fatal("读起点失败时这次拉取应当报错")
 		}
-		if collect(1, 2); bootCount() != 6 {
-			t.Fatalf("第一次读起点失败、恢复后代数 2：应当是 6：%d", bootCount())
+		svc.mu.Lock()
+		leakedAcc := svc.accs[id]
+		svc.mu.Unlock()
+		if leakedAcc != nil {
+			t.Fatalf("读起点失败时不应当初始化内存累计器：%+v", leakedAcc)
+		}
+		if collect(1, 1); bootCount() != 5 {
+			t.Fatalf("恢复后首份快照作为基线应保持 5：%d", bootCount())
+		}
+		if collect(2, 2); bootCount() != 6 {
+			t.Fatalf("代数从 1 切到 2 应当是 6：%d", bootCount())
 		}
 
 		// 一份快照跨两代（代数 1 直接到 3）：记 2 次。
@@ -166,4 +178,74 @@ func TestCollectCoreBootCountUnderWriteFailures(t *testing.T) {
 			t.Fatalf("代数 2、3 写失败、4 写成功时应当是 3：%d", bootCount())
 		}
 	})
+}
+
+type connListConns struct {
+	list xrpc.ConnectionsList
+}
+
+func (c *connListConns) Call(context.Context, int64, string, any, time.Duration) (json.RawMessage, error) {
+	return json.Marshal(c.list)
+}
+
+func (c *connListConns) ConnectedIDs() []int64 { return nil }
+
+// L-02 & H-01 回归：uint64 高位为 1 的连接 ID 分页不丢不错乱；shellSingleQuote 正确转义含单引号的参数。
+func TestConnectionsUint64CursorAndInstallQuote(t *testing.T) {
+	bdb := dbtest.OpenSQLite(t)
+	if _, err := db.Migrate(context.Background(), bdb); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	st := store.New(bdb, schema.Default())
+	settings := coresettings.New(bdb, st, schema.Default())
+	if err := settings.EnsureSingleton(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := core.New(bdb, st)
+	srv, err := repo.Create(ctx, "node-a", "websocket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bdb.ExecContext(ctx, `UPDATE servers SET status = 'connected' WHERE id = ?`, srv.Metadata.ID); err != nil {
+		t.Fatal(err)
+	}
+	ids := []uint64{1, math.MaxInt64, uint64(math.MaxInt64) + 1, ^uint64(0)}
+	conns := &connListConns{}
+	for _, cid := range ids {
+		conns.list.Connections = append(conns.list.Connections, xrpc.Connection{ID: cid, Network: "tcp", Peer: "1.2.3.4:1"})
+	}
+	s := New(repo, settings, nil, nil)
+	s.SetConns(conns)
+
+	// 按 limit=2 翻两页，确认每页 2 条且无符号顺序不被 int64 溢出打乱。
+	res1Any, err := s.connections(ctx, &command.Invocation{Args: []string{"node-a"}, Flags: map[string]any{"inbound": "vless", "credential": "u"}, Page: &command.Page{Limit: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res1 := res1Any.(*command.PageResult)
+	if len(res1.Items) != 2 || res1.NextCursor == "" {
+		t.Fatalf("第一页应当有 2 条与 nextCursor：%+v", res1)
+	}
+	if got0, got1 := res1.Items[0].(xrpc.Connection).ID, res1.Items[1].(xrpc.Connection).ID; got0 != 1 || got1 != math.MaxInt64 {
+		t.Fatalf("第一页 ID 不对：%d %d", got0, got1)
+	}
+	res2Any, err := s.connections(ctx, &command.Invocation{Args: []string{"node-a"}, Flags: map[string]any{"inbound": "vless", "credential": "u"}, Page: &command.Page{Limit: 2, Cursor: res1.NextCursor}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res2 := res2Any.(*command.PageResult)
+	if len(res2.Items) != 2 || res2.NextCursor != "" {
+		t.Fatalf("第二页应当正好剩 2 条且无 nextCursor：%+v", res2)
+	}
+	if got0, got1 := res2.Items[0].(xrpc.Connection).ID, res2.Items[1].(xrpc.Connection).ID; got0 != uint64(math.MaxInt64)+1 || got1 != ^uint64(0) {
+		t.Fatalf("第二页高位 uint64 ID 不对：%d %d", got0, got1)
+	}
+
+	if got := shellSingleQuote("a'b"); got != `'a'\''b'` || !strings.HasPrefix(got, "'") {
+		t.Fatalf("shellSingleQuote 转义不对：%s", got)
+	}
+	if got := shellModeArg("weird mode'"); got != `'weird mode'\'''` {
+		t.Fatalf("非安全字符集的 mode 也应当按单引号转义：%s", got)
+	}
 }

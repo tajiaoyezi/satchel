@@ -218,7 +218,7 @@ func jsonString(s string) json.RawMessage {
 func setJSONEnv(path string, before []byte, vars [][2]string) ([]byte, error) {
 	top, err := parseJSONObject(before)
 	if err != nil {
-		return nil, unsupportedf(path, "不是合法的 JSON 对象（%v）", err)
+		return nil, unsupportedWrap(path, "不是合法的 JSON 对象", err)
 	}
 	idx := -1
 	for i, m := range top {
@@ -260,11 +260,11 @@ func checkJSONEnv(path string, before, after []byte, vars [][2]string) error {
 	var b, a map[string]any
 	if len(bytes.TrimSpace(before)) > 0 {
 		if err := json.Unmarshal(before, &b); err != nil {
-			return unsupportedf(path, "不是合法的 JSON 对象（%v）", err)
+			return unsupportedWrap(path, "不是合法的 JSON 对象", err)
 		}
 	}
 	if err := json.Unmarshal(after, &a); err != nil {
-		return unsupportedf(path, "改后不是合法的 JSON（%v）", err)
+		return unsupportedWrap(path, "改后不是合法的 JSON", err)
 	}
 	env, _ := a["env"].(map[string]any)
 	for _, kv := range vars {

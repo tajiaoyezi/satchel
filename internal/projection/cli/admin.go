@@ -9,11 +9,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/satchel/satchel/internal/base/schema"
-	"github.com/satchel/satchel/internal/base/store"
 	"github.com/satchel/satchel/internal/command"
-	"github.com/satchel/satchel/internal/core/sessions"
-	"github.com/satchel/satchel/internal/core/users"
 	"github.com/satchel/satchel/internal/service/auth"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
@@ -39,7 +35,7 @@ func adminResetPassword(ctx context.Context, inv *command.Invocation) (any, erro
 	}
 	defer bdb.Close()
 	// 先确认账号存在且是管理员，再让人输密码（免得输完才说没有这个账号）。
-	if _, err := lookupAdmin(ctx, bdb, username); err != nil {
+	if _, err := auth.LookupAdmin(ctx, bdb, username); err != nil {
 		return nil, err
 	}
 	first, err := promptFrom(ctx)("新密码")
@@ -61,41 +57,10 @@ func adminResetPassword(ctx context.Context, inv *command.Invocation) (any, erro
 	return resetPasswordOutput{Username: username, SessionsRevoked: revoked}, nil
 }
 
-// lookupAdmin 找到一个管理员账号：不存在或已删除是 not_found，不是管理员是 bad_request。
-func lookupAdmin(ctx context.Context, bdb *bun.DB, username string) (*users.Account, error) {
-	repo := users.New(bdb, store.New(bdb, schema.Default()))
-	a, err := repo.GetByUsername(ctx, username)
-	if errors.Is(err, users.ErrNotFound) || (err == nil && a.Deleted) {
-		return nil, v1.Newf(v1.CodeNotFound, "没有账号 %s", username)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if a.Role != v1.RoleAdmin {
-		return nil, v1.Newf(v1.CodeBadRequest, "%s 不是管理员账号；普通用户的密码由管理员在用户管理里重置", username)
-	}
-	return a, nil
-}
-
-// ResetAdminPassword 是 admin reset-password 的本体：校验新密码、写入 bcrypt 哈希、作废该账号的全部会话；不动两步验证。
-// 返回作废的会话数。装配根的端到端测试直接对已打开的库调它。
+// ResetAdminPassword 是 admin reset-password 的本体，具体业务由 auth.ResetAdminPassword 实现；
+// 装配根的端到端测试直接对已打开的库调它。
 func ResetAdminPassword(ctx context.Context, bdb *bun.DB, username, newPassword string) (int, error) {
-	a, err := lookupAdmin(ctx, bdb, username)
-	if err != nil {
-		return 0, err
-	}
-	if err := auth.ValidatePassword(newPassword); err != nil {
-		return 0, err
-	}
-	hash, err := auth.HashPassword(newPassword)
-	if err != nil {
-		return 0, err
-	}
-	repo := users.New(bdb, store.New(bdb, schema.Default()))
-	if err := repo.SetPasswordHash(ctx, a.ID, hash); err != nil {
-		return 0, err
-	}
-	return sessions.New(bdb).DeleteByUser(ctx, username, "")
+	return auth.ResetAdminPassword(ctx, bdb, username, newPassword)
 }
 
 func noTerminalLocal(err error) error {

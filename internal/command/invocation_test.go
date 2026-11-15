@@ -4,6 +4,8 @@ import (
 	stdctx "context"
 	"encoding/json"
 	"errors"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +138,23 @@ func TestPageAndCursor(t *testing.T) {
 	}
 }
 
+func TestUintCursor(t *testing.T) {
+	if got, err := DecodeUintCursor(""); err != nil || got != 0 {
+		t.Fatalf("空游标应当是第一页：%d %v", got, err)
+	}
+	for _, id := range []uint64{1, 1<<63 - 1, 1 << 63, ^uint64(0)} {
+		got, err := DecodeUintCursor(EncodeUintCursor(id))
+		if err != nil || got != id {
+			t.Fatalf("uint64 游标 %d 往返失败：%d %v", id, got, err)
+		}
+	}
+	for _, bad := range []string{"garbage", EncodeUintCursor(0), "id:-1"} {
+		if _, err := DecodeUintCursor(bad); err == nil || v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("坏游标 %q 应当 bad_request：%v", bad, err)
+		}
+	}
+}
+
 func TestDispatch(t *testing.T) {
 	called := ""
 	b := Bindings{"whoami": func(_ stdctx.Context, inv *Invocation) (any, error) {
@@ -177,5 +196,25 @@ func TestOffsetCursor(t *testing.T) {
 		if _, err := DecodeOffsetCursor(bad); err == nil || v1.AsError(err).Code != v1.CodeBadRequest {
 			t.Errorf("%q 应当 bad_request：%v", bad, err)
 		}
+	}
+}
+
+// 回归 L-01：float64(1<<63) 与 NaN/Inf/越界浮点数转 int 时不得静默溢出。
+func TestFlagFromJSONFloatOverflow(t *testing.T) {
+	f := Flag{Name: "n", Type: TypeInt}
+	for _, bad := range []any{float64(1 << 63), -1e20, 1e20, math.NaN(), math.Inf(1), math.Inf(-1), 1.5} {
+		if _, err := f.FromJSON(bad); err == nil || v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("FromJSON(%v) 应当 bad_request，得到 %v", bad, err)
+		}
+	}
+	if strconv.IntSize == 64 {
+		got, err := f.FromJSON(float64(-1 << 63))
+		if err != nil || got != math.MinInt64 {
+			t.Fatalf("FromJSON(-2^63) = %v, %v", got, err)
+		}
+	}
+	got, err := f.FromJSON(float64(1 << 62))
+	if err != nil || got != 1<<62 {
+		t.Fatalf("FromJSON(2^62) = %v, %v", got, err)
 	}
 }

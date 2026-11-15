@@ -153,6 +153,9 @@ func decodeQuery(c *command.Command, r *http.Request, inv *command.Invocation) e
 		}
 		switch {
 		case c.List && name == "limit":
+			if len(values) > 1 {
+				return v1.Newf(v1.CodeBadRequest, "参数 %s 只能给一次", name)
+			}
 			f := command.Flag{Name: "limit", Type: command.TypeInt}
 			v, err := f.Parse(values[0])
 			if err != nil {
@@ -165,6 +168,9 @@ func decodeQuery(c *command.Command, r *http.Request, inv *command.Invocation) e
 			inv.Page.Limit = v.(int)
 			continue
 		case c.List && name == "cursor":
+			if len(values) > 1 {
+				return v1.Newf(v1.CodeBadRequest, "参数 %s 只能给一次", name)
+			}
 			inv.Page.Cursor = values[0]
 			continue
 		}
@@ -203,7 +209,11 @@ func decodeBody(c *command.Command, r *http.Request, inv *command.Invocation) er
 		}
 		return v1.Wrap(v1.CodeBadRequest, "请求体不是合法的 JSON 对象", err)
 	}
-	if dec.More() {
+	if body == nil {
+		return v1.New(v1.CodeBadRequest, "请求体不是合法的 JSON 对象")
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
 		return v1.New(v1.CodeBadRequest, "请求体只能是一个 JSON 对象")
 	}
 	for name, raw := range body {

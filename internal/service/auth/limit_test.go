@@ -10,6 +10,7 @@ import (
 	"github.com/pquerna/otp/totp"
 	"github.com/uptrace/bun"
 
+	"github.com/satchel/satchel/internal/base/captcha"
 	"github.com/satchel/satchel/internal/base/db/dbtest"
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/base/store"
@@ -417,6 +418,147 @@ func TestDisabledAccountCounts(t *testing.T) {
 		wantRateLimited(t, err, *now, time.Hour)
 		if n := len(securityEvents(t, bdb, coresecurity.EventFilter{})); n != 5 {
 			t.Fatalf("五次都记安全事件，得到 %d", n)
+		}
+	})
+}
+
+// H-02 回归：并发预占 inflight 达上限但通过 release 释放后，不写 lockUntil、不持久锁死账号。
+func TestConcurrentReleaseDoesNotLock(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		s, now := limited(t, bdb)
+		seedUser(t, bdb, "admin", "admin", true)
+		ctx := from("198.51.100.7")
+
+		// 先确认失败 4 次，只差 1 次达到上限。
+		for i := 0; i < 4; i++ {
+			if _, err := s.Login(ctx, "admin", "wrong", false, ""); v1.AsError(err).Code != v1.CodeUnauthenticated {
+				t.Fatalf("第 %d 次错密码：%v", i+1, err)
+			}
+		}
+
+		// 并发卡住一个 captcha 校验（占位 1 个 inflight），此时再并发请求应当暂时 rate_limited，
+		// 但在前者 release 之后不得留下 lockUntil。
+		entered := make(chan struct{})
+		releaseGate := make(chan struct{})
+		s.SetTurnstileKeys("0x4AAAAAAAsitekeyforsatchel", "0x4AAAAAAAsecretforsatchel")
+		s.SetCaptcha(&blockingCaptcha{entered: entered, release: releaseGate, pass: false})
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		var firstErr error
+		go func() {
+			defer wg.Done()
+			_, firstErr = s.Login(ctx, "admin", password, false, "bad-1")
+		}()
+		<-entered
+
+		// 此时 count(4) + inflight(1) == 5，第二个请求立即被暂时限流。
+		if _, err := s.Login(ctx, "admin", password, false, "bad-2"); v1.AsError(err).Code != v1.CodeRateLimited {
+			close(releaseGate)
+			wg.Wait()
+			t.Fatalf("并发占满名额时应当暂时 rate_limited，得到 %v", err)
+		}
+
+		// 放行第一个请求：captcha 失败会调用 release 退回 inflight，而不是 fail。
+		close(releaseGate)
+		wg.Wait()
+		if firstErr == nil || v1.AsError(firstErr).Code != v1.CodeBadRequest {
+			t.Fatalf("captcha 失败应当返回 bad_request，得到 %v", firstErr)
+		}
+
+		// 同一时刻（未推进时钟！）带着有效 captcha 与正确密码立即登录，必须成功，不能被错误锁 1 小时。
+		s.SetCaptcha(&fakeCaptcha{pass: true})
+		if _, err := s.Login(ctx, "admin", password, false, "good"); err != nil {
+			t.Fatalf("release 释放后不应遗留持久锁：%v", err)
+		}
+		// 清零验证：再错 4 次也不触发锁定。
+		s.SetTurnstileKeys("", "")
+		for i := 0; i < 4; i++ {
+			if _, err := s.Login(ctx, "admin", "wrong", false, ""); v1.AsError(err).Code != v1.CodeUnauthenticated {
+				t.Fatalf("成功后第 %d 次错密码：%v", i+1, err)
+			}
+		}
+		if len(s.limiter.users) == 0 || s.limiter.users["admin"].lockUntil != (time.Time{}) {
+			t.Fatalf("四次失败不该锁：%v at %v", s.limiter.users["admin"], *now)
+		}
+	})
+}
+
+type blockingCaptcha struct {
+	entered chan struct{}
+	release chan struct{}
+	pass    bool
+}
+
+func (b *blockingCaptcha) Verify(context.Context, string, string, string) (captcha.Result, error) {
+	close(b.entered)
+	<-b.release
+	return captcha.Result{Success: b.pass, Hostname: "panel.example.com"}, nil
+}
+
+// M-08 回归：pending 与 usedTOTP 容量上限淘汰最早过期条目，以及 Service.Sweep 同时清理两张表。
+func TestPendingAndTOTPCapacityAndSweep(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		s, now := limited(t, bdb)
+		s.maxPending = 3
+		s.maxUsedTOTP = 2
+
+		p1, err := s.issuePending("u1", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		*now = now.Add(time.Second)
+		p2, _ := s.issuePending("u2", false)
+		*now = now.Add(time.Second)
+		p3, _ := s.issuePending("u3", false)
+		*now = now.Add(time.Second)
+		p4, _ := s.issuePending("u4", false)
+
+		s.mu.Lock()
+		nPending := len(s.pending)
+		_, has1 := s.pending[p1]
+		_, has2 := s.pending[p2]
+		_, has3 := s.pending[p3]
+		_, has4 := s.pending[p4]
+		s.mu.Unlock()
+		if nPending != 3 || has1 || !has2 || !has3 || !has4 {
+			t.Fatalf("超上限应当淘汰最早过期的 p1：len=%d has=(%v,%v,%v,%v)", nPending, has1, has2, has3, has4)
+		}
+
+		// usedTOTP 达到上限时淘汰最早过期，且 Sweep 清理已过期条目。
+		key, err := totp.Generate(totp.GenerateOpts{Issuer: Issuer, AccountName: "a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c1, _ := totp.GenerateCode(key.Secret(), *now)
+		c2, _ := totp.GenerateCode(key.Secret(), now.Add(30*time.Second))
+		c3, _ := totp.GenerateCode(key.Secret(), now.Add(-30*time.Second))
+		if !s.checkTOTP("a", key.Secret(), c1) {
+			t.Fatal("c1 首次应通过")
+		}
+		*now = now.Add(time.Second)
+		if !s.checkTOTP("a", key.Secret(), c2) {
+			t.Fatal("c2 首次应通过")
+		}
+		*now = now.Add(time.Second)
+		if !s.checkTOTP("a", key.Secret(), c3) {
+			t.Fatal("c3 首次应通过")
+		}
+		s.mu.Lock()
+		nUsed := len(s.usedTOTP)
+		s.mu.Unlock()
+		if nUsed != 2 {
+			t.Fatalf("usedTOTP 上限应保持 2，得到 %d", nUsed)
+		}
+
+		// 拨到全部过期之后调 Sweep 应全部清空。
+		*now = now.Add(PendingTTL + time.Minute)
+		s.Sweep()
+		s.mu.Lock()
+		leftPending, leftUsed := len(s.pending), len(s.usedTOTP)
+		s.mu.Unlock()
+		if leftPending != 0 || leftUsed != 0 {
+			t.Fatalf("Sweep 后应当全部清理：pending=%d usedTOTP=%d", leftPending, leftUsed)
 		}
 	})
 }

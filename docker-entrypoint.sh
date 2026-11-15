@@ -8,6 +8,6 @@ mkdir -p "$data_dir"
 chmod 0700 "$data_dir"
 
 # 迁移只向前；库结构与注册表不一致时这里会失败并列出差异，容器随之退出——不带着坏库起服务。
-/usr/local/bin/satchel db migrate --data-dir "$data_dir"
+/usr/local/bin/satchel db migrate --data-dir "$data_dir" >&2
 
 exec /usr/local/bin/satchel "$@"

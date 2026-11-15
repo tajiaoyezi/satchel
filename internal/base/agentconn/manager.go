@@ -302,9 +302,9 @@ func (m *Manager) authenticate(ctx context.Context, conn *xrpc.Conn, ip string) 
 		return fail(websocket.StatusPolicyViolation, xrpc.AuthIncompatible, fmt.Sprintf(
 			"agent 的控制协议号 %d 比主控的 %d 新：agent 不能先于主控升级，先升级主控", auth.ControlProtocol, xrpc.ControlProtocol))
 	}
-	if min := auth.MinMasterVersion; min != "" && m.cfg.Version != DevVersion && selfupdate.Valid(min) &&
-		selfupdate.Compare(m.cfg.Version, min) < 0 {
-		m.cfg.Logger.Warn("节点认证失败：主控版本太旧", "server", node.Name, "master", m.cfg.Version, "min", min)
+	if min := auth.MinMasterVersion; min != "" && !selfupdate.IsDev(m.cfg.Version) &&
+		(!selfupdate.Valid(min) || selfupdate.Compare(m.cfg.Version, min) < 0) {
+		m.cfg.Logger.Warn("节点认证失败：主控版本太旧或节点要求非法版本", "server", node.Name, "master", m.cfg.Version, "min", min)
 		return fail(websocket.StatusPolicyViolation, xrpc.AuthIncompatible, fmt.Sprintf(
 			"这个 agent 要求主控至少是 %s，当前主控是 %s：agent 不能先于主控升级，先升级主控", min, m.cfg.Version))
 	}

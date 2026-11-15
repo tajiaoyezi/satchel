@@ -46,7 +46,8 @@ type Marker struct {
 	Error       string    `json:"error,omitempty"`
 	// ReplacedDir 是这次恢复把换下来的东西放进去的目录（backups/ 下，名字带随机后缀）：动任何东西之前先写进标记，
 	// 中途崩溃重启后按它接着做或撤回，不靠内存里的记录。自动恢复用 corrupt- 开头，别的用 replaced- 开头。
-	ReplacedDir string `json:"replaced_dir,omitempty"`
+	ReplacedDir       string `json:"replaced_dir,omitempty"`
+	BeforeRestoreDone bool   `json:"before_restore_done,omitempty"`
 }
 
 func markerPath(dataDir string) string { return filepath.Join(dataDir, db.RestorePendingFile) }
@@ -261,11 +262,15 @@ func apply(ctx context.Context, t Target, m *Marker, logger *slog.Logger) (err e
 				bdb = opened
 			}
 		}
-		// 1. 恢复前先存一份：这次恢复的后悔药（自动恢复时库已经坏了，不存）。
-		if m.Source != SourceAuto && bdb != nil {
+		// 1. 恢复前先存一份：这次恢复的后悔药（自动恢复或上次已生成过的不重复生成）。
+		if m.Source != SourceAuto && !m.BeforeRestoreDone && bdb != nil {
 			info, err := Create(ctx, Source{DataDir: t.DataDir, DB: bdb, Driver: t.Config.Driver, PG: t.PG, Version: t.Version}, PrefixBeforeRestore)
 			if err != nil {
 				return v1.Wrap(v1.CodeInternal, "恢复前生成 before-restore 备份失败，没有动任何东西", err)
+			}
+			m.BeforeRestoreDone = true
+			if err := WriteMarker(t.DataDir, m); err != nil {
+				return err
 			}
 			logger.Warn("恢复前已生成一份当前的备份", "backup", info.Name)
 		}
@@ -294,22 +299,41 @@ func apply(ctx context.Context, t Target, m *Marker, logger *slog.Logger) (err e
 			}
 		}
 	}()
-	// 2. 先换文件（撤得回），再换库（PostgreSQL 换了就撤不回）。database.json 与 config.yaml 不动。
-	if err := restoreFiles(&zr.Reader, t.DataDir, replaced, mv); err != nil {
+	// 2. 先换文件（撤得回），再换库（PostgreSQL 换了就撤不回）。database.json 与 config.yaml 不动。整包共享 16 GiB 解压预算。
+	rem := maxExtract
+	if err := restoreFiles(&zr.Reader, t.DataDir, replaced, mv, &rem); err != nil {
 		return err
 	}
 	if t.Config.Driver == db.DriverPostgres {
 		if man.Schema != schema {
 			return v1.Newf(v1.CodeConflict, "备份的 schema 是 %q，当前连接的是 %q：只能恢复回同名的 schema", man.Schema, schema)
 		}
-		return restorePostgres(ctx, &zr.Reader, t, schema, major)
+		if err := restorePostgres(ctx, &zr.Reader, t, schema, major, &rem); err != nil {
+			return err
+		}
+		if err := SyncDir(replaced); err != nil {
+			return err
+		}
+		return SyncDir(t.DataDir)
 	}
-	if err := restoreSQLite(ctx, &zr.Reader, t, replaced, mv); err != nil {
+	if err := restoreSQLite(ctx, &zr.Reader, t, replaced, mv, &rem); err != nil {
 		return err
 	}
 	// 换好的东西落盘之后才把标记改成 restored（调用方写标记）。
 	SyncDir(replaced)
 	return SyncDir(filepath.Dir(t.Config.Path))
+}
+
+func wrapRestoreErr(prefix string, err error) error {
+	var ve *v1.Error
+	if errors.As(err, &ve) {
+		wrapped := v1.Wrap(ve.Code, prefix+"："+ve.Reason, err)
+		if ve.Next != "" {
+			wrapped.WithNext(ve.Next)
+		}
+		return wrapped
+	}
+	return v1.Wrap(v1.CodeInternal, prefix, err)
 }
 
 func fileExists(path string) bool {
@@ -318,7 +342,7 @@ func fileExists(path string) bool {
 }
 
 // restoreFiles 把 master.key、subscribes/、rule_templates/、public/uploads/ 移进 replaced/，再放入备份里的（目录 0700、文件 0600）。
-func restoreFiles(zr *zip.Reader, dataDir, replaced string, mv *mover) error {
+func restoreFiles(zr *zip.Reader, dataDir, replaced string, mv *mover, budget *int64) error {
 	for _, name := range append(append([]string{}, restoredFiles...), restoredDirs...) {
 		if err := mv.park(filepath.Join(dataDir, name), filepath.Join(replaced, name)); err != nil {
 			return v1.Wrap(v1.CodeInternal, "移走当前的 "+name+" 失败", err)
@@ -337,12 +361,12 @@ func restoreFiles(zr *zip.Reader, dataDir, replaced string, mv *mover) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return v1.Wrap(v1.CodeInternal, "恢复 "+f.Name+" 失败", err)
 		}
-		tmp, err := extractTo(f, filepath.Dir(dst), "."+filepath.Base(dst)+".*")
+		tmp, err := extractToWithBudget(f, filepath.Dir(dst), "."+filepath.Base(dst)+".*", budget)
 		if err == nil {
 			err = os.Rename(tmp, dst)
 		}
 		if err != nil {
-			return v1.Wrap(v1.CodeInternal, "恢复 "+f.Name+" 失败", err)
+			return wrapRestoreErr("恢复 "+f.Name+" 失败", err)
 		}
 	}
 	return nil
@@ -364,11 +388,11 @@ func restorable(name string) bool {
 
 // restoreSQLite 把备份里的库解到库文件旁边的临时文件、通过 quick_check，再把当前的库文件（含 -wal、-shm）移进 replaced/，
 // 最后改名成库文件。
-func restoreSQLite(ctx context.Context, zr *zip.Reader, t Target, replaced string, mv *mover) error {
+func restoreSQLite(ctx context.Context, zr *zip.Reader, t Target, replaced string, mv *mover, budget *int64) error {
 	f := findEntry(zr, EntrySQLite)
-	tmp, err := extractTo(f, filepath.Dir(t.Config.Path), ".restore-*.db")
+	tmp, err := extractToWithBudget(f, filepath.Dir(t.Config.Path), ".restore-*.db", budget)
 	if err != nil {
-		return v1.Wrap(v1.CodeInternal, "解出备份里的库失败", err)
+		return wrapRestoreErr("解出备份里的库失败", err)
 	}
 	defer removeSQLiteFiles(tmp)
 	if err := quickCheckFile(ctx, tmp); err != nil {
@@ -386,7 +410,7 @@ func restoreSQLite(ctx context.Context, zr *zip.Reader, t Target, replaced strin
 }
 
 // restorePostgres 用 psql 在一个事务里先删掉整个 schema、再执行备份里的 SQL；任何一句出错整个事务回滚。
-func restorePostgres(ctx context.Context, zr *zip.Reader, t Target, cur string, major int) error {
+func restorePostgres(ctx context.Context, zr *zip.Reader, t Target, cur string, major int, budget *int64) error {
 	psql, err := findPsql(ctx, major)
 	if err != nil {
 		return err
@@ -396,9 +420,9 @@ func restorePostgres(ctx context.Context, zr *zip.Reader, t Target, cur string, 
 		return v1.Wrap(v1.CodeInternal, "建临时目录失败", err)
 	}
 	defer os.RemoveAll(dir)
-	dump, err := extractTo(findEntry(zr, EntryPostgres), dir, "dump-*.sql")
+	dump, err := extractToWithBudget(findEntry(zr, EntryPostgres), dir, "dump-*.sql", budget)
 	if err != nil {
-		return v1.Wrap(v1.CodeInternal, "解出备份里的 SQL 失败", err)
+		return wrapRestoreErr("解出备份里的 SQL 失败", err)
 	}
 	pre := filepath.Join(dir, "pre.sql")
 	q := quoteIdent(cur)

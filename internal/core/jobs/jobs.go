@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -202,13 +203,27 @@ func MarkDoneIn(ctx context.Context, q bun.IDB, jobID, output string, at time.Ti
 type runKey struct{}
 
 type runInfo struct {
-	id     string
-	report func(any)
+	id         string
+	report     func(any)
+	skipFinish *atomic.Bool
 }
 
 // WithRun 给工作 ctx 带上 job_id 与报进度的函数。
 func WithRun(ctx context.Context, jobID string, report func(any)) context.Context {
-	return context.WithValue(ctx, runKey{}, runInfo{jobID, report})
+	return context.WithValue(ctx, runKey{}, runInfo{id: jobID, report: report, skipFinish: &atomic.Bool{}})
+}
+
+// SkipFinish 标记当前长任务不需要由 service/jobs 再把结局写回源库（例如在线迁移已封锁源 SQLite 并在目标库写入 done）。
+func SkipFinish(ctx context.Context) {
+	if r, ok := ctx.Value(runKey{}).(runInfo); ok && r.skipFinish != nil {
+		r.skipFinish.Store(true)
+	}
+}
+
+// ShouldSkipFinish 报告当前长任务是否已标记跳过写回源库结局。
+func ShouldSkipFinish(ctx context.Context) bool {
+	r, ok := ctx.Value(runKey{}).(runInfo)
+	return ok && r.skipFinish != nil && r.skipFinish.Load()
 }
 
 // Report 报告当前长任务的进度（master-jobs「查看 job」的 progress）；ctx 不是长任务的工作 ctx 时什么都不做。

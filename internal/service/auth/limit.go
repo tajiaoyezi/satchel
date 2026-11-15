@@ -33,6 +33,7 @@ const (
 
 type attempts struct {
 	count     int
+	inflight  int
 	first     time.Time
 	lockUntil time.Time
 }
@@ -57,7 +58,8 @@ func (l *limiter) ipKey(ip string) string {
 	return ip
 }
 
-// checkOne 照 mmwx 的 checkAttempts：锁定期内是锁；锁定期满或窗口过了就清掉；次数到了上限就从现在锁起。
+// checkOne 查单个维度的限流状态：锁定期内返回锁到什么时候；窗口或锁期已过时按需清掉旧失败计数；
+// 已确认失败加上当前并发占位已达上限时暂时拒绝（仅真实锁定才写入 lockUntil，并发占位满额不写持久锁）。
 func (l *limiter) checkOne(table map[string]*attempts, key string, now time.Time) (time.Time, bool) {
 	a := table[key]
 	if key == "" || a == nil {
@@ -67,23 +69,36 @@ func (l *limiter) checkOne(table map[string]*attempts, key string, now time.Time
 		if now.Before(a.lockUntil) {
 			return a.lockUntil, true
 		}
-		delete(table, key)
+		if a.inflight == 0 {
+			delete(table, key)
+			return time.Time{}, false
+		}
+		a.count = 0
+		a.first = time.Time{}
+		a.lockUntil = time.Time{}
 		return time.Time{}, false
 	}
-	if now.Sub(a.first) > l.limits.Window {
-		delete(table, key)
-		return time.Time{}, false
+	if a.count > 0 && now.Sub(a.first) > l.limits.Window {
+		if a.inflight == 0 {
+			delete(table, key)
+			return time.Time{}, false
+		}
+		a.count = 0
+		a.first = time.Time{}
 	}
 	if a.count >= l.limits.MaxAttempts {
 		a.lockUntil = now.Add(l.limits.Lock)
 		return a.lockUntil, true
 	}
+	if a.count+a.inflight >= l.limits.MaxAttempts {
+		return now.Add(l.limits.Lock), true
+	}
 	return time.Time{}, false
 }
 
-// reserve 在比对之前查两个维度，没锁就在同一把锁里给两个维度各先记上这一次（锁住时返回锁到什么时候，取两者较晚的）。
-// 先记后比对，同一波并发的请求最多只有上限那么多个能走到比对：否则它们都会在计数还低时过关、各比对一次。
-// 比对不上时这一次就留着（fail），整个成功就清零（succeed），不算一次猜测时退回去（release）。
+// reserve 在比对之前查两个维度，没锁就在同一把锁里给两个维度各占一个并发名额 inflight。
+// 先占后比对，同一波并发的请求最多只有上限那么多个能走到比对：否则它们都会在计数还低时过关、各比对一次。
+// 比对不上时转成 confirmed failure（fail），整个成功就清零（succeed），不算一次猜测时退回占位（release）。
 func (l *limiter) reserve(ip, user string, now time.Time) (time.Time, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -91,22 +106,33 @@ func (l *limiter) reserve(ip, user string, now time.Time) (time.Time, bool) {
 	if until, locked := l.checkLocked(key, user, now); locked {
 		return until, true
 	}
-	l.recordOne(l.ips, key, now)
-	l.recordOne(l.users, user, now)
+	l.reserveOne(l.ips, key)
+	l.reserveOne(l.users, user)
 	return time.Time{}, false
 }
 
-// release 退回 reserve 记上的这一次（验证码没过、密码对了但还要第二步、只缺第二因素、查库出错这类不算猜测的结局）。
+// release 退回 reserve 占上的并发名额（验证码没过、密码对了但还要第二步、只缺第二因素、查库出错这类不算猜测的结局）。
+// 只递减 inflight，不触碰已确认失败的 count，也不受 lockUntil 阻断，防止名额泄漏。
 func (l *limiter) release(ip, user string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for _, e := range []struct {
-		table map[string]*attempts
-		key   string
-	}{{l.ips, l.ipKey(ip)}, {l.users, user}} {
-		if a := e.table[e.key]; e.key != "" && a != nil && a.count > 0 && a.lockUntil.IsZero() {
-			a.count--
-		}
+	l.releaseOne(l.ips, l.ipKey(ip))
+	l.releaseOne(l.users, user)
+}
+
+func (l *limiter) releaseOne(table map[string]*attempts, key string) {
+	if key == "" {
+		return
+	}
+	a := table[key]
+	if a == nil {
+		return
+	}
+	if a.inflight > 0 {
+		a.inflight--
+	}
+	if a.inflight == 0 && a.count == 0 && a.lockUntil.IsZero() {
+		delete(table, key)
 	}
 }
 
@@ -119,51 +145,90 @@ func (l *limiter) checkLocked(ipKey, user string, now time.Time) (time.Time, boo
 	return u1, byIP || byUser
 }
 
-// recordOne 照 mmwx 的 recordAttempt：第一次或窗口过了从 1 数起，否则加一。
-func (l *limiter) recordOne(table map[string]*attempts, key string, now time.Time) int {
+func (l *limiter) reserveOne(table map[string]*attempts, key string) {
 	if key == "" {
-		return 0
+		return
 	}
 	a := table[key]
-	if a == nil || now.Sub(a.first) > l.limits.Window {
-		a = &attempts{first: now}
+	if a == nil {
+		a = &attempts{}
 		table[key] = a
 	}
-	a.count++
-	return a.count
+	a.inflight++
 }
 
-// fail 确认 reserve 记上的这一次是失败（计数在 reserve 里已经加过），返回较大的那个计数、上限，以及某个维度是否因此锁上了。
+func (l *limiter) failOne(table map[string]*attempts, key string, now time.Time) (count int, locked bool) {
+	if key == "" {
+		return 0, false
+	}
+	a := table[key]
+	if a == nil {
+		a = &attempts{}
+		table[key] = a
+	}
+	if a.inflight > 0 {
+		a.inflight--
+	}
+	if a.count == 0 || now.Sub(a.first) > l.limits.Window {
+		a.count = 1
+		a.first = now
+	} else {
+		a.count++
+	}
+	if a.count >= l.limits.MaxAttempts && a.lockUntil.IsZero() {
+		a.lockUntil = now.Add(l.limits.Lock)
+		locked = true
+	}
+	return a.count, locked
+}
+
+// fail 确认这一次尝试是密码或第二因素比对失败：释放本次 inflight 并累计已确认失败 count，
+// 仅在已确认失败达到上限时才写入 lockUntil；返回较大的那个计数、上限，以及某个维度是否因此锁上了。
 func (l *limiter) fail(ip, user string, now time.Time) (count, max int, locked bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	key := l.ipKey(ip)
-	for _, a := range []*attempts{l.ips[key], l.users[user]} {
-		if a != nil && a.count > count {
-			count = a.count
-		}
+	c1, lockedIP := l.failOne(l.ips, key, now)
+	c2, lockedUser := l.failOne(l.users, user, now)
+	count = c1
+	if c2 > count {
+		count = c2
 	}
-	_, locked = l.checkLocked(key, user, now)
-	return count, l.limits.MaxAttempts, locked
+	return count, l.limits.MaxAttempts, lockedIP || lockedUser
 }
 
-// sweep 清掉锁定期已满的、以及没锁而窗口已过的条目。
+// sweep 清掉锁定期已满的、以及没锁而窗口已过（或已无计数的空占位）条目；尚有并发 inflight 的条目保留。
 func (l *limiter) sweep(now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, table := range []map[string]*attempts{l.ips, l.users} {
 		for key, a := range table {
-			if (a.lockUntil.IsZero() && now.Sub(a.first) > l.limits.Window) || (!a.lockUntil.IsZero() && !now.Before(a.lockUntil)) {
+			if a.inflight > 0 {
+				continue
+			}
+			if (a.lockUntil.IsZero() && (a.count == 0 || now.Sub(a.first) > l.limits.Window)) || (!a.lockUntil.IsZero() && !now.Before(a.lockUntil)) {
 				delete(table, key)
 			}
 		}
 	}
 }
 
-// Sweep 清一次登录限流的内存表（login_limit_sweep 任务每 10 分钟调一次）：条目本来只在同一个键再被访问时才清，
-// 换着用户名猜的人会让表一直长。
+// Sweep 清一次登录限流、两步验证 pending 票据与 TOTP 防重放表中的过期条目（login_limit_sweep 任务每 10 分钟调一次）。
 func (s *Service) Sweep() {
-	s.limiter.sweep(s.now())
+	now := s.now()
+	s.limiter.sweep(now)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, e := range s.pending {
+		if e.expires.Before(now) {
+			delete(s.pending, k)
+		}
+	}
+	for k, exp := range s.usedTOTP {
+		if exp.Before(now) {
+			delete(s.usedTOTP, k)
+		}
+	}
 }
 
 // succeed 清零这个来源 IP 与这个账号的计数（整个登录成功、或当场验证通过时）。

@@ -4,10 +4,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	v1 "github.com/satchel/satchel/pkg/api/v1"
 	"gopkg.in/yaml.v3"
 )
 
@@ -293,5 +295,49 @@ func TestRuntimeHermesKeepsUserSettings(t *testing.T) {
 	notes := strings.Join(plan.notes, "\n")
 	if !strings.Contains(notes, "enabled 是 false") {
 		t.Fatalf("应当提示仍是停用的：%v", plan.notes)
+	}
+}
+
+// 回归 L-07：解析或读写失败时将英文底层错误放到 Unwrap 链中，不再直接拼入用户可见的 Reason。
+func TestErrorsWrapEnglishCauseInsteadOfInlining(t *testing.T) {
+	e := testRuntimeEnv(t)
+	put(t, claudeSettingsPath(e), "{not json")
+	_, err := planClaudeCode(e, testURL, testToken)
+	wrapped := preflightError(err, "snippet", "claude-code")
+	ve := v1.AsError(wrapped)
+	if strings.Contains(ve.Reason, "invalid character") || errors.Unwrap(wrapped) == nil {
+		t.Fatalf("JSON 解析错误应当保留在 Unwrap 中而非 Reason：%q unwrap=%v", ve.Reason, errors.Unwrap(wrapped))
+	}
+
+	e = testRuntimeEnv(t)
+	put(t, codexConfigPath(e), "model = \n")
+	_, err = planCodex(e, testURL, testToken)
+	wrapped = preflightError(err, "snippet", "codex")
+	ve = v1.AsError(wrapped)
+	if strings.Contains(ve.Reason, "expected") || errors.Unwrap(wrapped) == nil {
+		t.Fatalf("TOML 解析错误应当保留在 Unwrap 中而非 Reason：%q unwrap=%v", ve.Reason, errors.Unwrap(wrapped))
+	}
+
+	e = testRuntimeEnv(t)
+	put(t, filepath.Join(e.hermesHome, hermesConfigFile), "a: [\n")
+	_, err = planHermes(e, testURL, testToken)
+	wrapped = preflightError(err, "snippet", "hermes")
+	ve = v1.AsError(wrapped)
+	if strings.Contains(ve.Reason, "did not find") || errors.Unwrap(wrapped) == nil {
+		t.Fatalf("YAML 解析错误应当保留在 Unwrap 中而非 Reason：%q unwrap=%v", ve.Reason, errors.Unwrap(wrapped))
+	}
+
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		_, _, err := planSkills(filepath.Join(dir, "skills"))
+		wrapped = skillsPathError(err, "没有写任何文件")
+		ve = v1.AsError(wrapped)
+		if strings.Contains(ve.Reason, "permission denied") || errors.Unwrap(wrapped) == nil {
+			t.Fatalf("OS 读取错误应当保留在 Unwrap 中而非 Reason：%q unwrap=%v", ve.Reason, errors.Unwrap(wrapped))
+		}
 	}
 }

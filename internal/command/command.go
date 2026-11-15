@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -126,9 +127,13 @@ func (f Flag) FromJSON(v any) (any, error) {
 		}
 		return s, nil
 	case TypeInt:
+		const (
+			maxIntPlusOne = float64(uint64(1) << (strconv.IntSize - 1))
+			minInt        = -maxIntPlusOne
+		)
 		switch n := v.(type) {
 		case float64:
-			if n != float64(int(n)) {
+			if math.IsNaN(n) || math.IsInf(n, 0) || math.Trunc(n) != n || n < minInt || n >= maxIntPlusOne {
 				return bad()
 			}
 			return int(n), nil

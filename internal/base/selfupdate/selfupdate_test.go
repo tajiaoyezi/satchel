@@ -40,6 +40,16 @@ func TestCompare(t *testing.T) {
 			t.Errorf("%q 不应当合法", bad)
 		}
 	}
+	for _, dev := range []string{"", "dev", "0.0.0-dev", "v0.1.0-dev", "1.2.3-dev"} {
+		if !IsDev(dev) {
+			t.Errorf("IsDev(%q) 应当为 true", dev)
+		}
+	}
+	for _, rel := range []string{"0.1.0", "v0.1.0-beta.3", "1.0.0-alpha.1"} {
+		if IsDev(rel) {
+			t.Errorf("IsDev(%q) 应当为 false", rel)
+		}
+	}
 }
 
 // server 是假的 CDN 与 GitHub：files 里是路径到内容，status 里可以给某个路径指定状态码。

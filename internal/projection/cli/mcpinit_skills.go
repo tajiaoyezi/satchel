@@ -51,7 +51,7 @@ func claudeConfigDir(home string, lookup func(string) (string, bool)) (dir strin
 	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil {
-		return "", false, v1.Newf(v1.CodeConfig, "%s 不是合法的 JSON 对象（%v）；没有签发令牌，没有写任何文件", path, err).WithNext("修好 " + path + " 后重跑")
+		return "", false, v1.Wrap(v1.CodeConfig, path+" 不是合法的 JSON 对象；没有签发令牌，没有写任何文件", err).WithNext("修好 " + path + " 后重跑")
 	}
 	var env map[string]json.RawMessage
 	if json.Unmarshal(top["env"], &env) == nil {
@@ -93,15 +93,17 @@ func skillsDir(env runtimeEnv, runtime string) string {
 // errSkillsPath 是 skills 的位置写不了：被普通文件占着、是符号链接或读不了。它与 --skills-only 做的检查相同，所以提示修好路径后重跑。
 type errSkillsPath struct {
 	path, why string
+	err       error
 }
 
 func (e errSkillsPath) Error() string { return e.path + "：" + e.why }
+func (e errSkillsPath) Unwrap() error { return e.err }
 
 // skillsPathError 把 errSkillsPath 包成 config，reason 后面接上 stopped（停在哪一步）；别的错误原样返回。
 func skillsPathError(err error, stopped string) error {
 	var p errSkillsPath
 	if errors.As(err, &p) {
-		return v1.Newf(v1.CodeConfig, "skills 的位置 %s；%s", p.Error(), stopped).WithNext("修好 " + p.path + " 后重跑")
+		return v1.Wrap(v1.CodeConfig, fmt.Sprintf("skills 的位置 %s；%s", p.Error(), stopped), err).WithNext("修好 " + p.path + " 后重跑")
 	}
 	return err
 }
@@ -113,23 +115,29 @@ func planSkills(dir string) (edits []skillEdit, unchanged []string, err error) {
 	info, err := os.Stat(dir)
 	switch {
 	case err == nil && !info.IsDir():
-		return nil, nil, errSkillsPath{dir, "不是目录"}
+		return nil, nil, errSkillsPath{path: dir, why: "不是目录"}
 	case errors.Is(err, fs.ErrNotExist):
 		if link, lerr := os.Lstat(dir); lerr == nil && link.Mode()&fs.ModeSymlink != 0 {
-			return nil, nil, errSkillsPath{dir, "是指向不存在位置的符号链接"}
+			return nil, nil, errSkillsPath{path: dir, why: "是指向不存在位置的符号链接"}
 		}
 	case err != nil:
-		return nil, nil, errSkillsPath{dir, fmt.Sprintf("读不了（%v）", err)}
+		return nil, nil, errSkillsPath{path: dir, why: "读不了", err: err}
 	}
 	list, problems, err := skills.Load(skills.Files())
 	if err != nil || len(problems) > 0 {
-		return nil, nil, v1.Newf(v1.CodeInternal, "编进二进制的 skills 读不出来：%v %v", err, problems)
+		cause := err
+		if cause == nil {
+			cause = fmt.Errorf("%v", problems)
+		} else if len(problems) > 0 {
+			cause = fmt.Errorf("%w: %v", err, problems)
+		}
+		return nil, nil, v1.Wrap(v1.CodeInternal, "编进二进制的 skills 读不出来", cause)
 	}
 	for _, s := range list {
 		sub := filepath.Join(dir, s.Name)
 		path := filepath.Join(sub, skills.FileName)
 		if info, err := os.Lstat(sub); err == nil && (info.Mode()&fs.ModeSymlink != 0 || !info.IsDir()) {
-			return nil, nil, errSkillsPath{sub, "是符号链接或普通文件，mcp init 只写自己的目录"}
+			return nil, nil, errSkillsPath{path: sub, why: "是符号链接或普通文件，mcp init 只写自己的目录"}
 		}
 		before, err := readSkillFile(path)
 		if err != nil {
@@ -152,14 +160,14 @@ func readSkillFile(path string) ([]byte, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, errSkillsPath{path, fmt.Sprintf("读不了（%v）", err)}
+		return nil, errSkillsPath{path: path, why: "读不了", err: err}
 	}
 	if !info.Mode().IsRegular() {
-		return nil, errSkillsPath{path, "是符号链接或不是普通文件，mcp init 只写自己的文件"}
+		return nil, errSkillsPath{path: path, why: "是符号链接或不是普通文件，mcp init 只写自己的文件"}
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, errSkillsPath{path, fmt.Sprintf("读不了（%v）", err)}
+		return nil, errSkillsPath{path: path, why: "读不了", err: err}
 	}
 	if raw == nil {
 		raw = []byte{}
@@ -220,7 +228,7 @@ func writeSkill(root *os.Root, name, sub string, content []byte) error {
 		return v1.Wrap(v1.CodeConfig, "读不了 "+sub, err)
 	}
 	if !info.IsDir() {
-		return errSkillsPath{sub, "是符号链接或普通文件，mcp init 只写自己的目录"}
+		return errSkillsPath{path: sub, why: "是符号链接或普通文件，mcp init 只写自己的目录"}
 	}
 	d, err := root.OpenRoot(name)
 	if err != nil {
@@ -228,13 +236,13 @@ func writeSkill(root *os.Root, name, sub string, content []byte) error {
 	}
 	defer d.Close()
 	if opened, err := d.Stat("."); err != nil || !os.SameFile(info, opened) {
-		return errSkillsPath{sub, "在写入的过程中被换掉了"}
+		return errSkillsPath{path: sub, why: "在写入的过程中被换掉了"}
 	}
 	path := filepath.Join(sub, skills.FileName)
 	perm := fs.FileMode(0o600)
 	switch old, err := d.Lstat(skills.FileName); {
 	case err == nil && !old.Mode().IsRegular():
-		return errSkillsPath{path, "是符号链接或不是普通文件，mcp init 只写自己的文件"}
+		return errSkillsPath{path: path, why: "是符号链接或不是普通文件，mcp init 只写自己的文件"}
 	case err == nil:
 		perm = old.Mode().Perm()
 	case !errors.Is(err, fs.ErrNotExist):

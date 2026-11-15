@@ -193,10 +193,10 @@ func setHermesConfig(path string, before []byte, url string) ([]byte, error) {
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
 	if err := enc.Encode(doc); err != nil {
-		return nil, unsupportedf(path, "改完编码不出来（%v）", err)
+		return nil, unsupportedWrap(path, "改完编码不出来", err)
 	}
 	if err := enc.Close(); err != nil {
-		return nil, unsupportedf(path, "改完编码不出来（%v）", err)
+		return nil, unsupportedWrap(path, "改完编码不出来", err)
 	}
 	return buf.Bytes(), nil
 }
@@ -210,7 +210,7 @@ func parseYAMLDocument(path string, raw []byte) (*yaml.Node, error) {
 	case errors.Is(err, io.EOF):
 		return doc, nil
 	case err != nil:
-		return nil, unsupportedf(path, "不是合法的 YAML（%v）", err)
+		return nil, unsupportedWrap(path, "不是合法的 YAML", err)
 	}
 	var second yaml.Node
 	if err := dec.Decode(&second); !errors.Is(err, io.EOF) {
@@ -267,10 +267,10 @@ func yamlString(s string) *yaml.Node {
 func checkHermesConfig(path string, before, after []byte, url string) error {
 	var b, a map[string]any
 	if err := yaml.Unmarshal(before, &b); err != nil {
-		return unsupportedf(path, "不是合法的 YAML（%v）", err)
+		return unsupportedWrap(path, "不是合法的 YAML", err)
 	}
 	if err := yaml.Unmarshal(after, &a); err != nil {
-		return unsupportedf(path, "改完不是合法的 YAML（%v）", err)
+		return unsupportedWrap(path, "改完不是合法的 YAML", err)
 	}
 	srv, _ := yamlDig(a, "mcp_servers", "satchel").(map[string]any)
 	headers, _ := srv["headers"].(map[string]any)

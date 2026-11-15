@@ -115,9 +115,30 @@ func (s *Service) installCommand(ctx context.Context, inv *command.Invocation) (
 		token = srv.Status.Token.Reveal()
 	}
 	key := securechan.EncodePublicKey(s.masterKey)
-	cmd := fmt.Sprintf("curl -fsSL '%s/api/remote/install.sh' | sh -s -- --master-url '%s' --token '%s' --master-key '%s' --mode %s",
-		master, master, token, key, srv.Spec.ConnectionMode)
+	cmd := fmt.Sprintf("curl -fsSL %s | sh -s -- --master-url %s --token %s --master-key %s --mode %s",
+		shellSingleQuote(master+"/api/remote/install.sh"), shellSingleQuote(master), shellSingleQuote(token), shellSingleQuote(key), shellModeArg(srv.Spec.ConnectionMode))
 	return &InstallCommand{Server: srv.Spec.Name, Command: cmd, MasterURL: master, MasterKeyFingerprint: securechan.Fingerprint(s.masterKey)}, nil
+}
+
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func shellModeArg(mode string) string {
+	if mode != "" {
+		safe := true
+		for i := 0; i < len(mode); i++ {
+			b := mode[i]
+			if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-') {
+				safe = false
+				break
+			}
+		}
+		if safe {
+			return mode
+		}
+	}
+	return shellSingleQuote(mode)
 }
 
 // Summary 是 server list 的一行。

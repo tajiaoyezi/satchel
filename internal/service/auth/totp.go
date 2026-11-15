@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
@@ -50,6 +51,26 @@ func (s *Service) checkTOTP(username, secret, code string) bool {
 	key := username + "\x00" + code
 	if _, used := s.usedTOTP[key]; used {
 		return false
+	}
+	limit := s.maxUsedTOTP
+	if limit <= 0 {
+		limit = maxUsedTOTPEntries
+	}
+	for len(s.usedTOTP) >= limit {
+		var oldestKey string
+		var oldestExp time.Time
+		first := true
+		for k, exp := range s.usedTOTP {
+			if first || exp.Before(oldestExp) {
+				oldestKey = k
+				oldestExp = exp
+				first = false
+			}
+		}
+		if first {
+			break
+		}
+		delete(s.usedTOTP, oldestKey)
 	}
 	s.usedTOTP[key] = now.Add(totpReplayGrace)
 	return true

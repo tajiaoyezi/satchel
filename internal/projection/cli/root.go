@@ -184,7 +184,7 @@ func ExecuteContext(ctx context.Context, opts Options, args []string, stdout, st
 	}
 	e := normalizeError(err, o.preRunRan)
 	// 用法错误时 PersistentPreRun 没跑，--json 只能从原始参数与环境变量里看。
-	asJSON := o.json || (!o.preRunRan && wantsJSON(args))
+	asJSON := o.json || (!o.preRunRan && wantsJSON(opts, args))
 	writeError(stderr, e, asJSON)
 	return v1.ExitCodeOf(e)
 }
@@ -256,13 +256,62 @@ func usageReason(msg string) string {
 	return "用法错误：" + msg
 }
 
-func wantsJSON(args []string) bool {
-	for _, a := range args {
+// TakesValueFlag 报告 --name 或 -name 是否消费紧随其后的一个独立参数值（非布尔、非密码 flag）。
+func TakesValueFlag(cmd *command.Command, name string) bool {
+	for _, f := range command.RootFlags {
+		if f.Name == name {
+			return f.Type != command.TypeBool
+		}
+	}
+	switch name {
+	case "help", "h", command.NoWaitFlag:
+		return false
+	case "confirm":
+		return cmd == nil || cmd.Danger != ""
+	case command.VerifyCodeFlag, command.VerifyUserFlag:
+		return cmd == nil || cmd.HumanOnly
+	case "limit", "cursor":
+		return cmd == nil || cmd.List
+	}
+	if cmd != nil {
+		if f, ok := cmd.FlagByName(name); ok && f.Type != command.TypePassword {
+			return f.Type != command.TypeBool
+		}
+		return false
+	}
+	for _, f := range command.FilePathFlags {
+		if name == f {
+			return true
+		}
+	}
+	return false
+}
+
+func parseFlagToken(a string) (name string, hasEq, long, ok bool) {
+	switch {
+	case strings.HasPrefix(a, "--") && len(a) > 2:
+		n, _, eq := strings.Cut(a[2:], "=")
+		return n, eq, true, true
+	case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) >= 2:
+		n, _, eq := strings.Cut(a[1:], "=")
+		return n, eq, false, true
+	}
+	return "", false, false, false
+}
+
+func wantsJSON(opts Options, args []string) bool {
+	head, _ := SplitDashDash(args)
+	cmd, _ := Resolve(opts, head)
+	for i := 0; i < len(head); i++ {
+		a := head[i]
 		if a == "--json" || a == "--json=true" {
 			return true
 		}
 		if a == "--json=false" {
 			return false
+		}
+		if name, hasEq, _, ok := parseFlagToken(a); ok && !hasEq && TakesValueFlag(cmd, name) {
+			i++
 		}
 	}
 	return os.Getenv("SATCHEL_OUTPUT") == "json"
@@ -276,10 +325,13 @@ func usageError(format string, args ...any) *v1.Error {
 // checkDuplicateFlags 在解析前预扫原始参数：同一个标量 flag 出现两次是用法错误（pflag 只会让后者覆盖前者）。
 // 只认长名（表里的 flag 一律没有短名）：--name、--name=value、--name value 三种写法；-- 之后的片段算位置参数。
 func checkDuplicateFlags(root *cobra.Command, t *command.Table, args []string) error {
+	head, _ := SplitDashDash(args)
+	var cmd *command.Command
 	var multi map[string]bool
-	if found, _, err := root.Find(args); err == nil && found != nil {
+	if found, _, err := root.Find(head); err == nil && found != nil {
 		if name, ok := found.Annotations[annotationName]; ok {
 			if c, ok := t.Lookup(name); ok {
+				cmd = c
 				multi = map[string]bool{}
 				for _, f := range c.Flags {
 					if f.Type == command.TypeStrings || f.Type == command.TypeObject {
@@ -290,21 +342,20 @@ func checkDuplicateFlags(root *cobra.Command, t *command.Table, args []string) e
 		}
 	}
 	seen := map[string]bool{}
-	for _, a := range args {
-		if a == "--" {
-			break
-		}
-		if !strings.HasPrefix(a, "--") || len(a) == 2 {
+	for i := 0; i < len(head); i++ {
+		name, hasEq, long, ok := parseFlagToken(head[i])
+		if !ok {
 			continue
 		}
-		name, _, _ := strings.Cut(strings.TrimPrefix(a, "--"), "=")
-		if multi[name] {
-			continue
+		if long && !multi[name] {
+			if seen[name] {
+				return usageError("参数 --%s 重复", name)
+			}
+			seen[name] = true
 		}
-		if seen[name] {
-			return usageError("参数 --%s 重复", name)
+		if !hasEq && TakesValueFlag(cmd, name) {
+			i++
 		}
-		seen[name] = true
 	}
 	return nil
 }

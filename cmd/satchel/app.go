@@ -433,8 +433,8 @@ func ensureNotRunning(dataDir string) error {
 }
 
 // serve 在两个监听上跑同一套处理器、开始内置任务，直到 ctx 取消；然后优雅停止（HTTP 与内置任务同时停，各自最多等
-// shutdownTimeout）、补写没写进库的任务记录、关库、删 socket。
-func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
+// shutdownTimeout）、补写没写进库的任务记录、执行关库前收尾回调、关库、删 socket。
+func (a *app) serve(ctx context.Context, tcp, unix net.Listener, beforeDBClose ...func()) error {
 	// 发起恢复之后由 requestStop 取消这个 ctx，与收到 SIGTERM 走同一条优雅停止的路。
 	ctx, cancelServe := context.WithCancel(ctx)
 	defer cancelServe()
@@ -491,6 +491,11 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener) error {
 	flushCtx, cancelFlush := context.WithTimeout(context.Background(), 5*time.Second)
 	a.schedules.Flush(flushCtx)
 	cancelFlush()
+	for _, fn := range beforeDBClose {
+		if fn != nil {
+			fn()
+		}
+	}
 	if err := a.db.Close(); err != nil {
 		a.logger.Warn("关闭数据库失败", "error", err)
 	}

@@ -17,10 +17,12 @@ import (
 
 // 会话与票据的时长（照 mmwx）。
 const (
-	SessionTTL      = 24 * time.Hour
-	RememberMeTTL   = 30 * 24 * time.Hour
-	PendingTTL      = 5 * time.Minute
-	totpReplayGrace = 90 * time.Second
+	SessionTTL         = 24 * time.Hour
+	RememberMeTTL      = 30 * 24 * time.Hour
+	PendingTTL         = 5 * time.Minute
+	totpReplayGrace    = 90 * time.Second
+	maxPendingEntries  = 10000
+	maxUsedTOTPEntries = 10000
 	// Issuer 是 TOTP otpauth URL 里的发行方。
 	Issuer = "Satchel"
 )
@@ -40,9 +42,11 @@ type Service struct {
 	// setupGuard 是 setup init 之前的检查（service/backup 提供，装配根注入）。
 	setupGuard func() error
 
-	mu       sync.Mutex
-	pending  map[string]pendingEntry
-	usedTOTP map[string]time.Time
+	mu          sync.Mutex
+	pending     map[string]pendingEntry
+	usedTOTP    map[string]time.Time
+	maxPending  int
+	maxUsedTOTP int
 }
 
 type pendingEntry struct {
@@ -54,7 +58,7 @@ type pendingEntry struct {
 // New 建服务。
 func New(u *users.Repo, s *sessions.Repo) *Service {
 	return &Service{users: u, sessions: s, now: func() time.Time { return time.Now().UTC() }, limiter: newLimiter(), turnstile: &turnstile{}, logger: slog.Default(),
-		pending: map[string]pendingEntry{}, usedTOTP: map[string]time.Time{}}
+		pending: map[string]pendingEntry{}, usedTOTP: map[string]time.Time{}, maxPending: maxPendingEntries, maxUsedTOTP: maxUsedTOTPEntries}
 }
 
 // identityFor 把账号变成身份对象：管理员全部 scope 与六个危险类，普通用户 read + operate、不带危险类。

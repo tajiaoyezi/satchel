@@ -49,6 +49,9 @@ func Valid(v string) bool { return parse(v).ok }
 // Normalize 去掉 `v` 前缀与首尾空白。
 func Normalize(v string) string { return strings.TrimPrefix(strings.TrimSpace(v), "v") }
 
+// IsDev 报告 v 是不是开发版构建的版本号：不合法，或带有 -dev 后缀。
+func IsDev(v string) bool { return !Valid(v) || strings.HasSuffix(Normalize(v), "-dev") }
+
 // Compare 按语义化版本比较 a 与 b：a 小于、等于、大于 b 时分别返回 -1、0、1。
 // 预发布段排在同号正式版之前，逐段比较：纯数字的按数值、比非数字的小，非数字的按字典序，段少的小。
 // 两边都要是合法的版本，调用方先用 Valid 检查；不合法的一边当作最小。

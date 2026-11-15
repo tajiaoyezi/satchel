@@ -49,3 +49,23 @@ func TestBooleanConfirmThroughAuthz(t *testing.T) {
 	}
 	_ = command.ConfirmObject
 }
+
+// 回归 M-07 & L-06：REST 请求体为 null / 尾随 JSON、重复 limit / cursor 查询参数均返回 400 bad_request。
+func TestDecodeBodyNullAndDuplicatePaginationQuery(t *testing.T) {
+	e := &echo{}
+	h := NewHandler(testTable(t), e, nil)
+	js := map[string]string{"Content-Type": "application/json"}
+
+	for _, body := range []string{`null`, `{"purge":true} garbage`, `{"purge":true}{"x":1}`} {
+		code, fields := do(t, h, "POST", "/api/v1/demo/remove/alice", body, js)
+		if code != 400 || errorOf(t, fields).Code != v1.CodeBadRequest {
+			t.Errorf("%s 应当 400 bad_request：%d %v", body, code, fields)
+		}
+	}
+	for _, q := range []string{"limit=10&limit=20", "cursor=a&cursor=b"} {
+		code, fields := do(t, h, "GET", "/api/v1/audit?"+q, "", nil)
+		if code != 400 || errorOf(t, fields).Code != v1.CodeBadRequest {
+			t.Errorf("%s 应当 400 bad_request：%d %v", q, code, fields)
+		}
+	}
+}

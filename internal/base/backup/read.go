@@ -86,10 +86,10 @@ func Validate(path string, driver db.Driver) (*Manifest, error) {
 		if !entryAllowed(f.Name) {
 			return nil, v1.Newf(v1.CodeBadRequest, "备份里有不允许的条目 %q", f.Name).WithNext("备份只能含清单、数据库、database.json、config.yaml、master.key、subscribes/、rule_templates/ 与 public/uploads/")
 		}
+		if f.UncompressedSize64 > uint64(maxExtract) || total > uint64(maxExtract)-f.UncompressedSize64 {
+			return nil, extractTooBig()
+		}
 		total += f.UncompressedSize64
-	}
-	if total > uint64(maxExtract) {
-		return nil, extractTooBig()
 	}
 	known, err := db.MigrationNames(dialectOf(m.Driver))
 	if err != nil {
@@ -231,6 +231,22 @@ func extractSQLite(path, dir string) (string, error) {
 
 // extractTo 把一个条目解到 dir 下按 pattern 取名的临时文件（0600），返回路径。
 func extractTo(f *zip.File, dir, pattern string) (string, error) {
+	rem := maxExtract
+	return extractToWithBudget(f, dir, pattern, &rem)
+}
+
+// extractToWithBudget 按整包共享的剩余字节预算 budget 解出一个条目，超限立即删除临时文件并返回 extractTooBig()。
+func extractToWithBudget(f *zip.File, dir, pattern string, budget *int64) (string, error) {
+	if budget == nil {
+		rem := maxExtract
+		budget = &rem
+	}
+	if f == nil {
+		return "", v1.New(v1.CodeBadRequest, "备份里缺少所需条目")
+	}
+	if *budget < 0 {
+		return "", extractTooBig()
+	}
 	rc, err := f.Open()
 	if err != nil {
 		return "", err
@@ -240,8 +256,9 @@ func extractTo(f *zip.File, dir, pattern string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	n, err := io.Copy(out, io.LimitReader(rc, maxExtract+1))
-	if err == nil && n > maxExtract {
+	n, err := io.Copy(out, io.LimitReader(rc, *budget+1))
+	*budget -= n
+	if err == nil && *budget < 0 {
 		err = extractTooBig()
 	}
 	if err != nil {

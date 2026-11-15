@@ -200,7 +200,7 @@ func randomToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// pending 票据：内存里、5 分钟、只能用一次、进程重启即失效。
+// pending 票据：内存里、5 分钟、只能用一次、进程重启即失效；超容量上限时淘汰最早过期的条目。
 func (s *Service) issuePending(username string, rememberMe bool) (string, error) {
 	token, err := randomToken()
 	if err != nil {
@@ -213,6 +213,26 @@ func (s *Service) issuePending(username string, rememberMe bool) (string, error)
 		if e.expires.Before(now) {
 			delete(s.pending, k)
 		}
+	}
+	limit := s.maxPending
+	if limit <= 0 {
+		limit = maxPendingEntries
+	}
+	for len(s.pending) >= limit {
+		var oldestKey string
+		var oldestExp time.Time
+		first := true
+		for k, e := range s.pending {
+			if first || e.expires.Before(oldestExp) {
+				oldestKey = k
+				oldestExp = e.expires
+				first = false
+			}
+		}
+		if first {
+			break
+		}
+		delete(s.pending, oldestKey)
 	}
 	s.pending[token] = pendingEntry{username: username, rememberMe: rememberMe, expires: now.Add(PendingTTL)}
 	return token, nil

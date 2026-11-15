@@ -337,11 +337,17 @@ start_service() {
     fi
     info "启动服务…"
     if [ "$SERVICE_MANAGER" = "systemd" ]; then
-        systemctl restart "${SERVICE_NAME}" || true
+        systemctl restart "${SERVICE_NAME}" || die "服务 ${SERVICE_NAME} 启动失败"
         sleep 2
+        if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
+            systemctl --no-pager --lines=20 status "${SERVICE_NAME}" >&2 || true
+            die "服务 ${SERVICE_NAME} 启动后未保持运行，请检查上方日志"
+        fi
         systemctl --no-pager --lines=5 status "${SERVICE_NAME}" || true
     else
-        rc-service "${SERVICE_NAME}" restart || true
+        rc-service "${SERVICE_NAME}" restart || die "服务 ${SERVICE_NAME} 启动失败"
+        sleep 2
+        rc-service "${SERVICE_NAME}" status >/dev/null 2>&1 || die "服务 ${SERVICE_NAME} 启动后未保持运行"
     fi
 }
 
@@ -413,6 +419,7 @@ services:
     network_mode: host
     environment:
       - SATCHEL_DATA_DIR=/var/lib/satchel
+      - SATCHEL_LISTEN=\${SATCHEL_LISTEN:-0.0.0.0:12889}
       - SATCHEL_DATABASE_DRIVER=\${SATCHEL_DATABASE_DRIVER:-}
       - SATCHEL_DATABASE_HOST=\${SATCHEL_DATABASE_HOST:-}
       - SATCHEL_DATABASE_PORT=\${SATCHEL_DATABASE_PORT:-}
@@ -440,8 +447,11 @@ ${localtime_mount}
       - ./postgres-data:/var/lib/postgresql
 EOF
     if [ ! -f "${INSTALL_DIR}/.env" ]; then
-        cat > "${INSTALL_DIR}/.env" <<EOF
+        (
+            umask 077
+            cat > "${INSTALL_DIR}/.env" <<EOF
 SATCHEL_IMAGE=${IMAGE}:${tag}
+SATCHEL_LISTEN=
 SATCHEL_DATABASE_DRIVER=
 SATCHEL_DATABASE_HOST=
 SATCHEL_DATABASE_PORT=
@@ -453,6 +463,18 @@ POSTGRES_DB=satchel
 POSTGRES_USER=satchel
 POSTGRES_PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
 EOF
+        )
+    else
+        (
+            umask 077
+            SATCHEL_NEXT_IMAGE="${IMAGE}:${tag}" awk '
+                BEGIN { img = "SATCHEL_IMAGE=" ENVIRON["SATCHEL_NEXT_IMAGE"]; done = 0 }
+                /^SATCHEL_IMAGE=/ { if (!done) { print img; done = 1 }; next }
+                { print }
+                END { if (!done) print img }
+            ' "${INSTALL_DIR}/.env" > "${INSTALL_DIR}/.env.tmp"
+            mv "${INSTALL_DIR}/.env.tmp" "${INSTALL_DIR}/.env"
+        )
         chmod 0600 "${INSTALL_DIR}/.env"
     fi
     info "已写 ${INSTALL_DIR}/docker-compose.yml 与 .env（镜像 ${IMAGE}:${tag}）"

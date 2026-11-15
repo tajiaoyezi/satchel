@@ -36,6 +36,7 @@ type fixture struct {
 	gate    *db.WriteGate
 	mu      sync.Mutex
 	locked  bool
+	closed  int
 	stops   int
 }
 
@@ -72,12 +73,14 @@ func newFixture(t *testing.T) *fixture {
 			return f.jobs.Start(ctx, inv, run, done)
 		},
 		RequestStop: func() { f.mu.Lock(); f.stops++; f.mu.Unlock() },
-		OpenTarget:  func(context.Context, db.Config) (*bun.DB, func(), error) { return f.target, func() {}, nil },
+		OpenTarget: func(context.Context, db.Config) (*bun.DB, func(), error) {
+			return f.target, func() { f.mu.Lock(); f.closed++; f.mu.Unlock() }, nil
+		},
 	})
 	return f
 }
 
-// settled 等锁放开（done 回调在 job 写完结局之后才跑），返回此刻的锁、拦截与停止次数。
+// settled 等锁放开（失败/未提交场景下 done 回调在 job 写完结局之后才跑），返回此刻的锁、拦截与停止次数。
 func (f *fixture) settled() (locked, suspended bool, stops int) {
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		f.mu.Lock()
@@ -85,6 +88,18 @@ func (f *fixture) settled() (locked, suspended bool, stops int) {
 		f.mu.Unlock()
 		if !locked || time.Now().After(deadline) {
 			return locked, f.gate.Suspended(), stops
+		}
+	}
+}
+
+// settledSuccess 等迁移成功后 RequestStop 与连接关闭生效，返回此刻的锁、拦截、停止次数与目标连接关闭次数。
+func (f *fixture) settledSuccess() (locked, suspended bool, stops, closed int) {
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		f.mu.Lock()
+		locked, stops, closed = f.locked, f.stops, f.closed
+		f.mu.Unlock()
+		if (stops > 0 && closed > 0) || time.Now().After(deadline) {
+			return locked, f.gate.Suspended(), stops, closed
 		}
 	}
 }
@@ -186,7 +201,8 @@ func TestPreconditions(t *testing.T) {
 	}
 }
 
-// master-db-migration「数据原样过去」「提交后退出」：成功时 database.json 改成 PostgreSQL，目标里行数一致、job 行是 done，serve 被要求停止。
+// master-db-migration「数据原样过去」「提交后退出」：成功时 database.json 改成 PostgreSQL，目标里行数一致、job 行是 done，serve 被要求停止，
+// 目标连接池关闭，且 SkipFinish 跳过 5 秒源库等待、互斥锁与 WriteGate 保持到进程退出（M-03）。
 func TestMigrateSuccess(t *testing.T) {
 	f := newFixture(t)
 	seed(t, f.src)
@@ -205,9 +221,11 @@ func TestMigrateSuccess(t *testing.T) {
 	if err := f.target.NewSelect().Model(&tj).Where("job_id = ?", j.JobID).Scan(context.Background()); err != nil || tj.Status != corejobs.StatusDone {
 		t.Fatalf("目标里这个 job 应当是 done：%+v %v", tj, err)
 	}
-	time.Sleep(100 * time.Millisecond) // 停止是 stopDelay 之后才要求的
-	if locked, suspended, stops := f.settled(); stops != 1 || !suspended || locked {
-		t.Fatalf("应当要求停止、拦截保持、锁放开：stops=%d gate=%v locked=%v", stops, suspended, locked)
+	settleStart := time.Now()
+	locked, suspended, stops, closed := f.settledSuccess()
+	if settleElapsed := time.Since(settleStart); settleElapsed >= 2*time.Second || stops != 1 || !suspended || !locked || closed != 1 {
+		t.Fatalf("SkipFinish 应跳过 5s 源库等待并立即关闭目标连接、保持锁与拦截：elapsed=%s stops=%d gate=%v locked=%v closed=%d",
+			settleElapsed, stops, suspended, locked, closed)
 	}
 	// 审查第 1 条：成功后写锁一直拿到进程退出，别的连接写不进 SQLite（等满 busy_timeout 失败）。
 	other, err := db.Open(context.Background(), f.s.d.Config)

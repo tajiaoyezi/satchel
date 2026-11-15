@@ -47,3 +47,21 @@ func TestLoadIdentityRejectsBadFile(t *testing.T) {
 		t.Fatal("坏的 master.key 不应当被改写")
 	}
 }
+
+// L-05 回归：首次原子生成 master.key 后不遗留临时文件，且父目录不存在时返回 internal。
+func TestLoadIdentityAtomicAndNoTempLeftover(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := LoadIdentity(dir); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != db.MasterKeyFile {
+		t.Fatalf("目录里应当只有 master.key，实际：%v", entries)
+	}
+	if _, err := LoadIdentity(filepath.Join(dir, "missing")); v1.AsError(err).Code != v1.CodeInternal {
+		t.Fatalf("目录不存在应当返回 internal：%v", err)
+	}
+}
