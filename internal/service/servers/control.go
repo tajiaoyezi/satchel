@@ -137,6 +137,9 @@ func (s *Service) limitTarget(ctx context.Context, inv *command.Invocation) (*co
 
 // limitSet 设「主控临时」这一份来源（node-limiter「主控临时限速的设与撤」）。
 func (s *Service) limitSet(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
 	srv, inbound, credential, err := s.limitTarget(ctx, inv)
 	if err != nil {
 		return nil, err
@@ -166,6 +169,9 @@ func (s *Service) limitSet(ctx context.Context, inv *command.Invocation) (any, e
 
 // limitClear 撤掉「主控临时」这一份来源。
 func (s *Service) limitClear(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
 	srv, inbound, credential, err := s.limitTarget(ctx, inv)
 	if err != nil {
 		return nil, err
@@ -188,6 +194,9 @@ type KickResult struct {
 
 // kick 踢线：不给入站时踢这个凭据名在所有入站上的连接（node-limiter「踢线与连接清单」）。
 func (s *Service) kick(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
 	srv, err := s.byName(ctx, inv.Arg(0))
 	if err != nil {
 		return nil, err
@@ -206,6 +215,9 @@ func (s *Service) kick(ctx context.Context, inv *command.Invocation) (any, error
 
 // connections 列这份凭据在这个入站上的活动连接，按连接 id 分页。
 func (s *Service) connections(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
 	srv, inbound, credential, err := s.limitTarget(ctx, inv)
 	if err != nil {
 		return nil, err
@@ -253,6 +265,9 @@ type RestartResult struct {
 
 // restartKernel 让一台在线服务器重新读 kernel.json 并在同一个进程里重启内核。
 func (s *Service) restartKernel(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
 	srv, err := s.byName(ctx, inv.Arg(0))
 	if err != nil {
 		return nil, err
@@ -282,6 +297,9 @@ type TrafficView struct {
 
 // traffic 读内存里的累计，不经通道、不要求服务器在线。
 func (s *Service) traffic(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
 	srv, err := s.byName(ctx, inv.Arg(0))
 	if err != nil {
 		return nil, err

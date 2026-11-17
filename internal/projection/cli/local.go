@@ -265,8 +265,8 @@ var overviewPartitions = []struct{ key, label string }{
 	{"servers", "服务器"}, {"users", "用户"}, {"alerts", "告警"}, {"tasks", "待办"},
 }
 
-// renderOverview 是 overview 的文本形式：每个分区一行「名称：总数」，有条目时逐条缩进列在下面
-// （条目的单行写法随交付这个分区的那一站定，在那之前按通用写法）。
+// renderOverview 是 overview 的文本形式：每个分区一行「名称：总数」，有条目时逐条缩进列在下面；
+// servers 分区每条显示「<name>\t<status>\t<connection_mode>\t<ip>」。
 func renderOverview(w io.Writer, result any) error {
 	fields, err := toFields(result)
 	if err != nil {
@@ -278,11 +278,28 @@ func renderOverview(w io.Writer, result any) error {
 		fmt.Fprintf(&b, "%s：%s\n", p.label, formatValue(part["total"]))
 		items, _ := part["items"].([]any)
 		for _, item := range items {
-			fmt.Fprintf(&b, "  %s\n", formatValue(item))
+			fmt.Fprintf(&b, "  %s\n", formatOverviewItem(p.key, item))
 		}
 	}
 	_, err = io.WriteString(w, b.String())
 	return err
+}
+
+func formatOverviewItem(key string, item any) string {
+	if key == "servers" {
+		if m, ok := item.(map[string]any); ok {
+			ip := formatValue(m["ip_address"])
+			if ip == "" || ip == "-" {
+				if v6 := formatValue(m["ip_address_v6"]); v6 != "" && v6 != "-" {
+					ip = v6
+				} else {
+					ip = "-"
+				}
+			}
+			return fmt.Sprintf("%s\t%s\t%s\t%s", formatValue(m["name"]), formatValue(m["status"]), formatValue(m["connection_mode"]), ip)
+		}
+	}
+	return formatValue(item)
 }
 
 // renderWhoami 是 whoami 的文本形式。

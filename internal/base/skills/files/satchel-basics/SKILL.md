@@ -16,7 +16,7 @@ description: "用 Satchel 之前先读：开局看总览与身份，怎么学命
    satchel whoami
    ```
 
-   `overview` 有服务器、用户、告警、待办四个分区，各自随对应功能出现，现在都是空的。`whoami` 报出你是谁（`actor`、`actor_kind`、`role`）、令牌的 id，以及权限范围（`scopes`）与打开的危险类（`danger`）。后面能做什么、不能做什么，以它为准。
+   `overview` 有服务器、用户、告警、待办四个分区，各自随对应功能出现：管理员在服务器分区看到按 id 升序的前 10 台服务器摘要与总台数（普通用户只看到空列表与 0），用户、告警与待办分区尚未交付、仍为空。`whoami` 报出你是谁（`actor`、`actor_kind`、`role`）、令牌的 id，以及权限范围（`scopes`）与打开的危险类（`danger`）。后面能做什么、不能做什么，以它为准。
 2. 主控自身的状态（下面四条只对管理员开放，普通用户签的令牌会得到 `forbidden`）：
    - 当前的数据库：`satchel database show`
    - 备份：`satchel backup list`

@@ -304,7 +304,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	for name, h := range updates.Bindings() {
 		bindings[name] = h
 	}
-	for name, h := range svcoverview.New().Bindings() {
+	for name, h := range svcoverview.New(svcoverview.Deps{Servers: serversSvc.Overview}).Bindings() {
 		bindings[name] = h
 	}
 	for name, h := range serversSvc.Bindings() {

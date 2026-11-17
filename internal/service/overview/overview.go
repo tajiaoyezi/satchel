@@ -23,20 +23,47 @@ type Result struct {
 	Tasks   Partition `json:"tasks"`
 }
 
-// Service 是开局总览。M1 的四个分区都还没有数据来源。
-type Service struct{}
+// Limit 是开局总览每个分区最多返回的条目数。
+const Limit = 10
 
-// New 建开局总览服务。
-func New() *Service { return &Service{} }
+// Deps 是各分区的数据来源：在装配根注入，业务模块之间不互相引用。
+type Deps struct {
+	Servers func(ctx context.Context, limit int) ([]any, int, error)
+}
+
+// Service 是开局总览。每个分区随对应功能出现，未注入来源时返回空列表与 0。
+type Service struct {
+	d Deps
+}
+
+// New 建开局总览服务；不传参数时四个分区均为空（兼容 M1 单测）。
+func New(d ...Deps) *Service {
+	var deps Deps
+	if len(d) > 0 {
+		deps = d[0]
+	}
+	return &Service{d: deps}
+}
 
 // Bindings 是 overview 的处理函数。
 func (s *Service) Bindings() command.Bindings {
 	return command.Bindings{"overview": s.overview}
 }
 
-// empty 是还没交付的分区：items 是空数组（JSON 里是 []，不是 null），total 为 0。
+// empty 是还没交付或无权看到的分区：items 是空数组（JSON 里是 []，不是 null），total 为 0。
 func empty() Partition { return Partition{Items: []any{}} }
 
-func (s *Service) overview(context.Context, *command.Invocation) (any, error) {
-	return Result{Servers: empty(), Users: empty(), Alerts: empty(), Tasks: empty()}, nil
+func (s *Service) overview(ctx context.Context, _ *command.Invocation) (any, error) {
+	res := Result{Servers: empty(), Users: empty(), Alerts: empty(), Tasks: empty()}
+	if s.d.Servers != nil {
+		items, total, err := s.d.Servers(ctx, Limit)
+		if err != nil {
+			return nil, err
+		}
+		if items == nil {
+			items = []any{}
+		}
+		res.Servers = Partition{Items: items, Total: total}
+	}
+	return res, nil
 }

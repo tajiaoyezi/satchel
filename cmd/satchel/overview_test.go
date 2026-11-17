@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/uptrace/bun"
 
 	"github.com/satchel/satchel/internal/base/db/dbtest"
+	"github.com/satchel/satchel/pkg/xrpc"
 )
 
 // emptyOverview 断言一份 overview 的 JSON：四个分区一个不少，每个都是 items 为空数组、total 为 0（M1）。
@@ -88,5 +91,90 @@ func TestOverviewEndToEnd(t *testing.T) {
 			t.Fatalf("只读令牌经 MCP 应当成功：%s", text)
 		}
 		emptyOverview(t, "MCP（只读令牌）", text)
+
+		// 建 12 台服务器（其中 srv-01 连上主控），验证管理员在 servers 分区看到按 id 升序前 10 条与 total=12，
+		// 普通用户的会话与令牌在 servers 分区仍只看到空数组与 0（且不报错）。
+		tok1 := h.addServer("srv-01")
+		a := mustDial(t, h)
+		if !a.authenticate(masterPub(t, h), tok1, xrpc.ControlProtocol).OK {
+			t.Fatal("srv-01 应当认证成功")
+		}
+		h.waitStatus("srv-01", "connected")
+		for i := 2; i <= 12; i++ {
+			h.addServer(fmt.Sprintf("srv-%02d", i))
+		}
+
+		stdout, stderr, code = h.cli("overview", "--json")
+		if code != 0 {
+			t.Fatalf("有服务器后 satchel overview --json：%d %s", code, stderr)
+		}
+		assertAdminServers := func(via, raw string) {
+			t.Helper()
+			var out map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(raw), &out); err != nil {
+				t.Fatalf("%s 的 overview 不是 JSON：%s", via, raw)
+			}
+			var servers struct {
+				Items []struct {
+					ID             int64   `json:"id"`
+					Name           string  `json:"name"`
+					ConnectionMode string  `json:"connection_mode"`
+					Status         string  `json:"status"`
+					LastHeartbeat  *string `json:"last_heartbeat"`
+					IPAddress      *string `json:"ip_address"`
+					IPAddressV6    string  `json:"ip_address_v6"`
+				} `json:"items"`
+				Total int `json:"total"`
+			}
+			if err := json.Unmarshal(out["servers"], &servers); err != nil {
+				t.Fatalf("%s servers 解码失败：%v %s", via, err, raw)
+			}
+			if servers.Total != 12 || len(servers.Items) != 10 {
+				t.Fatalf("%s 应当有 total=12、items=10：%d %d", via, servers.Total, len(servers.Items))
+			}
+			if servers.Items[0].Name != "srv-01" || servers.Items[0].Status != "connected" || servers.Items[0].IPAddress == nil || *servers.Items[0].IPAddress == "" ||
+				servers.Items[0].LastHeartbeat == nil || servers.Items[9].Name != "srv-10" || servers.Items[9].Status != "pending" {
+				t.Fatalf("%s 的服务器摘要内容不对：first=%+v last=%+v", via, servers.Items[0], servers.Items[9])
+			}
+			if strings.Contains(string(out["servers"]), tok1) || strings.Contains(string(out["servers"]), `"token"`) {
+				t.Fatalf("%s 的 servers 分区不能包含令牌字段或原文：%s", via, string(out["servers"]))
+			}
+			for _, key := range []string{"users", "alerts", "tasks"} {
+				if string(out[key]) != `{"items":[],"total":0}` {
+					t.Fatalf("%s 未交付分区 %s 应当仍为空：%s", via, key, string(out[key]))
+				}
+			}
+		}
+		assertAdminServers("CLI", stdout)
+
+		if stdout, stderr, code = h.cli("overview"); code != 0 ||
+			!strings.HasPrefix(stdout, "服务器：12\n  srv-01\tconnected\twebsocket\t127.0.0.1\n  srv-02\tpending\twebsocket\t-\n") ||
+			!strings.Contains(stdout, "\n用户：0\n告警：0\n待办：0\n") {
+			t.Fatalf("有服务器时文本形式不对：%d %q %s", code, stdout, stderr)
+		}
+
+		text, isErr = runTool(t, mcpOverTCP(t, base, ro.Token), "overview")
+		if isErr {
+			t.Fatalf("管理员只读令牌经 MCP 应当成功：%s", text)
+		}
+		assertAdminServers("MCP（管理员只读令牌）", text)
+
+		// 普通用户会话看 overview：servers 分区必须仍为空数组与 0。
+		status, fields, _ = bob.call("GET", base+"/api/v1/overview", "", nil)
+		if status != 200 {
+			t.Fatalf("bob 看总览应当 200：%d %v", status, fields)
+		}
+		emptyOverview(t, "REST（普通用户有服务器时）", fieldsJSON(fields))
+
+		// 普通用户签发的令牌看 overview：同样只看到空数组与 0。
+		status, fields, _ = bob.call("POST", base+"/api/v1/token/create", `{"name":"bob-ro","verify-password":"secret12"}`, map[string]string{"Origin": base})
+		if status != 200 {
+			t.Fatalf("bob 签只读令牌：%d %v", status, fields)
+		}
+		text, isErr = runTool(t, mcpOverTCP(t, base, str(fields["token"])), "overview")
+		if isErr {
+			t.Fatalf("普通用户令牌经 MCP 看总览应当成功：%s", text)
+		}
+		emptyOverview(t, "MCP（普通用户令牌有服务器时）", text)
 	})
 }

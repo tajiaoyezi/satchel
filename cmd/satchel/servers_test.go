@@ -133,5 +133,42 @@ func TestServerCommands(t *testing.T) {
 		if s := h.server("hk-2"); s.Status.Token.Reveal() != v1.Redacted || s.Status.AgentToken != "" || s.Status.PullToken != "" {
 			t.Fatalf("本机管理员也看不到 token 原文，另两把是空串：%q %q %q", s.Status.Token, s.Status.AgentToken, s.Status.PullToken)
 		}
+
+		// 普通用户（会话及其签发的 ops 令牌）不能执行任何 server 命令，一律返回 403 forbidden。
+		seedUser(t, bdb, "bob", "secret12")
+		bob := newBrowser(t)
+		if status, fields := bob.login(base, "bob", "secret12", ""); status != 200 {
+			t.Fatalf("bob 登录：%d %v", status, fields)
+		}
+		status, fields, _ := bob.call("POST", base+"/api/v1/token/create", `{"name":"bob-ops","preset":"ops","verify-password":"secret12"}`, map[string]string{"Origin": base})
+		if status != 200 {
+			t.Fatalf("bob 签 ops 令牌：%d %v", status, fields)
+		}
+		bobOps := str(fields["token"])
+		calls := []struct {
+			method, path, body string
+		}{
+			{"POST", "/api/v1/server/add/hk-bob", `{}`},
+			{"GET", "/api/v1/server/install-command/hk-2", ""},
+			{"GET", "/api/v1/server", ""},
+			{"GET", "/api/v1/server/get/hk-2", ""},
+			{"POST", "/api/v1/server/limit/set/hk-2", `{"inbound":"vless-in","credential":"a","mbps":5}`},
+			{"POST", "/api/v1/server/limit/clear/hk-2", `{"inbound":"vless-in","credential":"a"}`},
+			{"POST", "/api/v1/server/kick/hk-2", `{"credential":"a"}`},
+			{"GET", "/api/v1/server/connections/hk-2?inbound=vless-in&credential=a", ""},
+			{"GET", "/api/v1/server/traffic/hk-2", ""},
+			{"POST", "/api/v1/server/restart-kernel/hk-2", `{"confirm":"hk-2"}`},
+		}
+		for _, tc := range calls {
+			if r := send(t, bob.c, tc.method, base+tc.path, map[string]string{"Origin": base}, tc.body); r.status != 403 || r.code() != "forbidden" {
+				t.Fatalf("普通用户会话调 %s %s 应当 403 forbidden，得到 %d %s", tc.method, tc.path, r.status, r.body)
+			}
+			if r := send(t, nil, tc.method, base+tc.path, map[string]string{"Authorization": "Bearer " + bobOps}, tc.body); r.status != 403 || r.code() != "forbidden" {
+				t.Fatalf("普通用户 ops 令牌调 %s %s 应当 403 forbidden，得到 %d %s", tc.method, tc.path, r.status, r.body)
+			}
+		}
+		if n, _ := h.db.NewSelect().TableExpr("servers").Count(context.Background()); n != 2 {
+			t.Fatalf("普通用户被拒后服务器总数应当仍为 2：%d", n)
+		}
 	})
 }

@@ -59,7 +59,24 @@ func (s *Service) Bindings() command.Bindings {
 	}
 }
 
+func requireAdmin(ctx context.Context) error {
+	if !v1.IdentityFrom(ctx).IsAdmin() {
+		return v1.New(v1.CodeForbidden, "服务器管理只对管理员开放")
+	}
+	return nil
+}
+
+func summaryOf(r *core.Server) Summary {
+	return Summary{
+		ID: r.Metadata.ID, Name: r.Spec.Name, ConnectionMode: r.Spec.ConnectionMode,
+		Status: r.Status.Status, LastHeartbeat: r.Status.LastHeartbeat, IPAddress: r.Status.IPAddress, IPAddressV6: r.Status.IPAddressV6,
+	}
+}
+
 func (s *Service) add(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
 	name := strings.TrimSpace(inv.Arg(0))
 	if name == "" {
 		return nil, v1.New(v1.CodeBadRequest, "服务器的名字不能为空")
@@ -97,6 +114,9 @@ type InstallCommand struct {
 // installCommand 给出一键安装命令：主控地址必须已设且是 https（第 06 章「安装命令只在主控开启 HTTPS 后生成」）；
 // token 原文只给带密钥读取的身份，否则放打码标记。
 func (s *Service) installCommand(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
 	srv, err := s.byName(ctx, inv.Arg(0))
 	if err != nil {
 		return nil, err
@@ -153,6 +173,9 @@ type Summary struct {
 }
 
 func (s *Service) list(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
 	page := command.Page{}
 	if inv.Page != nil {
 		page = *inv.Page
@@ -178,14 +201,40 @@ func (s *Service) list(ctx context.Context, inv *command.Invocation) (any, error
 		res.NextCursor = command.EncodeIDCursor(rows[len(rows)-1].Metadata.ID)
 	}
 	for _, r := range rows {
-		res.Items = append(res.Items, Summary{ID: r.Metadata.ID, Name: r.Spec.Name, ConnectionMode: r.Spec.ConnectionMode,
-			Status: r.Status.Status, LastHeartbeat: r.Status.LastHeartbeat, IPAddress: r.Status.IPAddress, IPAddressV6: r.Status.IPAddressV6})
+		res.Items = append(res.Items, summaryOf(r))
 	}
 	return res, nil
 }
 
 func (s *Service) get(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
 	return s.byName(ctx, inv.Arg(0))
+}
+
+// Overview 返回开局总览里的服务器分区（master-overview）：管理员按 id 升序返回前 limit 条摘要与总台数；
+// 普通用户（role 为 user 的会话或令牌）只返回空数组与 0，不报错。
+func (s *Service) Overview(ctx context.Context, limit int) ([]any, int, error) {
+	if !v1.IdentityFrom(ctx).IsAdmin() {
+		return []any{}, 0, nil
+	}
+	total, err := s.repo.Count(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	if total == 0 || limit <= 0 {
+		return []any{}, total, nil
+	}
+	rows, err := s.repo.List(ctx, 0, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	items := make([]any, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, summaryOf(r))
+	}
+	return items, total, nil
 }
 
 // Directory 把服务器仓储接给节点连接管理。

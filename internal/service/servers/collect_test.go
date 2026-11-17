@@ -17,6 +17,7 @@ import (
 	"github.com/satchel/satchel/internal/command"
 	core "github.com/satchel/satchel/internal/core/servers"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
+	v1 "github.com/satchel/satchel/pkg/api/v1"
 	"github.com/satchel/satchel/pkg/xrpc"
 )
 
@@ -218,8 +219,9 @@ func TestConnectionsUint64CursorAndInstallQuote(t *testing.T) {
 	s := New(repo, settings, nil, nil)
 	s.SetConns(conns)
 
+	adminCtx := v1.WithIdentity(ctx, v1.LocalAdmin("root"))
 	// 按 limit=2 翻两页，确认每页 2 条且无符号顺序不被 int64 溢出打乱。
-	res1Any, err := s.connections(ctx, &command.Invocation{Args: []string{"node-a"}, Flags: map[string]any{"inbound": "vless", "credential": "u"}, Page: &command.Page{Limit: 2}})
+	res1Any, err := s.connections(adminCtx, &command.Invocation{Args: []string{"node-a"}, Flags: map[string]any{"inbound": "vless", "credential": "u"}, Page: &command.Page{Limit: 2}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +232,7 @@ func TestConnectionsUint64CursorAndInstallQuote(t *testing.T) {
 	if got0, got1 := res1.Items[0].(xrpc.Connection).ID, res1.Items[1].(xrpc.Connection).ID; got0 != 1 || got1 != math.MaxInt64 {
 		t.Fatalf("第一页 ID 不对：%d %d", got0, got1)
 	}
-	res2Any, err := s.connections(ctx, &command.Invocation{Args: []string{"node-a"}, Flags: map[string]any{"inbound": "vless", "credential": "u"}, Page: &command.Page{Limit: 2, Cursor: res1.NextCursor}})
+	res2Any, err := s.connections(adminCtx, &command.Invocation{Args: []string{"node-a"}, Flags: map[string]any{"inbound": "vless", "credential": "u"}, Page: &command.Page{Limit: 2, Cursor: res1.NextCursor}})
 	if err != nil {
 		t.Fatal(err)
 	}
