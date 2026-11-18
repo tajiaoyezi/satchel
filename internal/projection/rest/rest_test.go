@@ -67,6 +67,9 @@ func do(t *testing.T, h http.Handler, method, path string, body string, header m
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Fatalf("%s %s 的 Content-Type 应当是 JSON，得到 %q", method, path, ct)
 	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("%s %s 的 Cache-Control 应当是 no-store，得到 %q", method, path, cc)
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &fields); err != nil {
 		t.Fatalf("%s %s 的 body 不是 JSON 对象：%s", method, path, rec.Body.String())

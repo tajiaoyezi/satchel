@@ -72,6 +72,9 @@ func overSocket(r *http.Request) *http.Request {
 
 func code(t *testing.T, w *httptest.ResponseRecorder) v1.Code {
 	t.Helper()
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("门错误响应的 Cache-Control 应当是 no-store，得到 %q", cc)
+	}
 	var e struct {
 		Code v1.Code `json:"code"`
 	}

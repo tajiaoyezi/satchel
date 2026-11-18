@@ -59,7 +59,12 @@ func (c *Caller) Call(ctx context.Context, conn *Conn, method string, params any
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if err := conn.Write(ctx, TypeCall, Call{ID: id, Method: method, Params: raw, TimeoutMS: timeout.Milliseconds()}); err != nil {
+	deadline, _ := ctx.Deadline()
+	timeoutMS := ((timeout + time.Millisecond - 1) / time.Millisecond)
+	if err := conn.Write(ctx, TypeCall, Call{ID: id, Method: method, Params: raw, TimeoutMS: int64(timeoutMS)}); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || !time.Now().Before(deadline) {
+			return nil, ErrTimeout
+		}
 		return nil, fmt.Errorf("xrpc：发请求失败：%w", err)
 	}
 	select {
@@ -68,6 +73,9 @@ func (c *Caller) Call(ctx context.Context, conn *Conn, method string, params any
 			return nil, c.err()
 		}
 		if r.Error != nil {
+			if !time.Now().Before(deadline) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, ErrTimeout
+			}
 			return nil, r.Error
 		}
 		return r.Result, nil

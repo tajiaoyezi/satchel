@@ -248,3 +248,54 @@ func TestCallReply(t *testing.T) {
 		t.Fatalf("断开时应当拿到 ErrClosed：%v", res.closed)
 	}
 }
+
+// TestCallTimeoutRaceWithPeerError 验证调用期限已到时即便对端同步因 TimeoutMS 超时回 CodeFailed，调用方仍稳定返回 ErrTimeout。
+func TestCallTimeoutRaceWithPeerError(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	url := serve(t, func(c *Conn) {
+		if err := ServerHandshake(context.Background(), c, priv); err != nil {
+			return
+		}
+		methods := Methods{
+			"slow": func(ctx context.Context, _ json.RawMessage) (any, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}
+		for {
+			m, err := c.Read(context.Background())
+			if err != nil {
+				return
+			}
+			if m.Type == TypeCall {
+				var call Call
+				_ = Decode(m, &call)
+				go func() { _ = c.Write(context.Background(), TypeReply, methods.Serve(context.Background(), call)) }()
+			}
+		}
+	})
+	c := dial(t, url)
+	if err := ClientHandshake(ctx(t), c, pub); err != nil {
+		t.Fatal(err)
+	}
+	caller := NewCaller()
+	go func() {
+		for {
+			m, err := c.Read(context.Background())
+			if err != nil {
+				caller.CloseAll(nil)
+				return
+			}
+			if m.Type == TypeReply {
+				var r Reply
+				_ = Decode(m, &r)
+				caller.Deliver(r)
+			}
+		}
+	}()
+	for i := 0; i < 30; i++ {
+		if _, err := caller.Call(context.Background(), c, "slow", nil, 5*time.Millisecond); !errors.Is(err, ErrTimeout) {
+			t.Fatalf("第 %d 次超时调用应当返回 ErrTimeout，实际 %v", i+1, err)
+		}
+	}
+}

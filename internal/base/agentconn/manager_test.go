@@ -228,6 +228,7 @@ func TestStaleOfflineDoesNotOverrideNewConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "旧连接的离线写入落地", func() bool { _, n := dir.writes(); return n >= 1 })
+	waitFor(t, "新连接登记进连接表", func() bool { return m.Connected(1) })
 	if status, ip, _ := dir.state(); status != "connected" || ip != "10.0.0.2" || !m.Connected(1) {
 		t.Fatalf("新连接之后应当是 connected、IP 是新连接的：%s %s %v", status, ip, m.Connected(1))
 	}
@@ -483,9 +484,7 @@ func TestConnectedIDs(t *testing.T) {
 	if err != nil || !res.OK {
 		t.Fatalf("第二台应当认证成功：%+v %v", res, err)
 	}
-	if ids := m.ConnectedIDs(); !slices.Equal(ids, []int64{1, 2}) {
-		t.Fatalf("应当列出两台：%v", ids)
-	}
+	waitFor(t, "两台都登记进连接表", func() bool { return slices.Equal(m.ConnectedIDs(), []int64{1, 2}) })
 	b.ws.Close(websocket.StatusNormalClosure, "bye")
 	waitFor(t, "断开的那台不再列出", func() bool { return slices.Equal(m.ConnectedIDs(), []int64{1}) })
 }

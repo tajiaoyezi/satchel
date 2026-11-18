@@ -217,10 +217,15 @@ func TestServerCommands(t *testing.T) {
 			}
 		}
 		if r := send(t, nil, "GET", base+"/api/v1/server/install-command/hk-auto", map[string]string{"Authorization": "Bearer " + ops}, ""); r.status != 200 ||
+			r.header.Get("Cache-Control") != "no-store" ||
 			!strings.Contains(str(r.fields["command"]), "--token '***'") ||
 			!strings.Contains(str(r.fields["command"]), "--agent-token '***'") ||
 			!strings.Contains(str(r.fields["command"]), "--pull-token '***'") {
-			t.Fatalf("ops 无 secrets 时三把凭据均应打码：%d %s", r.status, r.body)
+			t.Fatalf("ops 无 secrets 时三把凭据均应打码且带 no-store：%d %q %s", r.status, r.header.Get("Cache-Control"), r.body)
+		}
+		if r := send(t, nil, "GET", base+"/api/v1/settings/show", map[string]string{"Authorization": "Bearer " + ops}, ""); r.status != 200 ||
+			r.header.Get("Cache-Control") != "no-store" {
+			t.Fatalf("settings show 应当带 Cache-Control: no-store：%d %q %s", r.status, r.header.Get("Cache-Control"), r.body)
 		}
 
 		// 2. server token show：本机管理员读原文，ops 无 secrets 返回 403，no-such 返回 not_found，审计不含原文。

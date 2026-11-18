@@ -131,6 +131,7 @@ func writeFile(w http.ResponseWriter, f *command.File) {
 	defer rc.Close()
 	w.Header().Set("Content-Type", f.ContentType)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": f.Name}))
+	w.Header().Set("Cache-Control", "no-store")
 	if f.Size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(f.Size, 10))
 	}
@@ -276,6 +277,7 @@ func WriteResult(w http.ResponseWriter, result any) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
 }
@@ -284,6 +286,7 @@ func WriteResult(w http.ResponseWriter, result any) {
 func WriteError(w http.ResponseWriter, err error) {
 	e := v1.AsError(err)
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(v1.HTTPStatusOf(e.Code))
 	_ = json.NewEncoder(w).Encode(e)
 }

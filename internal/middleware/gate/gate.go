@@ -210,6 +210,7 @@ func bannedError(b coresecurity.Ban) *v1.Error {
 // writeError 写四字段错误（门在中间件层，不能引用投影层的 rest.WriteError，状态码同样按 v1.HTTPStatusOf 折算）。
 func writeError(w http.ResponseWriter, e *v1.Error) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(v1.HTTPStatusOf(e.Code))
 	_ = json.NewEncoder(w).Encode(e)
 }

@@ -81,7 +81,7 @@ func TestDownloadAndJob(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 || rec.Header().Get("Content-Type") != "application/zip" || !strings.Contains(rec.Header().Get("Content-Disposition"), `filename=b.zip`) ||
-		!bytes.Equal(rec.Body.Bytes(), []byte("PK\x03\x04x")) || rec.Header().Get("Content-Length") != "5" {
+		rec.Header().Get("Cache-Control") != "no-store" || !bytes.Equal(rec.Body.Bytes(), []byte("PK\x03\x04x")) || rec.Header().Get("Content-Length") != "5" {
 		t.Fatalf("下载：%d %v %q", rec.Code, rec.Header(), rec.Body.String())
 	}
 	r.openErr = v1.New(v1.CodeNotFound, "没有这份备份")
