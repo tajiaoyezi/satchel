@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/selfupdate"
@@ -39,4 +40,22 @@ func LoadIdentity(dataDir string) (ed25519.PrivateKey, error) {
 		return nil, v1.Wrap(v1.CodeInternal, "写主控通信密钥失败", err)
 	}
 	return priv, nil
+}
+
+// HostMachineID 读取主控所在系统的机器标识，默认顺序为 /etc/machine-id、/var/lib/dbus/machine-id。
+// 文件缺失或为空时返回空串，供运行态同机判定兜底使用。
+func HostMachineID(paths ...string) string {
+	if len(paths) == 0 {
+		paths = []string{"/etc/machine-id", "/var/lib/dbus/machine-id"}
+	}
+	for _, p := range paths {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if id := strings.TrimSpace(string(raw)); id != "" {
+			return id
+		}
+	}
+	return ""
 }

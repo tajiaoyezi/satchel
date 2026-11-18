@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -90,6 +92,22 @@ type TargetDirectory interface {
 	Target(ctx context.Context, id int64) (TargetInfo, bool, error)
 }
 
+// SameHostUpdater 是 Directory 的可选扩展：由主控服务器端根据连接对端回环或 machine-id 计算写回同机标记。
+type SameHostUpdater interface {
+	SetSameHost(ctx context.Context, id int64, sameHost bool) error
+}
+
+// NodeRuntime 是主控在内存中缓存的节点最近运行态元数据（不落库表新增列，保持 0001_init 不变）。
+type NodeRuntime struct {
+	AgentVersion     string    `json:"agent_version,omitempty"`
+	InDocker         bool      `json:"in_docker"`
+	MachineID        string    `json:"machine_id,omitempty"`
+	MasterURL        string    `json:"master_url,omitempty"`
+	MinMasterVersion string    `json:"min_master_version,omitempty"`
+	ExecRunning      bool      `json:"exec_running,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
 // Config 是连接管理的依赖。时间常数为零时用默认值（测试里缩短）。
 type Config struct {
 	Identity  ed25519.PrivateKey
@@ -100,8 +118,14 @@ type Config struct {
 	OfflineThreshold time.Duration
 	// Version 是主控的版本号。
 	Version string
-	Logger  *slog.Logger
-	Now     func() time.Time
+	// MasterMachineID 是主控宿主机标识；为空时在 New 中尝试读取 /etc/machine-id。
+	MasterMachineID string
+	// CurrentMasterURL 返回主控当前已配置的规范化 https:// master_url，用于检测重连节点的旧地址并发起补推收敛。
+	CurrentMasterURL func(context.Context) string
+	// MasterSyncBlocked 返回指定服务器当前是否处于显式阻断旧地址自动补推的状态。
+	MasterSyncBlocked func(context.Context, int64) bool
+	Logger            *slog.Logger
+	Now               func() time.Time
 	// OnTraffic 在节点经加密 HTTP 上报 traffic 时回调，将快照汇入与 WS/Pull 相同的累计入口。
 	OnTraffic func(ctx context.Context, serverID int64, snap xrpc.TrafficSnapshot) error
 
@@ -130,17 +154,26 @@ type Manager struct {
 	uplinkSessions *securechan.SessionCache
 	nodeClient     *nodeClient
 
-	mu             sync.Mutex
-	conns          map[int64]*session
-	locks          map[int64]serverLock // 每台服务器一把（数量与服务器一样多，不回收）
-	fails          map[string]*failRecord
-	rotations      map[string]*rotateWindow
-	agentRotations map[int64]*agentRotateWindow
-	conflicts      map[int64]*conflictState
-	lastSweep      time.Time
-	live           map[*websocket.Conn]struct{} // 所有正在跑的 Serve 的连接，含还没认证的：Shutdown 全部断开
-	closing        bool                         // Shutdown 开始之后为真：新连接直接断开，认证完的连接不再登记
-	active         sync.WaitGroup               // 正在跑的 Serve：Shutdown 等它们把离线写完；只在 closing 为假时加
+	mu                sync.Mutex
+	conns             map[int64]*session
+	locks             map[int64]serverLock // 每台服务器一把（数量与服务器一样多，不回收）
+	fails             map[string]*failRecord
+	rotations         map[string]*rotateWindow
+	agentRotations    map[int64]*agentRotateWindow
+	conflicts         map[int64]*conflictState
+	runtimes          map[int64]NodeRuntime
+	blockedMasterSync map[int64]bool
+	masterPush        map[int64]*masterPushState
+	lastSweep         time.Time
+	live              map[*websocket.Conn]struct{} // 所有正在跑的 Serve 的连接，含还没认证的：Shutdown 全部断开
+	closing           bool                         // Shutdown 开始之后为真：新连接直接断开，认证完的连接不再登记
+	active            sync.WaitGroup               // 正在跑的 Serve：Shutdown 等它们把离线写完；只在 closing 为假时加
+}
+
+type masterPushState struct {
+	inFlight bool
+	target   string
+	at       time.Time
 }
 
 // serverLock 是一台服务器的锁：容量为 1 的 channel，拿锁时可以带期限。
@@ -158,14 +191,18 @@ func (l serverLock) lock(ctx context.Context) error {
 func (l serverLock) unlock() { <-l }
 
 type session struct {
-	node         Node
-	conn         *xrpc.Conn
-	caller       *xrpc.Caller
-	ip           string
-	v6           bool
-	agentVersion string
-	isCurrentTok bool
-	revoked      atomic.Bool
+	node             Node
+	conn             *xrpc.Conn
+	caller           *xrpc.Caller
+	ip               string
+	v6               bool
+	agentVersion     string
+	inDocker         bool
+	machineID        string
+	masterURL        string
+	minMasterVersion string
+	isCurrentTok     bool
+	revoked          atomic.Bool
 }
 
 type failRecord struct {
@@ -183,6 +220,11 @@ func New(cfg Config) *Manager {
 	}
 	if cfg.HeartbeatInterval == nil {
 		cfg.HeartbeatInterval = func(context.Context) time.Duration { return 30 * time.Second }
+	}
+	if cfg.MasterMachineID == "" {
+		cfg.MasterMachineID = HostMachineID()
+	} else {
+		cfg.MasterMachineID = strings.TrimSpace(cfg.MasterMachineID)
 	}
 	for _, d := range []struct {
 		p   *time.Duration
@@ -206,17 +248,20 @@ func New(cfg Config) *Manager {
 	}
 	base, stopAll := context.WithCancel(context.Background())
 	m := &Manager{
-		cfg:            cfg,
-		base:           base,
-		stopAll:        stopAll,
-		uplinkSessions: securechan.NewSessionCache(securechan.SessionCacheConfig{TTL: cfg.SessionTTL, Now: cfg.Now}),
-		conns:          map[int64]*session{},
-		locks:          map[int64]serverLock{},
-		fails:          map[string]*failRecord{},
-		rotations:      map[string]*rotateWindow{},
-		agentRotations: map[int64]*agentRotateWindow{},
-		conflicts:      map[int64]*conflictState{},
-		live:           map[*websocket.Conn]struct{}{},
+		cfg:               cfg,
+		base:              base,
+		stopAll:           stopAll,
+		uplinkSessions:    securechan.NewSessionCache(securechan.SessionCacheConfig{TTL: cfg.SessionTTL, Now: cfg.Now}),
+		conns:             map[int64]*session{},
+		locks:             map[int64]serverLock{},
+		fails:             map[string]*failRecord{},
+		rotations:         map[string]*rotateWindow{},
+		agentRotations:    map[int64]*agentRotateWindow{},
+		conflicts:         map[int64]*conflictState{},
+		runtimes:          map[int64]NodeRuntime{},
+		blockedMasterSync: map[int64]bool{},
+		masterPush:        map[int64]*masterPushState{},
+		live:              map[*websocket.Conn]struct{}{},
 	}
 	m.nodeClient = newNodeClient(m)
 	return m
@@ -332,6 +377,9 @@ func (m *Manager) Serve(ctx context.Context, ws *websocket.Conn, ip string) {
 	connCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	go m.pingLoop(connCtx, s)
+	if s.masterURL != "" {
+		go m.maybeSyncMasterURL(s.node.ID, s.node.Name, s.masterURL)
+	}
 	loopErr = m.readLoop(connCtx, s)
 }
 
@@ -366,13 +414,17 @@ func (m *Manager) authenticate(ctx context.Context, conn *xrpc.Conn, ip string) 
 		return fail(code, reason, errMsg)
 	}
 	s := &session{
-		node:         node,
-		conn:         conn,
-		caller:       xrpc.NewCaller(),
-		ip:           ip,
-		v6:           isV6(ip),
-		agentVersion: auth.AgentVersion,
-		isCurrentTok: isCurrent,
+		node:             node,
+		conn:             conn,
+		caller:           xrpc.NewCaller(),
+		ip:               ip,
+		v6:               isV6(ip),
+		agentVersion:     auth.AgentVersion,
+		inDocker:         auth.InDocker,
+		machineID:        strings.TrimSpace(auth.MachineID),
+		masterURL:        strings.TrimSpace(auth.MasterURL),
+		minMasterVersion: strings.TrimSpace(auth.MinMasterVersion),
+		isCurrentTok:     isCurrent,
 	}
 	return s, m.heartbeatInterval(ctx), true
 }
@@ -451,6 +503,9 @@ func (m *Manager) activate(ctx context.Context, s *session, interval time.Durati
 		return errClosing
 	}
 	err := m.cfg.Directory.Online(ctx, s.node.ID, s.ip, s.v6, time.Time{}, m.now())
+	if err == nil {
+		m.updateSameHost(ctx, s.node.ID, s.node.Name, s.ip, s.machineID)
+	}
 	if err == nil && s.isCurrentTok {
 		if clearErr := m.clearPending(ctx, s.node.ID); clearErr != nil {
 			m.cfg.Logger.Warn("清除待确认标志失败", "server", s.node.Name, "err", clearErr)
@@ -478,6 +533,13 @@ func (m *Manager) activate(ctx context.Context, s *session, interval time.Durati
 	old := m.conns[s.node.ID]
 	m.conns[s.node.ID] = s
 	m.recordActiveIPLocked(s.node.ID, s.ip, m.cfg.Now())
+	m.recordRuntimeLocked(s.node.ID, NodeRuntime{
+		AgentVersion:     s.agentVersion,
+		InDocker:         s.inDocker,
+		MachineID:        s.machineID,
+		MasterURL:        s.masterURL,
+		MinMasterVersion: s.minMasterVersion,
+	})
 	m.mu.Unlock()
 	if old != nil {
 		m.cfg.Logger.Info("同一台服务器的新连接取代旧连接", "server", s.node.Name, "old_ip", old.ip, "new_ip", s.ip)
@@ -487,7 +549,7 @@ func (m *Manager) activate(ctx context.Context, s *session, interval time.Durati
 }
 
 // heartbeat 在这台服务器的锁里记一次心跳；s 已被新连接取代时不写。
-func (m *Manager) heartbeat(ctx context.Context, s *session, boot time.Time) error {
+func (m *Manager) heartbeat(ctx context.Context, s *session, hb xrpc.Heartbeat) error {
 	l := m.serverLock(s.node.ID)
 	if err := l.lock(ctx); err != nil {
 		return err
@@ -496,12 +558,35 @@ func (m *Manager) heartbeat(ctx context.Context, s *session, boot time.Time) err
 	if !m.current(s) {
 		return nil
 	}
+	m.mu.Lock()
+	if hb.AgentVersion != "" {
+		s.agentVersion = hb.AgentVersion
+	}
+	if hb.MachineID != "" {
+		s.machineID = strings.TrimSpace(hb.MachineID)
+	}
+	if hb.MasterURL != "" {
+		s.masterURL = strings.TrimSpace(hb.MasterURL)
+	}
+	if hb.AgentVersion != "" || hb.InDocker || hb.MachineID != "" || hb.MasterURL != "" {
+		s.inDocker = hb.InDocker
+	}
+	m.recordRuntimeLocked(s.node.ID, NodeRuntime{
+		AgentVersion: s.agentVersion,
+		InDocker:     s.inDocker,
+		MachineID:    s.machineID,
+		MasterURL:    s.masterURL,
+	})
+	machineID := s.machineID
+	m.mu.Unlock()
+
 	m.touchConflict(s.node.ID, s.ip)
 	wctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
-	if err := m.cfg.Directory.Online(wctx, s.node.ID, s.ip, s.v6, boot, m.now()); err != nil {
+	if err := m.cfg.Directory.Online(wctx, s.node.ID, s.ip, s.v6, hb.BootTime, m.now()); err != nil {
 		return err
 	}
+	m.updateSameHost(wctx, s.node.ID, s.node.Name, s.ip, machineID)
 	if s.isCurrentTok {
 		if err := m.clearPending(wctx, s.node.ID); err != nil {
 			m.cfg.Logger.Warn("清除待确认标志失败", "server", s.node.Name, "err", err)
@@ -548,7 +633,7 @@ func (m *Manager) readLoop(ctx context.Context, s *session) error {
 			if err := xrpc.Decode(msg, &hb); err != nil {
 				return err
 			}
-			if err := m.heartbeat(ctx, s, hb.BootTime); err != nil {
+			if err := m.heartbeat(ctx, s, hb); err != nil {
 				m.cfg.Logger.Warn("记录心跳失败", "server", s.node.Name, "err", err)
 			}
 			wctx, cancel := context.WithTimeout(ctx, writeTimeout)
@@ -556,6 +641,9 @@ func (m *Manager) readLoop(ctx context.Context, s *session) error {
 			cancel()
 			if err != nil {
 				return err
+			}
+			if hb.MasterURL != "" {
+				go m.maybeSyncMasterURL(s.node.ID, s.node.Name, hb.MasterURL)
 			}
 		case xrpc.TypeReply:
 			var r xrpc.Reply
@@ -642,6 +730,190 @@ func (m *Manager) Connected(serverID int64) bool {
 	defer m.mu.Unlock()
 	s := m.conns[serverID]
 	return s != nil && !s.revoked.Load()
+}
+
+// Runtime 返回指定服务器最近缓存的节点运行态元数据（不存在时 ok 为 false）。
+func (m *Manager) Runtime(serverID int64) (NodeRuntime, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rt, ok := m.runtimes[serverID]
+	return rt, ok
+}
+
+// RecordRuntime 合并并刷新指定服务器的内存运行态缓存（非空字符串覆盖旧值）。
+func (m *Manager) RecordRuntime(serverID int64, rt NodeRuntime) {
+	if serverID <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.recordRuntimeLocked(serverID, rt)
+	m.mu.Unlock()
+}
+
+func (m *Manager) recordRuntimeLocked(serverID int64, rt NodeRuntime) {
+	cur := m.runtimes[serverID]
+	if v := strings.TrimSpace(rt.AgentVersion); v != "" {
+		cur.AgentVersion = v
+	}
+	if v := strings.TrimSpace(rt.MachineID); v != "" {
+		cur.MachineID = v
+	}
+	if v := strings.TrimSpace(rt.MasterURL); v != "" {
+		cur.MasterURL = v
+	}
+	if v := strings.TrimSpace(rt.MinMasterVersion); v != "" {
+		cur.MinMasterVersion = v
+	}
+	if rt.AgentVersion != "" || rt.InDocker || rt.MachineID != "" || rt.MasterURL != "" {
+		cur.InDocker = rt.InDocker
+	}
+	cur.ExecRunning = rt.ExecRunning
+	cur.UpdatedAt = m.now()
+	m.runtimes[serverID] = cur
+}
+
+// SetMasterSyncBlocked 设置或解除指定服务器的旧地址自动补推阻断标记。
+func (m *Manager) SetMasterSyncBlocked(serverID int64, blocked bool) {
+	if serverID <= 0 {
+		return
+	}
+	m.mu.Lock()
+	if blocked {
+		m.blockedMasterSync[serverID] = true
+	} else {
+		delete(m.blockedMasterSync, serverID)
+	}
+	m.mu.Unlock()
+}
+
+// Disconnect 断开节点连接并清理内存会话与缓存后将数据库状态置为 offline（保留服务器配置记录）。
+func (m *Manager) Disconnect(ctx context.Context, serverID int64) error {
+	if serverID <= 0 {
+		return nil
+	}
+	l := m.serverLock(serverID)
+	if err := l.lock(ctx); err != nil {
+		return err
+	}
+	defer l.unlock()
+
+	m.InvalidateServer(serverID, true, roleManage, rolePull)
+	m.mu.Lock()
+	delete(m.conns, serverID)
+	delete(m.runtimes, serverID)
+	delete(m.masterPush, serverID)
+	m.mu.Unlock()
+
+	wctx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	return m.cfg.Directory.Offline(wctx, serverID, m.now())
+}
+
+func (m *Manager) sameHost(ip, machineID string) bool {
+	if p := net.ParseIP(strings.TrimSpace(ip)); p != nil && p.IsLoopback() {
+		return true
+	}
+	mid := strings.TrimSpace(machineID)
+	return m.cfg.MasterMachineID != "" && mid != "" && mid == m.cfg.MasterMachineID
+}
+
+func (m *Manager) updateSameHost(ctx context.Context, id int64, name, ip, machineID string) {
+	upd, ok := m.cfg.Directory.(SameHostUpdater)
+	if !ok {
+		return
+	}
+	if err := upd.SetSameHost(ctx, id, m.sameHost(ip, machineID)); err != nil {
+		m.cfg.Logger.Warn("写同机判定标记失败", "server", name, "err", err)
+	}
+}
+
+func (m *Manager) isMasterSyncBlocked(ctx context.Context, serverID int64) bool {
+	m.mu.Lock()
+	blocked := m.blockedMasterSync[serverID]
+	m.mu.Unlock()
+	if blocked {
+		return true
+	}
+	if m.cfg.MasterSyncBlocked != nil {
+		return m.cfg.MasterSyncBlocked(ctx, serverID)
+	}
+	return false
+}
+
+const (
+	masterPushCooldown = 5 * time.Second
+	masterPushTimeout  = 10 * time.Second
+)
+
+func normalizeMasterOrigin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Host == "" {
+		return ""
+	}
+	path := strings.TrimRight(u.EscapedPath(), "/")
+	if path != "" {
+		return "https://" + strings.ToLower(u.Host) + path
+	}
+	return "https://" + strings.ToLower(u.Host)
+}
+
+func (m *Manager) maybeSyncMasterURL(serverID int64, serverName, reportedURL string) {
+	if m.cfg.CurrentMasterURL == nil || serverID <= 0 {
+		return
+	}
+	reported := normalizeMasterOrigin(reportedURL)
+	if reported == "" {
+		return
+	}
+	target := normalizeMasterOrigin(m.cfg.CurrentMasterURL(m.base))
+	if target == "" {
+		return
+	}
+	if reported == target {
+		m.mu.Lock()
+		delete(m.masterPush, serverID)
+		m.mu.Unlock()
+		return
+	}
+	if m.isMasterSyncBlocked(m.base, serverID) {
+		return
+	}
+	now := m.now()
+	m.mu.Lock()
+	st := m.masterPush[serverID]
+	if st != nil && (st.inFlight || (st.target == target && now.Sub(st.at) < masterPushCooldown)) {
+		m.mu.Unlock()
+		return
+	}
+	st = &masterPushState{inFlight: true, target: target, at: now}
+	m.masterPush[serverID] = st
+	m.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(m.base, masterPushTimeout)
+	defer cancel()
+	_, err := m.Call(ctx, serverID, xrpc.MethodAgentUpdateMaster, xrpc.UpdateMasterParams{MasterURL: target}, masterPushTimeout)
+
+	m.mu.Lock()
+	if cur := m.masterPush[serverID]; cur == st {
+		st.inFlight = false
+	}
+	if err == nil {
+		if rt, ok := m.runtimes[serverID]; ok {
+			rt.MasterURL = target
+			m.runtimes[serverID] = rt
+		}
+	}
+	m.mu.Unlock()
+
+	if err != nil {
+		m.cfg.Logger.Warn("向旧地址重连节点补推新 master_url 失败", "server", serverName, "reported", reported, "target", target, "err", err)
+		return
+	}
+	m.cfg.Logger.Info("已向旧地址重连节点自动补推新 master_url", "server", serverName, "old", reported, "new", target)
 }
 
 // Shutdown 关掉所有节点连接（含还在握手、认证的），并等各条连接把服务器标为离线（主控停止时、关库之前调用；websocket

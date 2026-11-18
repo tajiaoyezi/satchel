@@ -12,6 +12,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -29,16 +31,19 @@ type extDir struct {
 	mu           sync.Mutex
 	tokens       map[string]Node
 	targets      map[int64]TargetInfo
+	sameHosts    map[int64]bool
 	clearPending int
 	onlineIP     string
 	onlineBoot   time.Time
 	onlineCount  int
+	offlineCount int
 }
 
 func newExtDir() *extDir {
 	return &extDir{
-		tokens:  map[string]Node{"tok": {ID: 1, Name: "hk-1"}, "tok2": {ID: 2, Name: "hk-2"}},
-		targets: map[int64]TargetInfo{},
+		tokens:    map[string]Node{"tok": {ID: 1, Name: "hk-1"}, "tok2": {ID: 2, Name: "hk-2"}},
+		targets:   map[int64]TargetInfo{},
+		sameHosts: map[int64]bool{},
 	}
 }
 
@@ -63,7 +68,19 @@ func (d *extDir) Online(_ context.Context, id int64, ip string, _ bool, boot, _ 
 	return nil
 }
 
-func (d *extDir) Offline(context.Context, int64, time.Time) error { return nil }
+func (d *extDir) Offline(_ context.Context, _ int64, _ time.Time) error {
+	d.mu.Lock()
+	d.offlineCount++
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *extDir) SetSameHost(_ context.Context, id int64, same bool) error {
+	d.mu.Lock()
+	d.sameHosts[id] = same
+	d.mu.Unlock()
+	return nil
+}
 
 func (d *extDir) ClearPending(_ context.Context, id int64) error {
 	if id == 1 {
@@ -453,6 +470,7 @@ type fakeNodeEndpoint struct {
 	handshakes map[string]*ecdh.PrivateKey
 	sessions   *securechan.SessionCache
 	calls      []string
+	masterURLs []string
 }
 
 func newFakeNodeEndpoint(t *testing.T, token string, masterPub ed25519.PublicKey) (*fakeNodeEndpoint, int64) {
@@ -566,6 +584,16 @@ func newFakeNodeEndpoint(t *testing.T, token string, masterPub ed25519.PublicKey
 						n.mu.Unlock()
 					}
 					reply.Result, _ = json.Marshal(xrpc.TokenRotateAck{UpdatedAt: time.Now().UTC()})
+				}
+			case xrpc.MethodAgentUpdateMaster:
+				var params xrpc.UpdateMasterParams
+				if err := json.Unmarshal(call.Params, &params); err != nil {
+					reply.Error = &xrpc.Error{Code: xrpc.CodeBadParams, Message: err.Error()}
+				} else {
+					n.mu.Lock()
+					n.masterURLs = append(n.masterURLs, params.MasterURL)
+					n.mu.Unlock()
+					reply.Result, _ = json.Marshal(xrpc.UpdateMasterAck{MasterURL: params.MasterURL, UpdatedAt: time.Now().UTC()})
 				}
 			default:
 				reply.Error = &xrpc.Error{Code: xrpc.CodeUnknownMethod, Message: "unknown"}
@@ -727,5 +755,149 @@ func TestRotateAgentTokenOverHTTPManagementPort(t *testing.T) {
 	m.BeginAgentTokenWindow(1, "new-agent-tok")
 	if _, err := m.Call(context.Background(), 1, xrpc.MethodAgentInfo, nil, 2*time.Second); err != nil {
 		t.Fatalf("过渡窗口内普通 RPC 回落旧 agent_token 应当成功：%v", err)
+	}
+}
+
+func TestRuntimeMetadataSameHostAndMasterURLCatchUp(t *testing.T) {
+	// 1. HostMachineID 顺序与兜底。
+	tmp := t.TempDir()
+	missing := filepath.Join(tmp, "missing-id")
+	fallback := filepath.Join(tmp, "dbus-id")
+	if err := os.WriteFile(fallback, []byte("  mid-host-42\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := HostMachineID(missing, fallback); got != "mid-host-42" {
+		t.Fatalf("HostMachineID 兜底读取失败：got %q", got)
+	}
+	if got := HostMachineID(missing); got != "" {
+		t.Fatalf("不存在文件应当返回空串：got %q", got)
+	}
+
+	dir := newExtDir()
+	var currentMaster atomic.Value
+	currentMaster.Store("https://new.example.com")
+
+	m, srv, pub := serveHTTPAndWS(t, Config{
+		Directory:        dir,
+		MasterMachineID:  "mid-host-42",
+		CurrentMasterURL: func(context.Context) string { return currentMaster.Load().(string) },
+		HTTPDialTimeout:  500 * time.Millisecond,
+	})
+	wsURL := "ws" + srv.URL[len("http"):] + "/api/remote/ws"
+
+	// 2. 远程 IP + 不同 MachineID -> same_host=false；阻断期间不上推 master_url。
+	m.SetMasterSyncBlocked(1, true)
+	agentA, resA, err := connectWithAuth(t, wsURL, "203.0.113.10", pub, xrpc.Auth{
+		Token:           "tok",
+		AgentVersion:    "0.2.0",
+		ControlProtocol: xrpc.ControlProtocol,
+		InDocker:        true,
+		MachineID:       "mid-remote-99",
+		MasterURL:       "https://old.example.com",
+	})
+	if err != nil || !resA.OK {
+		t.Fatalf("agentA 认证应当成功：%v %+v", err, resA)
+	}
+	dir.mu.Lock()
+	same1 := dir.sameHosts[1]
+	dir.mu.Unlock()
+	if same1 {
+		t.Fatal("远程 IP 且 MachineID 不同时 same_host_as_master 不得为 true")
+	}
+	rt1, ok := m.Runtime(1)
+	if !ok || rt1.AgentVersion != "0.2.0" || !rt1.InDocker || rt1.MachineID != "mid-remote-99" || rt1.MasterURL != "https://old.example.com" {
+		t.Fatalf("Runtime(1) 缓存不对：%v %+v", ok, rt1)
+	}
+
+	// 3. 远程 IP 但 MachineID 与主控一致 -> same_host=true，且解除阻断发心跳时自动补推 agent.update_master_url。
+	m.SetMasterSyncBlocked(1, false)
+	pushedCh := make(chan string, 1)
+	go func() {
+		for {
+			msg, err := agentA.conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			switch msg.Type {
+			case xrpc.TypeCall:
+				var call xrpc.Call
+				_ = xrpc.Decode(msg, &call)
+				if call.Method == xrpc.MethodAgentUpdateMaster {
+					var p xrpc.UpdateMasterParams
+					_ = json.Unmarshal(call.Params, &p)
+					select {
+					case pushedCh <- p.MasterURL:
+					default:
+					}
+					res, _ := json.Marshal(xrpc.UpdateMasterAck{MasterURL: p.MasterURL, UpdatedAt: time.Now().UTC()})
+					_ = agentA.conn.Write(context.Background(), xrpc.TypeReply, xrpc.Reply{ID: call.ID, Result: res})
+				}
+			}
+		}
+	}()
+	if err := agentA.conn.Write(context.Background(), xrpc.TypeHeartbeat, xrpc.Heartbeat{
+		BootTime:     time.Now().UTC(),
+		AgentVersion: "0.2.1",
+		MachineID:    "mid-host-42",
+		MasterURL:    "https://old.example.com",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-pushedCh:
+		if got != "https://new.example.com" {
+			t.Fatalf("WS 补推的 master_url 不对：%q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("等待 WS 重连自动补推 agent.update_master_url 超时")
+	}
+	waitFor(t, "same_host=true", func() bool {
+		dir.mu.Lock()
+		defer dir.mu.Unlock()
+		return dir.sameHosts[1]
+	})
+
+	// 4. HTTP 心跳从回环地址上行 -> same_host=true 且对旧地址自动经管理口补推 master_url。
+	manageNode, managePort := newFakeNodeEndpoint(t, "agent-tok-2", pub)
+	dir.mu.Lock()
+	dir.targets[2] = TargetInfo{ID: 2, Name: "hk-2", ConnectionMode: "http", IPAddress: "127.0.0.1", ListenPort: managePort, AgentToken: "agent-tok-2"}
+	dir.mu.Unlock()
+	sid2, sess2 := httpHandshakeClient(t, srv.URL, "127.0.0.1", pub)
+	code, rep := httpCallRPC(t, srv.URL, "127.0.0.1", sid2, sess2, xrpc.AgentHTTPRPC{
+		Method:          xrpc.HTTPRPCMethodHeartbeat,
+		Token:           "tok2",
+		AgentVersion:    "0.2.0",
+		ControlProtocol: xrpc.ControlProtocol,
+		MachineID:       "mid-different",
+		MasterURL:       "https://old.example.com",
+		Heartbeat:       &xrpc.HTTPHeartbeatPayload{BootTime: time.Now().UTC()},
+	})
+	if code != http.StatusOK || !rep.OK {
+		t.Fatalf("HTTP 心跳应当成功：%d %+v", code, rep)
+	}
+	waitFor(t, "http catch-up master_url", func() bool {
+		manageNode.mu.Lock()
+		defer manageNode.mu.Unlock()
+		return len(manageNode.masterURLs) == 1 && manageNode.masterURLs[0] == "https://new.example.com"
+	})
+	dir.mu.Lock()
+	same2 := dir.sameHosts[2]
+	dir.mu.Unlock()
+	if !same2 {
+		t.Fatal("回环地址上行时 same_host_as_master 应当为 true")
+	}
+
+	// 5. Disconnect 断连并标为离线。
+	if err := m.Disconnect(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if m.Connected(1) {
+		t.Fatal("Disconnect 后不应当仍显示在线")
+	}
+	dir.mu.Lock()
+	offCount := dir.offlineCount
+	dir.mu.Unlock()
+	if offCount == 0 {
+		t.Fatal("Disconnect 应当调用 Directory.Offline")
 	}
 }

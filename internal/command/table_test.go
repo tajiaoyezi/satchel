@@ -33,12 +33,14 @@ func TestCatalog(t *testing.T) {
 		"account totp disable": ClassAction, "account recovery-codes regenerate": ClassAction,
 		"token create": ClassAction, "token update": ClassAction, "token revoke": ClassAction,
 		"security ban": ClassAction, "security unban": ClassAction,
-		"settings set": ClassMasterSettings, "settings rollback": ClassMasterSettings, "settings master-url set": ClassMasterSettings,
+		"settings set": ClassMasterSettings, "settings rollback": ClassMasterSettings, "settings master-url set": ClassMasterSettings, "settings master-url migrate": ClassMasterSettings,
 		"settings gates set": ClassMasterSettings, "settings turnstile test": ClassAction, "settings image upload": ClassAction,
 		"server add": ClassConfig, "server install-command": ClassRead, "server list": ClassRead, "server get": ClassRead,
 		"server token show": ClassRead, "server token rotate": ClassAction, "server token revoke": ClassAction,
 		"server limit set": ClassAction, "server limit clear": ClassAction, "server kick": ClassAction,
 		"server connections": ClassRead, "server traffic": ClassRead, "server restart-kernel": ClassAction,
+		"server update check": ClassRead, "server update apply": ClassAction, "server update batch": ClassAction,
+		"server uninstall": ClassAction, "server switch-listen-port": ClassAction, "server probe-master-url": ClassRead,
 	}
 	if len(table.All()) != len(want) {
 		t.Fatalf("目录里应当恰好 %d 条命令，得到 %v", len(want), table.Names())
@@ -123,7 +125,7 @@ func TestCatalog(t *testing.T) {
 	if c, _ := table.Lookup("version"); func() bool { _, ok := c.Scope(); return ok }() {
 		t.Error("version 是本地命令，不该有 scope")
 	}
-	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup,backup download,backup restore,database migrate,security ban,security unban,settings gates set,settings master-url set,token create,token revoke,token update" {
+	if strings.Join(table.HumanOnly(), ",") != "account recovery-codes regenerate,account set-password,account totp confirm,account totp disable,account totp setup,backup download,backup restore,database migrate,security ban,security unban,settings gates set,settings master-url migrate,settings master-url set,token create,token revoke,token update" {
 		t.Errorf("人类专属命令清单不对：%v", table.HumanOnly())
 	}
 	for _, name := range []string{"setup status", "setup init"} {

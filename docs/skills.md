@@ -65,13 +65,20 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `server limit clear` | `satchel-servers` |
 | `server limit set` | `satchel-servers` |
 | `server list` | `satchel-servers` |
+| `server probe-master-url` | `satchel-servers` |
 | `server restart-kernel` | `satchel-servers` |
+| `server switch-listen-port` | `satchel-servers` |
 | `server token revoke` | `satchel-servers` |
 | `server token rotate` | `satchel-servers` |
 | `server token show` | `satchel-servers` |
 | `server traffic` | `satchel-servers` |
+| `server uninstall` | `satchel-servers` |
+| `server update apply` | `satchel-servers` |
+| `server update batch` | `satchel-servers` |
+| `server update check` | `satchel-servers` |
 | `settings gates set` | `satchel-settings`、`satchel-troubleshoot` |
 | `settings image upload` | `satchel-settings` |
+| `settings master-url migrate` | `satchel-settings` |
 | `settings master-url set` | `satchel-servers`、`satchel-settings` |
 | `settings rollback` | `satchel-settings` |
 | `settings set` | `satchel-settings` |

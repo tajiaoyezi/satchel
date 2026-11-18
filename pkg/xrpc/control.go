@@ -8,13 +8,25 @@ import (
 // 连接管控与流量的方法（m2-03 design 第 1 条，node-limiter「通道上的连接管控方法」、node-traffic「定时拉取计数快照」）。
 // 都是主控发请求、节点回复；参数问题由节点回 CodeBadParams。
 const (
-	MethodLimiterSet      = "limiter.set"      // LimiterSetParams → LimiterState
-	MethodLimiterUnset    = "limiter.unset"    // LimiterUnsetParams → LimiterState
-	MethodConnectionsList = "connections.list" // ConnectionsListParams → ConnectionsList
-	MethodConnectionsKick = "connections.kick" // ConnectionsKickParams → ConnectionsKicked
-	MethodTrafficSnapshot = "traffic.snapshot" // 无参数 → TrafficSnapshot
-	MethodKernelRestart   = "kernel.restart"   // 无参数 → KernelRestarted
-	MethodTokenRotate     = "token.rotate"     // TokenRotateParams → TokenRotateAck
+	MethodLimiterSet        = "limiter.set"             // LimiterSetParams → LimiterState
+	MethodLimiterUnset      = "limiter.unset"           // LimiterUnsetParams → LimiterState
+	MethodConnectionsList   = "connections.list"        // ConnectionsListParams → ConnectionsList
+	MethodConnectionsKick   = "connections.kick"        // ConnectionsKickParams → ConnectionsKicked
+	MethodTrafficSnapshot   = "traffic.snapshot"        // 无参数 → TrafficSnapshot
+	MethodKernelRestart     = "kernel.restart"          // 无参数 → KernelRestarted
+	MethodTokenRotate       = "token.rotate"            // TokenRotateParams → TokenRotateAck
+	MethodAgentUpdate       = "agent.update"            // AgentUpdateParams → AgentUpdateAck
+	MethodAgentUninstall    = "agent.uninstall"         // AgentUninstallParams → AgentUninstallAck
+	MethodAgentSwitchPorts  = "agent.switch_ports"      // SwitchPortsParams → SwitchPortsAck
+	MethodAgentProbeMaster  = "agent.probe_master_url"  // ProbeMasterParams → ProbeMasterResult
+	MethodAgentUpdateMaster = "agent.update_master_url" // UpdateMasterParams → UpdateMasterAck
+)
+
+// 节点远程升级确认失败时的磁盘三态口径（第 09 章）。
+const (
+	DiskStateOld            = "old"
+	DiskStateNewUnconfirmed = "new_unconfirmed"
+	DiskStateOldAfterSwap   = "old_after_swap"
 )
 
 // 限速来源：每份「入站 × 凭据」三份，生效值取已设且大于 0 的那几份里最小的一个（技术方案第 10 章）。
@@ -133,5 +145,75 @@ type TokenRotateParams struct {
 
 // TokenRotateAck 是 token.rotate 原子落盘后的确认回复。
 type TokenRotateAck struct {
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// AgentUpdateParams 是 agent.update 的参数：通知节点触发纯 Go 自更新流程。
+type AgentUpdateParams struct {
+	Version                 string `json:"version"`
+	Channel                 string `json:"channel,omitempty"`
+	UseCDN                  bool   `json:"use_cdn"`
+	ExpectedControlProtocol int    `json:"expected_control_protocol,omitempty"`
+}
+
+// AgentUpdateAck 是 agent.update 在原地 exec 前回传的确认与结果分类字段。
+type AgentUpdateAck struct {
+	Accepted        bool   `json:"accepted"`
+	PreviousVersion string `json:"previous_version"`
+	TargetVersion   string `json:"target_version"`
+	Source          string `json:"source,omitempty"`
+	DiskState       string `json:"disk_state,omitempty"`
+	Retryable       bool   `json:"retryable,omitempty"`
+	BatchContinue   bool   `json:"batch_continue,omitempty"`
+	Message         string `json:"message,omitempty"`
+}
+
+// AgentUninstallParams 是 agent.uninstall 的参数：DetachDelayMS 指定回执写出后的脱离子进程等待毫秒数。
+type AgentUninstallParams struct {
+	DetachDelayMS int64 `json:"detach_delay_ms,omitempty"`
+}
+
+// AgentUninstallAck 是 agent.uninstall 派生脱离子进程后的确认回复。
+type AgentUninstallAck struct {
+	Accepted    bool      `json:"accepted"`
+	ScheduledAt time.Time `json:"scheduled_at"`
+	Spawner     string    `json:"spawner,omitempty"`
+}
+
+// SwitchPortsParams 是 agent.switch_ports 的参数：0 表示保持该端口不变。
+type SwitchPortsParams struct {
+	ListenPort int `json:"listen_port,omitempty"`
+	PullPort   int `json:"pull_port,omitempty"`
+}
+
+// SwitchPortsAck 是 agent.switch_ports 落盘并完成进程内热重绑后的回复。
+type SwitchPortsAck struct {
+	ListenPort int       `json:"listen_port"`
+	PullPort   int       `json:"pull_port"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// ProbeMasterParams 是 agent.probe_master_url 的参数：目标地址由主控从已登记设置选出。
+type ProbeMasterParams struct {
+	URL       string `json:"url"`
+	TimeoutMS int64  `json:"timeout_ms,omitempty"`
+}
+
+// ProbeMasterResult 是 agent.probe_master_url 经节点本地主控公钥握手探测后的回复。
+type ProbeMasterResult struct {
+	URL       string `json:"url"`
+	Reachable bool   `json:"reachable"`
+	LatencyMS int64  `json:"latency_ms"`
+	Error     string `json:"error,omitempty"`
+}
+
+// UpdateMasterParams 是 agent.update_master_url 的参数：通知节点原子更新主控地址并原地重连。
+type UpdateMasterParams struct {
+	MasterURL string `json:"master_url"`
+}
+
+// UpdateMasterAck 是 agent.update_master_url 原子落盘后的确认回复。
+type UpdateMasterAck struct {
+	MasterURL string    `json:"master_url"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

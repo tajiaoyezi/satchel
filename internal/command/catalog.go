@@ -28,9 +28,10 @@ var GroupSummaries = map[string]string{
 	"update":                 "主控自升级：检查更新、升到所选渠道的最新版（只对管理员开放；升级属主控自身类危险操作）",
 	"settings update-cdn":    "更新 CDN 的开关（主控自身类危险操作）",
 	"settings image":         "logo、登录壁纸这类图片字段用的图片：上传之后用 settings set 把地址写进字段",
-	"server":                 "服务器（节点）：加服务器、取安装命令、管理凭据、看在线状态，经通道临时限速、踢线、看连接与流量（只对管理员开放）",
+	"server":                 "服务器（节点）：加服务器、取安装命令、管理凭据、看在线状态，经通道临时限速、踢线、看连接与流量，以及远程升级/卸载/切端口/探地址（只对管理员开放）",
 	"server token":           "服务器通信凭据：查看原文（需 secrets）、平滑轮换与立即吊销（需 permission）",
 	"server limit":           "主控临时限速：设与撤（只动「主控临时」那一份来源）",
+	"server update":          "节点 satchel-agent 版本检查、单台自更新与批量串行自更新",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -102,6 +103,34 @@ func serverCommands() []*Command {
 			Args: []Arg{name}},
 		{Path: []string{"server", "restart-kernel"}, Summary: "让一台在线服务器重新读 kernel.json 并在同一个进程里重启内核（已有连接会断开，计数与限速来源保留）",
 			Class: ClassAction, Danger: v1.DangerRestart, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"}, Args: []Arg{name}},
+		{Path: []string{"server", "update", "check"}, Summary: "检查节点 satchel-agent 最新可用版本、主控兼容性与容器约束（省略服务器名查全部）", Class: ClassRead,
+			Args:  []Arg{{Name: "name", Description: "服务器的名字（省略时汇总全部服务器）", Optional: true}},
+			Flags: []Flag{{Name: "channel", Type: TypeString, Default: "stable", Description: "更新渠道：stable 或 prerelease"}}},
+		{Path: []string{"server", "update", "apply"}, Summary: "向单台在线非容器节点发起纯 Go 自更新并重连核对新版本（长任务；需 restart 危险类与 --confirm）",
+			Class: ClassAction, Shape: ShapeJob, Danger: v1.DangerRestart, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"},
+			Args:  []Arg{name, {Name: "version", Description: "目标版本号，必须等于所选渠道当前最新版本，如 0.2.0"}},
+			Flags: []Flag{{Name: "channel", Type: TypeString, Default: "stable", Description: "更新渠道：stable 或 prerelease"}}},
+		{Path: []string{"server", "update", "batch"}, Summary: "向多台或全部在线节点逐台串行发起自更新（长任务；需 batch 与 restart 危险类，--confirm 填目标台数）",
+			Class: ClassAction, Shape: ShapeJob, Danger: v1.DangerBatch, Confirm: &Confirm{Kind: ConfirmCount},
+			Args: []Arg{{Name: "version", Description: "目标版本号，必须等于所选渠道当前最新版本，如 0.2.0"}},
+			Flags: []Flag{
+				{Name: "servers", Type: TypeString, Description: "逗号分隔的目标服务器名列表（与 --all 二选一）"},
+				{Name: "all", Type: TypeBool, Description: "升级全部已登记的服务器（与 --servers 二选一）"},
+				{Name: "channel", Type: TypeString, Default: "stable", Description: "更新渠道：stable 或 prerelease"},
+			}},
+		{Path: []string{"server", "uninstall"}, Summary: "远程卸载物理/虚机节点 satchel-agent 并将其置为 offline（拒绝 Docker 与 exec 中节点；需 master 危险类与 --confirm）",
+			Class: ClassAction, Danger: v1.DangerMaster, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"},
+			Args: []Arg{name}},
+		{Path: []string{"server", "switch-listen-port"}, Summary: "热切换节点管理端口与轮询端口（进程内平滑重绑，不断开内核代理连接；需 permission 危险类与 --confirm）",
+			Class: ClassAction, Danger: v1.DangerPermission, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"},
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "listen-port", Type: TypeInt, Description: "新的节点管理监听端口（1..65535）"},
+				{Name: "pull-port", Type: TypeInt, Description: "新的节点只读轮询监听端口（1..65535）"},
+			}},
+		{Path: []string{"server", "probe-master-url"}, Summary: "让指定节点用本地主控公钥握手探测主控地址或备用恢复地址连通性（只读防 SSRF）", Class: ClassRead,
+			Args:  []Arg{name},
+			Flags: []Flag{{Name: "target", Type: TypeString, Default: "master", Description: "要探测的内置目标：master（主控地址）或 recovery（恢复地址）"}}},
 	}
 }
 
@@ -262,6 +291,16 @@ func settingsCommands() []*Command {
 			Flags: []Flag{
 				{Name: "url", Type: TypeString, Description: "主控地址，如 https://panel.example.com"},
 				{Name: "subscription-url", Type: TypeString, Description: "订阅域名，如 https://sub.example.com"},
+				version,
+			}},
+		{Path: []string{"settings", "master-url", "migrate"}, Summary: "把主控地址迁到新域名或新 origin（人类专属：当场验证；--preview 并发让节点握手预检，换域名同步清空 Turnstile）",
+			Class: ClassMasterSettings, HumanOnly: true,
+			Flags: []Flag{
+				{Name: "url", Type: TypeString, Description: "目标主控地址（必须是干净的 https:// origin，如 https://new.example.com）"},
+				{Name: "subscription-url", Type: TypeString, Description: "可选：同步更新订阅域名"},
+				{Name: "preview", Type: TypeBool, Description: "只读预检：并发让可达节点用主控公钥探测目标地址连通性，不改节点与数据库"},
+				{Name: "change-domain", Type: TypeBool, Description: "显式标记本次切换域名并同步清空 Turnstile 验证密钥"},
+				{Name: "skip-unreachable", Type: TypeBool, Description: "跳过当前离线节点（在线节点不可达仍阻断；被跳过的节点重连后会自动收敛）"},
 				version,
 			}},
 		{Path: []string{"settings", "gates", "set"}, Summary: "改门这一组的设置：关闭公网访问、静默模式、登录限流与封禁的参数、Turnstile、反代登记（人类专属：当场验证；不存快照）", Class: ClassMasterSettings, HumanOnly: true,

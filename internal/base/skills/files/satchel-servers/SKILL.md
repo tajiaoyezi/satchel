@@ -53,6 +53,15 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 - 这是重启类危险操作（`restart`），必须带 `--confirm <名字>`，令牌要开重启类：日常运维（`ops`）的令牌做不了（返回 `forbidden`），要写成待办等人来点，或用开了 `restart` 类的令牌执行。
 - `kernel.json` 不存在或解析不了时返回 `bad_request`，正在跑的内核不停；解析通过但新配置起不来（如端口被占）时返回 `internal`，内核停着、satchel-agent 还连着主控，修好配置后再执行一次就能起来。命令最多等 60 秒（内核启动可能要下载远程规则集）；超时返回 `unavailable`，先用 `satchel server traffic <名字>` 看内核状态。
 
+## 节点生命周期、端口热切与地址探测
+
+- 检查更新：`satchel server update check <名字>` 或不带参数检查全部 `satchel server update check`（可加 `--channel stable` 或 `--channel prerelease`）。输出包含 `current_version`、`latest_version`、`compatible`、`in_docker`、`can_apply` 与 `reason`；若目标版本要求更高的控制协议或最低主控版本，会标为不可用并提示先升级主控；Docker 容器内节点 `can_apply` 恒为假（应更换镜像标签重建容器）。
+- 单台自更新：`satchel server update apply <名字> <版本号> --confirm <名字>`（长任务；需 `restart` 危险类权限，可加 `--channel stable`）。主控会关联该服务器写入长任务，推送节点按同源成对下载与 Ed25519 验签后纯 Go 原地 `exec` 重启并轮询核对新版本号；若失败会按磁盘状态给出 `disk_state`（`old`、`new_unconfirmed` 或 `old_after_swap`）、`retryable` 与 `batch_continue`。Docker 容器或正在运行 `exec` 的节点直接拒绝且不建长任务。
+- 批量串行更新：`satchel server update batch <版本号> --servers hk-1,hk-2 --confirm 2` 或对全库节点 `satchel server update batch <版本号> --all --confirm <台数>`（长任务；需同时具备 `batch` 与 `restart` 危险类权限，`--confirm` 必须精确等于解析出的目标数量）。逐台串行推进，若某台遇到 `batch_continue` 为假的高危失败（如 `new_unconfirmed`）立即止损并中止后续节点。
+- 远程卸载：`satchel server uninstall <名字> --confirm <名字>`（需 `master` 危险类权限）。拒绝 Docker 容器及正在跑 `exec` 的节点；节点派生脱离服务进程组的纯 Go 卸载器清理二进制、服务单元与配置/状态目录，主控随后断连并将状态标为 `offline`（保留数据库记录）。
+- 热切换端口：`satchel server switch-listen-port <名字> --listen-port 24889 --pull-port 24890 --confirm <名字>`（需 `permission` 危险类权限；两个端口 flag 至少给一个，范围 `1..65535` 且两口不能相等）。先通知节点将新端口原子写入配置并在进程内平滑重绑监听口（不断开当前代理连接，也不重启 `sing-box`），确认成功后再更新主控数据库并抬升 `resourceVersion`。
+- 只读探测主控地址：`satchel server probe-master-url <名字> --target master`（或 `--target recovery`，不接受任意 URL 以防 SSRF）。让节点用本地主控公钥握手测试内置设置里的地址并回报连通性与延迟。
+
 ## 注意
 
 - token 等同于这台节点的身份，不要出现在对话、日志或命令行的回显里。

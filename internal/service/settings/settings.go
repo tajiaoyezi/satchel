@@ -27,12 +27,13 @@ type RevealedObject = v1.Object[map[string]any, map[string]any]
 // uploads、busy 与 logger 给上传图片用（SetUploads）。images 让清理上传的图片（读引用、删文件）与能改图片字段的写
 // （set、rollback）不交错：清理按读到的引用删，中间不能有一次写把字段改成正要删的那个文件。
 type Service struct {
-	repo    *core.Repo
-	onWrite []func(*core.State)
-	uploads string
-	busy    func() bool
-	logger  *slog.Logger
-	images  sync.Mutex
+	repo      *core.Repo
+	onWrite   []func(*core.State)
+	uploads   string
+	busy      func() bool
+	logger    *slog.Logger
+	images    sync.Mutex
+	migration MigrationHooks
 }
 
 // New 建服务。
@@ -43,14 +44,15 @@ func New(repo *core.Repo) *Service {
 // Bindings 是本服务提供的命令处理函数，按命令名给 cmd/satchel 绑定。
 func (s *Service) Bindings() command.Bindings {
 	return command.Bindings{
-		"settings show":           s.show,
-		"settings set":            s.set,
-		"settings snapshots list": s.snapshotsList,
-		"settings rollback":       s.rollback,
-		"settings master-url set": s.masterURLSet,
-		"settings gates set":      s.gatesSet,
-		"settings update-cdn set": s.updateCDNSet,
-		"settings image upload":   s.imageUpload,
+		"settings show":               s.show,
+		"settings set":                s.set,
+		"settings snapshots list":     s.snapshotsList,
+		"settings rollback":           s.rollback,
+		"settings master-url set":     s.masterURLSet,
+		"settings master-url migrate": s.masterURLMigrate,
+		"settings gates set":          s.gatesSet,
+		"settings update-cdn set":     s.updateCDNSet,
+		"settings image upload":       s.imageUpload,
 	}
 }
 

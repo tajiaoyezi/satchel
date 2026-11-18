@@ -31,6 +31,7 @@ type Job struct {
 	ID              int64           `json:"-"`
 	JobID           string          `json:"job_id"`
 	Kind            string          `json:"kind"`
+	ServerID        *int64          `json:"server_id,omitempty"`
 	Args            json.RawMessage `json:"args"`
 	Status          string          `json:"status"`
 	StartedAt       *time.Time      `json:"started_at"`
@@ -67,7 +68,7 @@ func New(bdb *bun.DB, st *store.Store) *Repo {
 }
 
 func jobOf(row *model.Job) *Job {
-	return &Job{ID: row.ID, JobID: row.JobID, Kind: row.Kind, Args: row.Args, Status: row.Status, StartedAt: row.StartedAt,
+	return &Job{ID: row.ID, JobID: row.JobID, Kind: row.Kind, ServerID: row.ServerID, Args: row.Args, Status: row.Status, StartedAt: row.StartedAt,
 		FinishedAt: row.FinishedAt, ExitCode: row.ExitCode, Output: row.Output, OutputTruncated: row.OutputTruncated, CreatedAt: row.CreatedAt}
 }
 
@@ -75,7 +76,20 @@ func utc(t time.Time) time.Time { return t.UTC().Truncate(time.Microsecond) }
 
 // Insert 插一行 queued 的 job。
 func (r *Repo) Insert(ctx context.Context, jobID, kind string, args json.RawMessage) (*Job, error) {
-	row := &model.Job{JobID: jobID, Kind: kind, Args: args, Status: StatusQueued}
+	return r.insert(ctx, jobID, kind, nil, args)
+}
+
+// InsertForServer 插一行关联指定服务器的 queued job。
+func (r *Repo) InsertForServer(ctx context.Context, jobID, kind string, serverID int64, args json.RawMessage) (*Job, error) {
+	var sid *int64
+	if serverID > 0 {
+		sid = &serverID
+	}
+	return r.insert(ctx, jobID, kind, sid, args)
+}
+
+func (r *Repo) insert(ctx context.Context, jobID, kind string, serverID *int64, args json.RawMessage) (*Job, error) {
+	row := &model.Job{JobID: jobID, Kind: kind, ServerID: serverID, Args: args, Status: StatusQueued}
 	if err := r.store.Insert(ctx, row); err != nil {
 		return nil, err
 	}

@@ -182,7 +182,17 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	}
 	masterPub := masterKey.Public().(ed25519.PublicKey)
 	serversSvc := svcservers.New(coreservers.New(bdb, st), settingsRepo, masterPub, logger)
-	conns := agentconn.New(agentconn.Config{Identity: masterKey, Directory: serversSvc.Directory(), Version: buildinfo.Version, Logger: logger,
+	serversSvc.SetMasterVersion(buildinfo.Version)
+	conns := agentconn.New(agentconn.Config{Identity: masterKey, Directory: serversSvc.Directory(), Version: buildinfo.Version,
+		MasterMachineID: agentconn.HostMachineID(),
+		CurrentMasterURL: func(ctx context.Context) string {
+			s, err := settingsRepo.Load(ctx)
+			if err != nil {
+				return ""
+			}
+			return s.Gates().MasterURL
+		},
+		Logger:           logger,
 		OfflineThreshold: cfg.OfflineThreshold,
 		OnTraffic: func(ctx context.Context, serverID int64, snap xrpc.TrafficSnapshot) error {
 			return serversSvc.IngestSnapshot(ctx, serverID, snap, time.Now())
@@ -203,6 +213,10 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	// 长任务：上次主控停止时还没结束的先标为失败（master-jobs）。参数摘要用横切层 audit 的同一套打码。
 	// 升级标记里的那个 job 不动：它由 exec 之后的收尾写结局（master-self-update）。
 	jobsSvc := jobs.New(corejobs.New(bdb, st), table, mwaudit.Digest, logger)
+	serversSvc.SetStartJob(func(ctx context.Context, serverID int64, inv *command.Invocation, run func(context.Context) (any, error), done func()) (any, error) {
+		return jobsSvc.StartForServer(ctx, serverID, inv, run, done)
+	})
+	settings.SetMigration(serverMigrationAdapter{serversSvc})
 	var handedOff []string
 	if m, err := selfupdate.ReadMarker(dataDir); err != nil {
 		return nil, err
@@ -514,4 +528,30 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener, beforeDBClose .
 // listenAddrOf 给日志与测试用：拿到 TCP 实际绑定的地址（随机端口时才知道）。
 func listenAddrOf(ln net.Listener) string {
 	return fmt.Sprintf("http://%s", ln.Addr().String())
+}
+
+type serverMigrationAdapter struct{ s *svcservers.Service }
+
+func (a serverMigrationAdapter) ProbeNodes(ctx context.Context, candidateURL string) ([]svcsettings.MigrationNodeProbe, error) {
+	rows, err := a.s.ProbeAllNodesMasterURL(ctx, candidateURL)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]svcsettings.MigrationNodeProbe, len(rows))
+	for i, r := range rows {
+		out[i] = svcsettings.MigrationNodeProbe{
+			Server:    r.Server,
+			DBStatus:  r.DBStatus,
+			State:     r.State,
+			LatencyMS: r.LatencyMS,
+			SameHost:  r.SameHost,
+			Pending:   r.Pending,
+			Error:     r.Error,
+		}
+	}
+	return out, nil
+}
+
+func (a serverMigrationAdapter) PushNodes(ctx context.Context, targetURL string, servers []string) error {
+	return a.s.PushNodesMasterURL(ctx, targetURL, servers)
 }

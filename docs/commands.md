@@ -43,13 +43,20 @@
 | `server limit clear` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/limit/clear/{name}` |
 | `server limit set` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/limit/set/{name}` |
 | `server list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server` |
+| `server probe-master-url` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/probe-master-url/{name}` |
 | `server restart-kernel` | action | operate | restart | object (name) | 否 | 否 | 否 | `POST /api/v1/server/restart-kernel/{name}` |
+| `server switch-listen-port` | action | operate | permission | object (name) | 否 | 否 | 否 | `POST /api/v1/server/switch-listen-port/{name}` |
 | `server token revoke` | action | operate | permission | object (name) | 否 | 否 | 否 | `POST /api/v1/server/token/revoke/{name}` |
 | `server token rotate` | action | operate | permission | object (name) | 否 | 否 | 否 | `POST /api/v1/server/token/rotate/{name}` |
 | `server token show` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/token/show/{name}` |
 | `server traffic` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/traffic/{name}` |
+| `server uninstall` | action | operate | master | object (name) | 否 | 否 | 否 | `POST /api/v1/server/uninstall/{name}` |
+| `server update apply` | action | operate | restart | object (name) | 否 | 否 | 否 | `POST /api/v1/server/update/apply/{name}/{version}` |
+| `server update batch` | action | operate | batch | count | 否 | 否 | 否 | `POST /api/v1/server/update/batch/{version}` |
+| `server update check` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/update/check/{name}` |
 | `settings gates set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/gates/set` |
 | `settings image upload` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/image/upload` |
+| `settings master-url migrate` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/master-url/migrate` |
 | `settings master-url set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/master-url/set` |
 | `settings rollback` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/rollback/{snapshot}` |
 | `settings set` | master_settings | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/set` |
@@ -78,6 +85,8 @@
 | `backup download` | 下载 |
 | `backup upload` | 上传 |
 | `database migrate` | 长任务 |
+| `server update apply` | 长任务 |
+| `server update batch` | 长任务 |
 | `settings image upload` | 上传 |
 | `setup restore` | 上传 |
 | `update apply` | 长任务 |

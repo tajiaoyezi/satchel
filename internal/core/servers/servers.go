@@ -248,6 +248,26 @@ func (r *Repo) ClearPendingFlags(ctx context.Context, id int64) error {
 	return r.store.UpdateStatus(ctx, m, []string{"rotation_pending", "revoke_pending"})
 }
 
+// SetSameHost 更新服务器与主控是否同机（status 档字段，不抬 resourceVersion，不进审计）。
+func (r *Repo) SetSameHost(ctx context.Context, id int64, sameHost bool) error {
+	m := &model.Server{ID: id, SameHostAsMaster: sameHost}
+	return r.store.UpdateStatus(ctx, m, []string{"same_host_as_master"})
+}
+
+// UpdatePorts 原子更新服务器的管理口与只读轮询口，按乐观并发抬升 resourceVersion。
+func (r *Repo) UpdatePorts(ctx context.Context, id, resourceVersion, listenPort, pullPort int64) (*Server, error) {
+	m := &model.Server{
+		ID:              id,
+		ResourceVersion: resourceVersion,
+		ListenPort:      listenPort,
+		PullPort:        pullPort,
+	}
+	if err := r.store.UpdateSpec(ctx, m, false, "listen_port", "pull_port"); err != nil {
+		return nil, err
+	}
+	return r.ByID(ctx, id)
+}
+
 // MarkPullSuccess 记一次只读轮询口采集成功：status 维持或变为 connected、更新 last_heartbeat 与 last_pull_at、清空 offline_since，
 // 有探测/命中地址时写回 ip_address 或 ip_address_v6；不清除 fallback_to_pull（等节点主动恢复 WS/HTTP 时清）。
 func (r *Repo) MarkPullSuccess(ctx context.Context, id int64, ip string, v6 bool, at time.Time) error {

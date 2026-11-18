@@ -292,5 +292,25 @@ func TestRotationRevocationAndAutoFallback(t *testing.T) {
 		if restoredAuto.Status.FallbackToPull || restoredAuto.Status.PushFailCount != 0 {
 			t.Fatalf("MarkOnline 应当清零 fallback_to_pull 与 push_fail_count：%+v", restoredAuto.Status)
 		}
+
+		// SetSameHost 只写 status 档 same_host_as_master，不抬 resourceVersion；UpdatePorts 按乐观并发更新端口并抬版本。
+		verBeforeSame := restoredAuto.Metadata.ResourceVersion
+		if err := r.SetSameHost(ctx, srv.Metadata.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		sameSrv, _ := r.ByID(ctx, srv.Metadata.ID)
+		if !sameSrv.Status.SameHostAsMaster || sameSrv.Metadata.ResourceVersion != verBeforeSame {
+			t.Fatalf("SetSameHost 应当只改 same_host_as_master 且不抬版本：%+v", sameSrv)
+		}
+		if _, err := r.UpdatePorts(ctx, srv.Metadata.ID, verBeforeSame+99, 24889, 24890); v1.AsError(err).Code != v1.CodeVersionConflict {
+			t.Fatalf("过期 version 调用 UpdatePorts 应当返回 version_conflict：%v", err)
+		}
+		updatedPorts, err := r.UpdatePorts(ctx, srv.Metadata.ID, verBeforeSame, 24889, 24890)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if updatedPorts.Spec.ListenPort != 24889 || updatedPorts.Spec.PullPort != 24890 || updatedPorts.Metadata.ResourceVersion != verBeforeSame+1 {
+			t.Fatalf("UpdatePorts 应当更新双口并抬升 resourceVersion：%+v", updatedPorts)
+		}
 	})
 }

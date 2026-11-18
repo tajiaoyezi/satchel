@@ -82,6 +82,7 @@ description: "看与改系统设置时用：日常运维档的设置、logo 与�
 这两组是人类专属，令牌一律 `human_required`，写操作也不存快照。两组也可以请人用管理员账号登录网页，在「系统设置」页上改，当场验证在网页上输入。
 
 - 主控地址与订阅域名：这一步只能由人做：请用户在主控本机、用 root 或运行主控的用户、在没有设 `SATCHEL_TOKEN` 与 `SATCHEL_SERVER`、也没用 `satchel login` 存过登录文件的终端里（不是 AI runtime 的终端）执行 `sudo satchel settings master-url set --url https://panel.example.com --resource-version <N> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署把开头的 `sudo satchel` 换成 `docker compose exec satchel satchel`。订阅域名用 `--subscription-url`；值是干净的 `https://` 或 `http://` 地址（只有协议、域名与可选的端口），空串表示清掉。
+- 主控地址迁移：`settings master-url migrate` 同样属七组人类专属操作（需当场验证，AI 只能建议人执行或通过只读预检查看结果）。请先让人带 `--preview` 预检：`sudo satchel settings master-url migrate --url https://new.example.com --preview --verify-user <管理员账号>`（只读并发让可达节点用本地主控公钥探测新地址连通性，不改节点与数据库）；正式迁移执行 `sudo satchel settings master-url migrate --url https://new.example.com --resource-version <N> --verify-user <管理员账号>`（在线节点不可达或已配对节点离线时默认拒绝并返回阻塞列表；若确需跳过离线节点加 `--skip-unreachable`，待其持旧地址重连时主控自动补推收敛）。主控域名变化或传 `--change-domain` 时会同步清空 `turnstile_site_key` 与 `turnstile_secret_key` 防止新域名登录被锁。
 - 门（关闭公网访问、静默模式、登录限流与封禁的参数、Turnstile、反代登记）：这一步只能由人做：请用户在同样的终端里执行 `sudo satchel settings gates set --set silent_mode=true --resource-version <N> --verify-user <管理员账号>`，它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署同样换成 `docker compose exec satchel satchel`。写完下一个请求就按新值判定。
 - 打开之前提醒人：关闭公网访问打开后，经 TCP 的网页、远程 CLI 与 MCP 都可能马上进不去；静默模式锁定时，网页与远程 CLI（走面板 API）进不去，MCP 照常。两种情况下主控本机的 CLI 都不受影响。被挡在外面时见 `satchel-troubleshoot`。
 

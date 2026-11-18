@@ -19,6 +19,7 @@ import (
 	core "github.com/satchel/satchel/internal/core/servers"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
+	"github.com/satchel/satchel/pkg/release"
 	"github.com/satchel/satchel/pkg/securechan"
 )
 
@@ -32,12 +33,20 @@ const (
 
 // Service 是服务器的业务。
 type Service struct {
-	repo      *core.Repo
-	settings  *coresettings.Repo
-	masterKey ed25519.PublicKey
-	logger    *slog.Logger
-	conns     Conns // 建好连接管理之后由 SetConns 设上
+	repo           *core.Repo
+	settings       *coresettings.Repo
+	masterKey      ed25519.PublicKey
+	masterVersion  string
+	releaseSources release.Sources
+	startJob       func(ctx context.Context, serverID int64, inv *command.Invocation, run func(ctx context.Context) (any, error), done func()) (any, error)
+	pollInterval   time.Duration
+	pollTimeout    time.Duration
+	updateTimeout  time.Duration
+	logger         *slog.Logger
+	conns          Conns // 建好连接管理之后由 SetConns 设上
 	trafficState
+	lifecycleMu sync.Mutex
+	updating    map[int64]bool
 }
 
 // New 建服务；masterKey 是主控通信身份的公钥（安装命令里要带它）；logger 为空时不记日志。
@@ -45,26 +54,42 @@ func New(repo *core.Repo, settings *coresettings.Repo, masterKey ed25519.PublicK
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Service{repo: repo, settings: settings, masterKey: masterKey, logger: logger,
-		trafficState: trafficState{accs: map[int64]*accumulator{}, lastPull: map[int64]time.Time{}, srvLocks: map[int64]*sync.Mutex{}}}
+	return &Service{
+		repo:           repo,
+		settings:       settings,
+		masterKey:      masterKey,
+		releaseSources: defaultAgentReleaseSources(),
+		pollInterval:   defaultUpdatePollInterval,
+		pollTimeout:    defaultUpdatePollTimeout,
+		updateTimeout:  defaultUpdateRPCTimeout,
+		logger:         logger,
+		trafficState:   trafficState{accs: map[int64]*accumulator{}, lastPull: map[int64]time.Time{}, srvLocks: map[int64]*sync.Mutex{}},
+		updating:       map[int64]bool{},
+	}
 }
 
 // Bindings 是本服务的命令处理函数。
 func (s *Service) Bindings() command.Bindings {
 	return command.Bindings{
-		"server add":             s.add,
-		"server install-command": s.installCommand,
-		"server list":            s.list,
-		"server get":             s.get,
-		"server token show":      s.tokenShow,
-		"server token rotate":    s.tokenRotate,
-		"server token revoke":    s.tokenRevoke,
-		"server limit set":       s.limitSet,
-		"server limit clear":     s.limitClear,
-		"server kick":            s.kick,
-		"server connections":     s.connections,
-		"server traffic":         s.traffic,
-		"server restart-kernel":  s.restartKernel,
+		"server add":                s.add,
+		"server install-command":    s.installCommand,
+		"server list":               s.list,
+		"server get":                s.get,
+		"server token show":         s.tokenShow,
+		"server token rotate":       s.tokenRotate,
+		"server token revoke":       s.tokenRevoke,
+		"server limit set":          s.limitSet,
+		"server limit clear":        s.limitClear,
+		"server kick":               s.kick,
+		"server connections":        s.connections,
+		"server traffic":            s.traffic,
+		"server restart-kernel":     s.restartKernel,
+		"server update check":       s.updateCheck,
+		"server update apply":       s.updateApply,
+		"server update batch":       s.updateBatch,
+		"server uninstall":          s.uninstall,
+		"server switch-listen-port": s.switchListenPort,
+		"server probe-master-url":   s.probeMasterURL,
 	}
 }
 
@@ -350,6 +375,10 @@ func (d directory) Offline(ctx context.Context, id int64, at time.Time) error {
 
 func (d directory) ClearPending(ctx context.Context, id int64) error {
 	return d.repo.ClearPendingFlags(ctx, id)
+}
+
+func (d directory) SetSameHost(ctx context.Context, id int64, sameHost bool) error {
+	return d.repo.SetSameHost(ctx, id, sameHost)
 }
 
 func (d directory) Target(ctx context.Context, id int64) (agentconn.TargetInfo, bool, error) {

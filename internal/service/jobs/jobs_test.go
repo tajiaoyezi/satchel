@@ -12,6 +12,7 @@ import (
 
 	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/base/db/dbtest"
+	"github.com/satchel/satchel/internal/base/model"
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/base/store"
 	"github.com/satchel/satchel/internal/command"
@@ -292,4 +293,31 @@ func TestSkipFinishKeepsFinalInMemory(t *testing.T) {
 	if got.Status != core.StatusDone || got.Output == nil || !strings.Contains(*got.Output, "migrated") {
 		t.Fatalf("job get 应当从内存 final 读到 done：%#v", got)
 	}
+}
+
+func TestStartForServer(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		st := store.New(bdb, schema.Default())
+		srv := &model.Server{Name: "srv-svc-job", Token: "tok-svc-job"}
+		if err := st.Insert(ctx, srv); err != nil {
+			t.Fatal(err)
+		}
+		s := newService(bdb)
+		defer s.Stop(context.Background())
+
+		j, err := s.StartForServer(admin(), srv.ID, inv(), func(context.Context) (any, error) {
+			return map[string]string{"ok": "yes"}, nil
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j.ServerID == nil || *j.ServerID != srv.ID {
+			t.Fatalf("StartForServer 返回应带 server_id=%d，实际 %v", srv.ID, j.ServerID)
+		}
+		done := wait(t, s, j.JobID)
+		if done.Status != core.StatusDone || done.ServerID == nil || *done.ServerID != srv.ID {
+			t.Fatalf("落库后的 job 应保留 server_id=%d 且完成：%#v", srv.ID, done)
+		}
+	})
 }

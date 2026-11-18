@@ -82,6 +82,15 @@ func New(repo *core.Repo, table *command.Table, digest Digest, logger *slog.Logg
 // run 用的 ctx 与请求无关（请求结束后照样跑），带调用者的身份，随 Stop 取消。done 非 nil 时在这个 job 结束后一定调一次——
 // 包括连 running 都没改成、run 没跑的情况——调用方靠它释放自己占着的东西（例如「正在备份」）。受理失败时 done 不调。
 func (s *Service) Start(ctx context.Context, inv *command.Invocation, run func(ctx context.Context) (any, error), done func()) (*core.Job, error) {
+	return s.start(ctx, 0, inv, run, done)
+}
+
+// StartForServer 受理关联指定服务器的长任务（写入 jobs.server_id），其余行为同 Start。
+func (s *Service) StartForServer(ctx context.Context, serverID int64, inv *command.Invocation, run func(ctx context.Context) (any, error), done func()) (*core.Job, error) {
+	return s.start(ctx, serverID, inv, run, done)
+}
+
+func (s *Service) start(ctx context.Context, serverID int64, inv *command.Invocation, run func(ctx context.Context) (any, error), done func()) (*core.Job, error) {
 	id := v1.IdentityFrom(ctx)
 	cmd, _ := s.table.Lookup(inv.Name())
 	args, err := json.Marshal(struct {
@@ -96,7 +105,12 @@ func (s *Service) Start(ctx context.Context, inv *command.Invocation, run func(c
 	if err != nil {
 		return nil, err
 	}
-	job, err := s.repo.Insert(ctx, jobID, inv.Name(), args)
+	var job *core.Job
+	if serverID > 0 {
+		job, err = s.repo.InsertForServer(ctx, jobID, inv.Name(), serverID, args)
+	} else {
+		job, err = s.repo.Insert(ctx, jobID, inv.Name(), args)
+	}
 	if err != nil {
 		return nil, err
 	}

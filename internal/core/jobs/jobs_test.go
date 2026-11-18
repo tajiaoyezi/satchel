@@ -11,6 +11,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/satchel/satchel/internal/base/db/dbtest"
+	"github.com/satchel/satchel/internal/base/model"
 	"github.com/satchel/satchel/internal/base/schema"
 	"github.com/satchel/satchel/internal/base/store"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
@@ -110,6 +111,29 @@ func TestInterruptedListAndCleanup(t *testing.T) {
 		}
 		if _, err := r.Get(ctx, "job-running"); err != nil {
 			t.Fatalf("没结束的应当还在：%v", err)
+		}
+	})
+}
+
+func TestInsertForServer(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		st := store.New(bdb, schema.Default())
+		r := New(bdb, st)
+		srv := &model.Server{Name: "srv-job-fk", Token: "tok-job-fk"}
+		if err := st.Insert(ctx, srv); err != nil {
+			t.Fatal(err)
+		}
+		j, err := r.InsertForServer(ctx, "job-srv-0000000001", "server update apply", srv.ID, json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j.ServerID == nil || *j.ServerID != srv.ID {
+			t.Fatalf("InsertForServer 应当写入 server_id=%d，实际 %v", srv.ID, j.ServerID)
+		}
+		got, err := r.Get(ctx, j.JobID)
+		if err != nil || got.ServerID == nil || *got.ServerID != srv.ID {
+			t.Fatalf("Get 应当读回 server_id=%d：%v %+v", srv.ID, err, got)
 		}
 	})
 }

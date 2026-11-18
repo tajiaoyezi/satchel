@@ -42,6 +42,9 @@ type AgentHTTPRPC struct {
 	AgentVersion     string                `json:"agent_version"`
 	ControlProtocol  int                   `json:"control_protocol"`
 	MinMasterVersion string                `json:"min_master_version,omitempty"`
+	InDocker         bool                  `json:"in_docker,omitempty"`
+	MachineID        string                `json:"machine_id,omitempty"`
+	MasterURL        string                `json:"master_url,omitempty"`
 	Heartbeat        *HTTPHeartbeatPayload `json:"heartbeat,omitempty"`
 	Traffic          *TrafficSnapshot      `json:"traffic,omitempty"`
 }

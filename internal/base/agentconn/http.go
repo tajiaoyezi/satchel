@@ -169,6 +169,15 @@ func (m *Manager) ServeRPC(w http.ResponseWriter, r *http.Request, ip string) {
 		return
 	}
 
+	rt := NodeRuntime{
+		AgentVersion:     req.AgentVersion,
+		InDocker:         req.InDocker,
+		MachineID:        req.MachineID,
+		MasterURL:        req.MasterURL,
+		MinMasterVersion: req.MinMasterVersion,
+	}
+	m.RecordRuntime(node.ID, rt)
+
 	now := m.now()
 	switch req.Method {
 	case xrpc.HTTPRPCMethodHeartbeat:
@@ -176,12 +185,15 @@ func (m *Manager) ServeRPC(w http.ResponseWriter, r *http.Request, ip string) {
 		if req.Heartbeat != nil {
 			boot = req.Heartbeat.BootTime
 		}
-		if err := m.httpHeartbeat(ctx, node, ip, boot, isCurrent); err != nil {
+		if err := m.httpHeartbeat(ctx, node, ip, req.MachineID, boot, isCurrent); err != nil {
 			writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: false, Reason: xrpc.AuthUnavailable, Message: "记录心跳失败，稍后重试"})
 			return
 		}
 		interval := int(m.heartbeatInterval(ctx) / time.Second)
 		writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: true, HeartbeatInterval: interval, ServerTime: &now})
+		if req.MasterURL != "" {
+			go m.maybeSyncMasterURL(node.ID, node.Name, req.MasterURL)
+		}
 	case xrpc.HTTPRPCMethodTraffic:
 		if req.Traffic == nil {
 			writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: false, Reason: xrpc.CodeBadParams, Message: "缺少 traffic 快照载荷"})
@@ -200,7 +212,7 @@ func (m *Manager) ServeRPC(w http.ResponseWriter, r *http.Request, ip string) {
 	}
 }
 
-func (m *Manager) httpHeartbeat(ctx context.Context, node Node, ip string, boot time.Time, isCurrent bool) error {
+func (m *Manager) httpHeartbeat(ctx context.Context, node Node, ip, machineID string, boot time.Time, isCurrent bool) error {
 	l := m.serverLock(node.ID)
 	lockCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
@@ -214,6 +226,7 @@ func (m *Manager) httpHeartbeat(ctx context.Context, node Node, ip string, boot 
 	if err := m.cfg.Directory.Online(wctx, node.ID, ip, isV6(ip), boot, m.now()); err != nil {
 		return err
 	}
+	m.updateSameHost(wctx, node.ID, node.Name, ip, machineID)
 	if isCurrent {
 		if err := m.clearPending(wctx, node.ID); err != nil {
 			m.cfg.Logger.Warn("清除待确认标志失败", "server", node.Name, "err", err)

@@ -45,12 +45,15 @@ type KeyExchangeResp struct {
 	Signature       []byte `json:"signature"`
 }
 
-// Auth 是节点握手之后的第一条消息。MinMasterVersion 为空表示不要求。
+// Auth 是节点握手之后的第一条消息。MinMasterVersion 为空表示不要求；新增运行态字段保持向后兼容。
 type Auth struct {
 	Token            string `json:"token"`
 	AgentVersion     string `json:"agent_version"`
 	ControlProtocol  int    `json:"control_protocol"`
 	MinMasterVersion string `json:"min_master_version,omitempty"`
+	InDocker         bool   `json:"in_docker,omitempty"`
+	MachineID        string `json:"machine_id,omitempty"`
+	MasterURL        string `json:"master_url,omitempty"`
 }
 
 // AuthResult 是主控对认证的回复；成功时带主控要求的心跳间隔（秒），失败时带给机器读的原因与给人看的说明。
@@ -69,9 +72,13 @@ const (
 	AuthIPConflict   = "ip_conflict"   // 同一 token 60 秒内已有另一 IP 在使用
 )
 
-// Heartbeat 是节点的心跳：节点进程的启动时间。
+// Heartbeat 是节点的心跳：节点进程的启动时间与可选运行态同步字段。
 type Heartbeat struct {
-	BootTime time.Time `json:"boot_time"`
+	BootTime     time.Time `json:"boot_time"`
+	AgentVersion string    `json:"agent_version,omitempty"`
+	InDocker     bool      `json:"in_docker,omitempty"`
+	MachineID    string    `json:"machine_id,omitempty"`
+	MasterURL    string    `json:"master_url,omitempty"`
 }
 
 // HeartbeatAck 是主控对心跳的确认。
@@ -117,12 +124,21 @@ const MethodAgentHealth = "agent.health"
 
 // AgentInfo 是 agent.info 的结果。
 type AgentInfo struct {
-	AgentVersion    string `json:"agent_version"`
-	ControlProtocol int    `json:"control_protocol"`
+	AgentVersion     string `json:"agent_version"`
+	ControlProtocol  int    `json:"control_protocol"`
+	MinMasterVersion string `json:"min_master_version,omitempty"`
+	InDocker         bool   `json:"in_docker,omitempty"`
+	MachineID        string `json:"machine_id,omitempty"`
+	MasterURL        string `json:"master_url,omitempty"`
+	ExecRunning      bool   `json:"exec_running,omitempty"`
 }
 
 // AgentHealth 是 /health 与 agent.health 的非敏感运行态结果。
 type AgentHealth struct {
-	Status string `json:"status"`
-	Mode   string `json:"mode,omitempty"`
+	Status       string `json:"status"`
+	Mode         string `json:"mode,omitempty"`
+	AgentVersion string `json:"agent_version,omitempty"`
+	InDocker     bool   `json:"in_docker,omitempty"`
+	MachineID    string `json:"machine_id,omitempty"`
+	MasterURL    string `json:"master_url,omitempty"`
 }
