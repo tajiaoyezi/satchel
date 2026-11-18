@@ -148,7 +148,7 @@ func TestOverviewEndToEnd(t *testing.T) {
 		assertAdminServers("CLI", stdout)
 
 		if stdout, stderr, code = h.cli("overview"); code != 0 ||
-			!strings.HasPrefix(stdout, "服务器：12\n  srv-01\tconnected\twebsocket\t127.0.0.1\n  srv-02\tpending\twebsocket\t-\n") ||
+			!strings.HasPrefix(stdout, "服务器：12\n  srv-01\tconnected\tauto\t127.0.0.1\n  srv-02\tpending\tauto\t-\n") ||
 			!strings.Contains(stdout, "\n用户：0\n告警：0\n待办：0\n") {
 			t.Fatalf("有服务器时文本形式不对：%d %q %s", code, stdout, stderr)
 		}

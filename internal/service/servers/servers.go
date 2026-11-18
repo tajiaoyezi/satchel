@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/satchel/satchel/internal/base/agentconn"
@@ -21,8 +22,13 @@ import (
 	"github.com/satchel/satchel/pkg/securechan"
 )
 
-// ModeWebsocket 是本 change 唯一支持的连接模式。
-const ModeWebsocket = "websocket"
+// 服务器的四种连接模式，透传 core 层枚举。
+const (
+	ModeAuto      = core.ModeAuto
+	ModeWebsocket = core.ModeWebsocket
+	ModeHTTP      = core.ModeHTTP
+	ModePull      = core.ModePull
+)
 
 // Service 是服务器的业务。
 type Service struct {
@@ -40,7 +46,7 @@ func New(repo *core.Repo, settings *coresettings.Repo, masterKey ed25519.PublicK
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Service{repo: repo, settings: settings, masterKey: masterKey, logger: logger,
-		trafficState: trafficState{accs: map[int64]*accumulator{}, lastPull: map[int64]time.Time{}}}
+		trafficState: trafficState{accs: map[int64]*accumulator{}, lastPull: map[int64]time.Time{}, srvLocks: map[int64]*sync.Mutex{}}}
 }
 
 // Bindings 是本服务的命令处理函数。
@@ -50,6 +56,9 @@ func (s *Service) Bindings() command.Bindings {
 		"server install-command": s.installCommand,
 		"server list":            s.list,
 		"server get":             s.get,
+		"server token show":      s.tokenShow,
+		"server token rotate":    s.tokenRotate,
+		"server token revoke":    s.tokenRevoke,
 		"server limit set":       s.limitSet,
 		"server limit clear":     s.limitClear,
 		"server kick":            s.kick,
@@ -73,6 +82,15 @@ func summaryOf(r *core.Server) Summary {
 	}
 }
 
+func hasControlChar(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) add(ctx context.Context, inv *command.Invocation) (any, error) {
 	if err := requireAdmin(ctx); err != nil {
 		return nil, err
@@ -81,11 +99,59 @@ func (s *Service) add(ctx context.Context, inv *command.Invocation) (any, error)
 	if name == "" {
 		return nil, v1.New(v1.CodeBadRequest, "服务器的名字不能为空")
 	}
-	mode := inv.String("mode", ModeWebsocket)
-	if mode != ModeWebsocket {
-		return nil, v1.Newf(v1.CodeBadRequest, "连接模式 %q 这一版还不支持：只支持 websocket（auto、http、pull 随后续版本）", mode)
+	if hasControlChar(name) {
+		return nil, v1.New(v1.CodeBadRequest, "服务器名字不能包含控制字符")
 	}
-	srv, err := s.repo.Create(ctx, name, mode)
+	mode := strings.TrimSpace(inv.String("mode", core.ModeAuto))
+	if !core.ValidMode(mode) {
+		return nil, v1.Newf(v1.CodeBadRequest, "连接模式 %q 不支持：必须是 auto、websocket、http 或 pull 之一", mode)
+	}
+	domain := strings.TrimSpace(inv.String("domain", ""))
+	domainV6 := strings.TrimSpace(inv.String("domain-v6", ""))
+	pullAddr := strings.TrimSpace(inv.String("pull-address", ""))
+	pullAddrV6 := strings.TrimSpace(inv.String("pull-address-v6", ""))
+	for field, val := range map[string]string{
+		"domain":          domain,
+		"domain-v6":       domainV6,
+		"pull-address":    pullAddr,
+		"pull-address-v6": pullAddrV6,
+	} {
+		if hasControlChar(val) {
+			return nil, v1.Newf(v1.CodeBadRequest, "--%s 不能包含控制字符", field)
+		}
+	}
+	listenPort := inv.Int("listen-port", 0)
+	pullPort := inv.Int("pull-port", 0)
+	if listenPort < 0 || listenPort > 65535 {
+		return nil, v1.Newf(v1.CodeBadRequest, "--listen-port 必须在 0..65535 之间，得到 %d", listenPort)
+	}
+	if pullPort < 0 || pullPort > 65535 {
+		return nil, v1.Newf(v1.CodeBadRequest, "--pull-port 必须在 0..65535 之间，得到 %d", pullPort)
+	}
+	effListen := listenPort
+	if effListen == 0 {
+		effListen = core.DefaultListenPort
+	}
+	effPull := pullPort
+	if effPull == 0 {
+		effPull = core.DefaultPullPort
+	}
+	if (listenPort > 0 || pullPort > 0) && effListen == effPull {
+		return nil, v1.Newf(v1.CodeBadRequest, "管理监听端口（%d）与轮询只读端口（%d）不能相同", effListen, effPull)
+	}
+	if mode == core.ModePull && domain == "" && domainV6 == "" && pullAddr == "" && pullAddrV6 == "" {
+		return nil, v1.New(v1.CodeBadRequest, "pull 模式至少要提供一个可达地址（--pull-address、--pull-address-v6、--domain 或 --domain-v6）")
+	}
+	srv, err := s.repo.CreateWith(ctx, core.CreateParams{
+		Name:          name,
+		Mode:          mode,
+		Domain:        domain,
+		DomainV6:      domainV6,
+		ListenPort:    int64(listenPort),
+		PullAddress:   pullAddr,
+		PullAddressV6: pullAddrV6,
+		PullPort:      int64(pullPort),
+	})
 	if err != nil {
 		if e := v1.AsError(err); e.Code == v1.CodeNameTaken {
 			return nil, e.WithNext("换一个名字，或用 server list 看已有的服务器")
@@ -130,13 +196,33 @@ func (s *Service) installCommand(ctx context.Context, inv *command.Invocation) (
 		return nil, v1.Newf(v1.CodeConflict, "安装命令只在主控地址是 https 时生成，当前主控地址是 %q", master).
 			WithNext("请人在主控本机用 settings master-url set 设一个 https 的主控地址（人类专属，也可以在网页的「系统设置」页改），再取安装命令")
 	}
-	token := v1.Redacted
-	if v1.IdentityFrom(ctx).HasScope(v1.ScopeSecrets) {
-		token = srv.Status.Token.Reveal()
+	hasSecrets := v1.IdentityFrom(ctx).HasScope(v1.ScopeSecrets)
+	revealOrRedact := func(sec v1.Secret) string {
+		if hasSecrets {
+			return sec.Reveal()
+		}
+		return v1.Redacted
 	}
+	mode := srv.Spec.ConnectionMode
+	if mode == "" {
+		mode = core.ModeAuto
+	}
+	token := revealOrRedact(srv.Status.Token)
 	key := securechan.EncodePublicKey(s.masterKey)
 	cmd := fmt.Sprintf("curl -fsSL %s | sh -s -- --master-url %s --token %s --master-key %s --mode %s",
-		shellSingleQuote(master+"/api/remote/install.sh"), shellSingleQuote(master), shellSingleQuote(token), shellSingleQuote(key), shellModeArg(srv.Spec.ConnectionMode))
+		shellSingleQuote(master+"/api/remote/install.sh"), shellSingleQuote(master), shellSingleQuote(token), shellSingleQuote(key), shellModeArg(mode))
+	if mode != core.ModeWebsocket {
+		cmd += " --agent-token " + shellSingleQuote(revealOrRedact(srv.Status.AgentToken))
+		if srv.Spec.ListenPort > 0 {
+			cmd += fmt.Sprintf(" --listen-port %d", srv.Spec.ListenPort)
+		}
+	}
+	if mode == core.ModeAuto || mode == core.ModePull {
+		cmd += " --pull-token " + shellSingleQuote(revealOrRedact(srv.Status.PullToken))
+		if srv.Spec.PullPort > 0 {
+			cmd += fmt.Sprintf(" --pull-port %d", srv.Spec.PullPort)
+		}
+	}
 	return &InstallCommand{Server: srv.Spec.Name, Command: cmd, MasterURL: master, MasterKeyFingerprint: securechan.Fingerprint(s.masterKey)}, nil
 }
 
@@ -262,13 +348,61 @@ func (d directory) Offline(ctx context.Context, id int64, at time.Time) error {
 	return err
 }
 
-// SweepOffline 是内置任务 server_offline_sweep：把心跳超过离线阈值的在线服务器标为离线。
+func (d directory) ClearPending(ctx context.Context, id int64) error {
+	return d.repo.ClearPendingFlags(ctx, id)
+}
+
+func (d directory) Target(ctx context.Context, id int64) (agentconn.TargetInfo, bool, error) {
+	srv, err := d.repo.ByID(ctx, id)
+	if errors.Is(err, core.ErrNotFound) {
+		return agentconn.TargetInfo{}, false, nil
+	}
+	if err != nil {
+		return agentconn.TargetInfo{}, false, err
+	}
+	var ipv4 string
+	if srv.Status.IPAddress != nil {
+		ipv4 = *srv.Status.IPAddress
+	}
+	return agentconn.TargetInfo{
+		ID:             srv.Metadata.ID,
+		Name:           srv.Spec.Name,
+		ConnectionMode: srv.Spec.ConnectionMode,
+		Domain:         srv.Spec.Domain,
+		DomainV6:       srv.Spec.DomainV6,
+		IPAddress:      ipv4,
+		IPAddressV6:    srv.Status.IPAddressV6,
+		ListenPort:     srv.Spec.ListenPort,
+		PullAddress:    srv.Spec.PullAddress,
+		PullAddressV6:  srv.Spec.PullAddressV6,
+		PullPort:       srv.Spec.PullPort,
+		AgentToken:     srv.Status.AgentToken.Reveal(),
+		PullToken:      srv.Status.PullToken.Reveal(),
+	}, true, nil
+}
+
+// SweepOffline 是内置任务 server_offline_sweep：把心跳超过离线阈值的在线服务器标为离线，
+// 并对无活跃 WS 且具备轮询可达地址的 auto 服务器统计失联轮次，满 3 轮置 fallback_to_pull=true。
 func (s *Service) SweepOffline(threshold time.Duration, now func() time.Time) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		at := now().UTC().Truncate(time.Microsecond)
-		n, err := s.repo.SweepOffline(ctx, at.Add(-threshold), at)
+		before := at.Add(-threshold)
+		n, err := s.repo.SweepOffline(ctx, before, at)
 		if err != nil {
 			return "", err
+		}
+		activeWS := map[int64]bool{}
+		if s.conns != nil {
+			for _, id := range s.conns.ConnectedIDs() {
+				activeWS[id] = true
+			}
+		}
+		fallback, err := s.repo.SweepAutoFallback(ctx, before, at, activeWS)
+		if err != nil {
+			return "", err
+		}
+		if fallback > 0 {
+			return fmt.Sprintf("标为离线 %d 台，转入轮询 %d 台", n, fallback), nil
 		}
 		return fmt.Sprintf("标为离线 %d 台", n), nil
 	}

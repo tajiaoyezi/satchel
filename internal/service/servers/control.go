@@ -316,17 +316,41 @@ func (s *Service) traffic(ctx context.Context, inv *command.Invocation) (any, er
 	return v, nil
 }
 
-// trafficState 是拉取与累计在内存里的状态：每台服务器的累计与上次拉取的时间。内置任务的一次运行等全部拉取结束才返回，
-// 下一次运行不会和它重叠，所以同一台服务器不会有两个拉取同时在跑（两份快照乱序收进累计会让累计倒退）。
+// trafficState 是拉取与累计在内存里的状态：每台服务器的累计、上次拉取时间与单台写入串行锁。
+// WS 拉取、Pull 轮询口拉取与 HTTP 主动上报统一经 per-server 锁串行收进累计与核态，避免两份快照乱序写入倒退。
 type trafficState struct {
 	mu       sync.Mutex
 	accs     map[int64]*accumulator
 	lastPull map[int64]time.Time
+	srvLocks map[int64]*sync.Mutex
 }
 
-// CollectTraffic 是内置任务 server_traffic_collect（node-traffic「定时拉取计数快照」）：每次运行对已连接、从没拉过或距上次
-// 拉取满 traffic_collect_interval 的服务器要一次快照，收进累计、写内核状态；一台失败不影响别的，到了间隔再试（失败也记下
-// 拉取时间，坏掉的节点不会每 10 秒报一次）。now 由调用方给，测试里拨钟。
+func (s *Service) trafficLock(id int64) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.srvLocks == nil {
+		s.srvLocks = map[int64]*sync.Mutex{}
+	}
+	l := s.srvLocks[id]
+	if l == nil {
+		l = &sync.Mutex{}
+		s.srvLocks[id] = l
+	}
+	return l
+}
+
+type pullCaller interface {
+	PullTraffic(ctx context.Context, serverID int64, timeout time.Duration) (xrpc.TrafficSnapshot, string, bool, error)
+}
+
+type collectTarget struct {
+	id      int64
+	viaPull bool
+}
+
+// CollectTraffic 是内置任务 server_traffic_collect（node-traffic「定时拉取计数快照」）：每次运行对「活跃 WS 在线」或
+// 「pull 模式 / 处于 fallback_to_pull 的 auto 模式」且从没拉过或距上次拉取满 traffic_collect_interval 的服务器采集一次快照，
+// 收进累计、写内核状态；一台失败不影响别的，到了间隔再试（失败也记下拉取时间，坏掉的节点不会每 10 秒报一次）。
 func (s *Service) CollectTraffic(now func() time.Time) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		st, err := s.settings.Load(ctx)
@@ -335,32 +359,57 @@ func (s *Service) CollectTraffic(now func() time.Time) func(context.Context) (st
 		}
 		interval := st.TrafficCollectInterval()
 		at := now()
-		var due []int64
+
+		wsSet := map[int64]bool{}
+		var targets []collectTarget
+		if s.conns != nil {
+			for _, id := range s.conns.ConnectedIDs() {
+				wsSet[id] = true
+				targets = append(targets, collectTarget{id: id, viaPull: false})
+			}
+		}
+		pollRows, err := s.repo.PollTargets(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, srv := range pollRows {
+			if !wsSet[srv.Metadata.ID] {
+				targets = append(targets, collectTarget{id: srv.Metadata.ID, viaPull: true})
+			}
+		}
+
+		var due []collectTarget
 		s.mu.Lock()
-		for _, id := range s.conns.ConnectedIDs() {
-			if last, ok := s.lastPull[id]; !ok || at.Sub(last) >= interval {
-				due = append(due, id)
-				s.lastPull[id] = at
+		for _, t := range targets {
+			if last, ok := s.lastPull[t.id]; !ok || at.Sub(last) >= interval {
+				due = append(due, t)
+				s.lastPull[t.id] = at
 			}
 		}
 		s.mu.Unlock()
+
 		var (
 			wg           sync.WaitGroup
 			mu           sync.Mutex
 			pulled, fail int
 			sem          = make(chan struct{}, collectParallel)
 		)
-		for _, id := range due {
+		for _, t := range due {
 			wg.Add(1)
 			sem <- struct{}{}
 			go func() {
 				defer func() { <-sem; wg.Done() }()
-				err := s.collectOne(ctx, id, now)
+				var cerr error
+				if t.viaPull {
+					cerr = s.collectOnePull(ctx, t.id, now)
+				} else {
+					cerr = s.collectOne(ctx, t.id, now)
+				}
 				mu.Lock()
 				defer mu.Unlock()
-				if err != nil {
+				if cerr != nil {
 					fail++
-					s.logger.Warn("拉取流量快照失败", "server_id", id, "err", err)
+					s.logger.Warn("拉取流量快照失败", "server_id", t.id, "pull", t.viaPull, "err", cerr)
 					return
 				}
 				pulled++
@@ -371,7 +420,7 @@ func (s *Service) CollectTraffic(now func() time.Time) func(context.Context) (st
 	}
 }
 
-// collectOne 向一台服务器要快照、收进累计并写内核状态。
+// collectOne 向一台服务器经 Call（WS/管理口）要快照并并入累计。
 func (s *Service) collectOne(ctx context.Context, id int64, now func() time.Time) error {
 	raw, err := s.conns.Call(ctx, id, xrpc.MethodTrafficSnapshot, nil, callTimeout)
 	if err != nil {
@@ -381,6 +430,31 @@ func (s *Service) collectOne(ctx context.Context, id int64, now func() time.Time
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		return fmt.Errorf("快照解不开：%w", err)
 	}
+	return s.IngestSnapshot(ctx, id, snap, now())
+}
+
+func (s *Service) collectOnePull(ctx context.Context, id int64, now func() time.Time) error {
+	pc, ok := s.conns.(pullCaller)
+	if !ok {
+		return agentconn.ErrOffline
+	}
+	snap, host, v6, err := pc.PullTraffic(ctx, id, callTimeout)
+	if err != nil {
+		return err
+	}
+	at := now()
+	if err := s.IngestSnapshot(ctx, id, snap, at); err != nil {
+		return err
+	}
+	return s.repo.MarkPullSuccess(ctx, id, host, v6, at)
+}
+
+// IngestSnapshot 将 WS 拉取、Pull 拉取或 HTTP 上报的流量快照按单服务器串行化规则合并进累计器并更新内核状态。
+func (s *Service) IngestSnapshot(ctx context.Context, id int64, snap xrpc.TrafficSnapshot, at time.Time) error {
+	l := s.trafficLock(id)
+	l.Lock()
+	defer l.Unlock()
+
 	// 先读起点再把快照收进累计（M-10.1）：读起点失败直接返回，不推进累计器，避免既报错又吞掉首份快照。
 	s.mu.Lock()
 	a := s.accs[id]
@@ -404,7 +478,7 @@ func (s *Service) collectOne(ctx context.Context, id int64, now func() time.Time
 	if !a.based {
 		a.bootBase, a.based = bootBase, true
 	}
-	a.restarts += int64(a.add(snap, now()))
+	a.restarts += int64(a.add(snap, at))
 	bootCount := a.bootBase + a.restarts
 	s.mu.Unlock()
 	version := snap.KernelVersion

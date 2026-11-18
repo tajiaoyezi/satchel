@@ -44,6 +44,7 @@ func TestServersSkillMentions(t *testing.T) {
 			continue
 		}
 		for _, want := range []string{"satchel server add", "satchel server install-command", "satchel server list", "satchel server get", "settings master-url set",
+			"satchel server token show", "satchel server token rotate", "satchel server token revoke", "secrets", "permission",
 			"satchel server limit set", "satchel server limit clear", "satchel server kick", "satchel server connections", "satchel server traffic",
 			"设成 0 与撤掉不是一回事", "satchel server restart-kernel", "已有连接会断开", "重启类危险操作"} {
 			if !strings.Contains(s.Content, want) {
@@ -93,8 +94,8 @@ func TestCurrentCommandsCovered(t *testing.T) {
 			visible++
 		}
 	}
-	if visible != 67 || !used["overview"] || !used["token create"] || !used["serve"] {
-		t.Fatalf("应当覆盖 67 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
+	if visible != 70 || !used["overview"] || !used["token create"] || !used["serve"] {
+		t.Fatalf("应当覆盖 70 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
 	}
 	extra := command.MustNew(append(command.Catalog().All(), &command.Command{Path: []string{"demo", "ping"}, Summary: "测试", Class: command.ClassRead})...)
 	if missing := Coverage(extra, refs); strings.Join(missing, ",") != "demo ping" {

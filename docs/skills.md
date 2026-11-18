@@ -66,6 +66,9 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `server limit set` | `satchel-servers` |
 | `server list` | `satchel-servers` |
 | `server restart-kernel` | `satchel-servers` |
+| `server token revoke` | `satchel-servers` |
+| `server token rotate` | `satchel-servers` |
+| `server token show` | `satchel-servers` |
 | `server traffic` | `satchel-servers` |
 | `settings gates set` | `satchel-settings`、`satchel-troubleshoot` |
 | `settings image upload` | `satchel-settings` |

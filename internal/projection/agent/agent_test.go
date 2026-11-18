@@ -1,16 +1,25 @@
 package agent
 
 import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/satchel/satchel/internal/base/agentconn"
 	"github.com/satchel/satchel/pkg/release"
 	"github.com/satchel/satchel/pkg/securechan"
+	"github.com/satchel/satchel/pkg/xrpc"
 )
 
 func render(t *testing.T) (ed25519.PublicKey, string) {
@@ -74,5 +83,78 @@ func TestScriptChecksFingerprint(t *testing.T) {
 	out, _ = run("--master-url", "https://p.example.com", "--token", "t", "--master-key", securechan.EncodePublicKey(pub), "--mode", "websocket")
 	if !strings.Contains(out, "主控公钥指纹核对通过") {
 		t.Fatalf("对的公钥应当过指纹这一步：%s", out)
+	}
+	out, _ = run("--master-url", "https://p.example.com", "--token", "t", "--agent-token", "a", "--pull-token", "p",
+		"--listen-port", "24889", "--pull-port", "24890", "--master-key", securechan.EncodePublicKey(pub), "--mode", "auto")
+	if !strings.Contains(out, "主控公钥指纹核对通过") {
+		t.Fatalf("带四模式与端口参数时应当能解析并过指纹检查：%s", out)
+	}
+}
+
+type routeTestDir struct{}
+
+func (routeTestDir) Lookup(_ context.Context, tok string) (agentconn.Node, bool, error) {
+	return agentconn.Node{ID: 1, Name: "hk-1"}, tok == "tok", nil
+}
+func (routeTestDir) Online(context.Context, int64, string, bool, time.Time, time.Time) error {
+	return nil
+}
+func (routeTestDir) Offline(context.Context, int64, time.Time) error { return nil }
+
+func TestHandlerHTTPRoutesAndMethodChecks(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	conns := agentconn.New(agentconn.Config{Identity: priv, Directory: routeTestDir{}})
+	h := NewHandler(conns, Script(pub, release.PublicKeys), http.NotFoundHandler())
+
+	// GET 到 POST-only 接口返回 400 并带 Allow: POST。
+	for _, p := range []string{HandshakePath, RPCPath} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if rec.Code != http.StatusBadRequest || rec.Header().Get("Allow") != http.MethodPost {
+			t.Fatalf("GET %s 应当拒绝并带 Allow=POST：%d %s", p, rec.Code, rec.Header().Get("Allow"))
+		}
+	}
+
+	// 无会话 POST /api/remote/rpc 回 412。
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, RPCPath, bytes.NewReader([]byte(`{}`))))
+	if rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("缺会话应当回 412，得到 %d", rec.Code)
+	}
+
+	// 完整握手 + 加密 heartbeat RPC。
+	ephPriv, _ := ecdh.X25519().GenerateKey(rand.Reader)
+	ephPub := ephPriv.PublicKey().Bytes()
+	hsBody, _ := json.Marshal(xrpc.HTTPHandshakeReq{AgentEphemeral: ephPub})
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, HandshakePath, bytes.NewReader(hsBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("握手失败：%d %s", rec.Code, rec.Body.String())
+	}
+	var hs xrpc.HTTPHandshakeResp
+	_ = json.Unmarshal(rec.Body.Bytes(), &hs)
+	if !securechan.VerifyHandshake(pub, ephPub, hs.MasterEphemeral, hs.Signature) {
+		t.Fatal("握手签名无效")
+	}
+	mPub, _ := ecdh.X25519().NewPublicKey(hs.MasterEphemeral)
+	shared, _ := ephPriv.ECDH(mPub)
+	sess, _ := securechan.DeriveSession(shared, ephPub, hs.MasterEphemeral, false)
+
+	plain, _ := json.Marshal(xrpc.AgentHTTPRPC{Method: xrpc.HTTPRPCMethodHeartbeat, Token: "tok", ControlProtocol: xrpc.ControlProtocol})
+	env, _ := sess.Encrypt(plain)
+	rpcReq := httptest.NewRequest(http.MethodPost, RPCPath, bytes.NewReader(env))
+	rpcReq.Header.Set(securechan.HeaderSession, hs.SessionID)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, rpcReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("RPC 失败：%d %s", rec.Code, rec.Body.String())
+	}
+	dec, err := sess.Decrypt(rec.Body.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rep xrpc.AgentHTTPRPCReply
+	if err := json.Unmarshal(dec, &rep); err != nil || !rep.OK {
+		t.Fatalf("加密回复应当成功：%+v %v", rep, err)
 	}
 }

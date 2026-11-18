@@ -14,6 +14,7 @@ const (
 	MethodConnectionsKick = "connections.kick" // ConnectionsKickParams → ConnectionsKicked
 	MethodTrafficSnapshot = "traffic.snapshot" // 无参数 → TrafficSnapshot
 	MethodKernelRestart   = "kernel.restart"   // 无参数 → KernelRestarted
+	MethodTokenRotate     = "token.rotate"     // TokenRotateParams → TokenRotateAck
 )
 
 // 限速来源：每份「入站 × 凭据」三份，生效值取已设且大于 0 的那几份里最小的一个（技术方案第 10 章）。
@@ -121,4 +122,16 @@ type KernelRestarted struct {
 	Version   string     `json:"version,omitempty"`
 	StartedAt *time.Time `json:"started_at,omitempty"`
 	Inbounds  []string   `json:"inbounds"`
+}
+
+// TokenRotateParams 是 token.rotate 的参数：非空字段表示需要原子写进节点配置文件的对应新凭据。
+type TokenRotateParams struct {
+	Token      string `json:"token,omitempty"`
+	AgentToken string `json:"agent_token,omitempty"`
+	PullToken  string `json:"pull_token,omitempty"`
+}
+
+// TokenRotateAck 是 token.rotate 原子落盘后的确认回复。
+type TokenRotateAck struct {
+	UpdatedAt time.Time `json:"updated_at"`
 }

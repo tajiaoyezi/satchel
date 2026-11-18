@@ -36,6 +36,7 @@ import (
 	"github.com/satchel/satchel/internal/service/schedule"
 	"github.com/satchel/satchel/internal/service/security"
 	"github.com/satchel/satchel/internal/service/servers"
+	"github.com/satchel/satchel/pkg/xrpc"
 )
 
 // master-scheduler「PostgreSQL 下没有检查点任务」与「列出任务」：SQLite 下八个，PostgreSQL 下没有 db_checkpoint；每个都能跑一次。
@@ -165,6 +166,59 @@ func TestServerOfflineSweep(t *testing.T) {
 		}
 		if s, _ := repo.ByName(ctx, "fresh"); s.Status.Status != coreservers.StatusConnected {
 			t.Fatalf("阈值之内的应当还在线：%+v", s.Status)
+		}
+	})
+}
+
+type pullCollectorConns struct {
+	noConns
+	pulled int
+}
+
+func (p *pullCollectorConns) PullTraffic(context.Context, int64, time.Duration) (xrpc.TrafficSnapshot, string, bool, error) {
+	p.pulled++
+	return xrpc.TrafficSnapshot{
+		BootID: "b1", Generation: 1, At: time.Now().UTC(), KernelRunning: true, KernelVersion: "1.14.4",
+	}, "198.51.100.8", false, nil
+}
+
+// master-scheduler「auto 失联触发轮询回退并在 poll 任务中接管采集」：连续 3 轮无心跳自动置 fallback_to_pull=true 后被 server_traffic_collect 接管。
+func TestServerAutoFallbackAndPollCollect(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		st := store.New(bdb, schema.Default())
+		settingsRepo := coresettings.New(bdb, st, schema.Default())
+		if err := settingsRepo.EnsureSingleton(ctx); err != nil {
+			t.Fatal(err)
+		}
+		repo := coreservers.New(bdb, st)
+		srv, err := repo.CreateWith(ctx, coreservers.CreateParams{Name: "hk-auto", Mode: coreservers.ModeAuto, PullAddress: "198.51.100.8"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		svc := servers.New(repo, settingsRepo, nil, nil)
+		pc := &pullCollectorConns{}
+		svc.SetConns(pc)
+
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		_ = repo.MarkOnline(ctx, srv.Metadata.ID, "198.51.100.8", false, time.Time{}, now.Add(-2*time.Minute))
+		sweep := svc.SweepOffline(90*time.Second, func() time.Time { return now })
+		for round := 1; round <= 3; round++ {
+			detail, err := sweep(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if round == 3 && !strings.Contains(detail, "转入轮询 1 台") {
+				t.Fatalf("第 3 轮应当提示转入轮询：%q", detail)
+			}
+			now = now.Add(30 * time.Second)
+		}
+		if cur, _ := repo.ByID(ctx, srv.Metadata.ID); !cur.Status.FallbackToPull {
+			t.Fatalf("连续 3 轮后 fallback_to_pull 应当为 true：%+v", cur.Status)
+		}
+		collect := svc.CollectTraffic(func() time.Time { return now })
+		if detail, err := collect(ctx); err != nil || detail != "拉了 1 台、失败 0 台" || pc.pulled != 1 {
+			t.Fatalf("应当从只读轮询口采集 1 台：%q pulled=%d err=%v", detail, pc.pulled, err)
 		}
 	})
 }

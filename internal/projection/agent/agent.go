@@ -14,12 +14,16 @@ import (
 	"github.com/satchel/satchel/pkg/securechan"
 )
 
-// Prefix 是节点通道在顶层 mux 上的挂载点，归三道门表的机器入口（master-access-gates）。本 change 只有 websocket 一种接法。
+// Prefix 是节点通道在顶层 mux 上的挂载点，归三道门表的机器入口（master-access-gates）。
 const Prefix = "/api/remote/"
 
 const (
-	// WSPath 是节点的 websocket 连接（node-channel）。
+	// WSPath 是节点的 WebSocket 通道（node-channel）。
 	WSPath = Prefix + "ws"
+	// HandshakePath 是节点的 HTTP 双向加密握手入口（node-channel）。
+	HandshakePath = Prefix + "handshake"
+	// RPCPath 是节点的 HTTP 双向加密心跳与流量上报入口（node-channel）。
+	RPCPath = Prefix + "rpc"
 	// InstallPath 是节点的安装脚本（node-pairing「主控提供的安装脚本」）。
 	InstallPath = Prefix + "install.sh"
 )
@@ -51,6 +55,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case WSPath:
 		h.serveWS(w, r)
+	case HandshakePath:
+		h.serveHandshake(w, r)
+	case RPCPath:
+		h.serveRPC(w, r)
 	case InstallPath:
 		h.serveScript(w, r)
 	default:
@@ -58,14 +66,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func methodNotAllowed(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Allow", http.MethodGet)
-	rest.WriteError(w, v1.Newf(v1.CodeBadRequest, "%s 只接受 GET，收到 %s", r.URL.Path, r.Method))
+func methodNotAllowed(w http.ResponseWriter, r *http.Request, allow string) {
+	w.Header().Set("Allow", allow)
+	rest.WriteError(w, v1.Newf(v1.CodeBadRequest, "%s 只接受 %s，收到 %s", r.URL.Path, allow, r.Method))
 }
 
 func (h *Handler) serveScript(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		methodNotAllowed(w, r)
+		methodNotAllowed(w, r, "GET, HEAD")
 		return
 	}
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
@@ -76,10 +84,26 @@ func (h *Handler) serveScript(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(h.script)
 }
 
+func (h *Handler) serveHandshake(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, r, http.MethodPost)
+		return
+	}
+	h.conns.ServeHandshake(w, r, v1.RemoteFrom(r.Context()).IP)
+}
+
+func (h *Handler) serveRPC(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, r, http.MethodPost)
+		return
+	}
+	h.conns.ServeRPC(w, r, v1.RemoteFrom(r.Context()).IP)
+}
+
 // serveWS 升级成 websocket 并交给连接管理；来源 IP 因连续认证失败被暂时拒绝时，升级之前回 429（node-channel「节点认证」）。
 func (h *Handler) serveWS(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		methodNotAllowed(w, r)
+		methodNotAllowed(w, r, http.MethodGet)
 		return
 	}
 	ip := v1.RemoteFrom(r.Context()).IP

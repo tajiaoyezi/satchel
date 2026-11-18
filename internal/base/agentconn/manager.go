@@ -10,32 +10,37 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/satchel/satchel/internal/base/db"
-	"github.com/satchel/satchel/internal/base/selfupdate"
+	"github.com/satchel/satchel/pkg/securechan"
 	"github.com/satchel/satchel/pkg/xrpc"
 )
 
-// 照 mmwx 的几个时间常数（m2-02 design 第 4、5 条）。
+// 照 mmwx 的几个时间常数（m2-02 design 第 4、5 条）与 m2-06 轮换/冲突窗口常数。
 const (
 	// DevVersion 是开发构建的版本号：主控是开发构建时不比较节点要求的最低主控版本。
 	DevVersion = "0.0.0-dev"
 
-	defaultAuthTimeout  = 10 * time.Second // 连上之后要在这么久之内完成握手与认证
-	defaultPingInterval = 30 * time.Second
-	defaultPingTimeout  = 10 * time.Second
-	defaultFailWindow   = 60 * time.Second // 同一来源 IP 在这段时间里认证失败 failLimit 次
-	defaultFailBlock    = 60 * time.Second // 就在之后这段时间里拒绝它的新连接
-	failLimit           = 3
-	writeTimeout        = 10 * time.Second
+	defaultAuthTimeout      = 10 * time.Second // 连上之后要在这么久之内完成握手与认证
+	defaultPingInterval     = 30 * time.Second
+	defaultPingTimeout      = 10 * time.Second
+	defaultFailWindow       = 60 * time.Second // 同一来源 IP 在这段时间里认证失败 failLimit 次
+	defaultFailBlock        = 60 * time.Second // 就在之后这段时间里拒绝它的新连接
+	defaultRotateWindow     = 30 * time.Second // token 轮换期间主控内存保留旧 token 的双凭据窗口
+	defaultConflictWindow   = 60 * time.Second // 活跃或最近心跳在此时间内，不同 IP 同 token 判定冲突
+	defaultConflictCooldown = 60 * time.Second // 冲突触发后冷却窗口
+	defaultHTTPDialTimeout  = 5 * time.Second
+	failLimit               = 3
+	writeTimeout            = 10 * time.Second
 	// preAuthReadLimit 是握手与认证阶段一帧的上限：还没认出是谁的连接，不让它让主控备下大缓冲；认证成功后放开到 xrpc.ReadLimit。
 	preAuthReadLimit = 64 << 10
 )
 
-// ErrOffline 是要请求的服务器现在没有连接。
+// ErrOffline 是要请求的服务器现在没有可用通道或不可达。
 var ErrOffline = errors.New("服务器不在线")
 
 // errClosing 是 Shutdown 已经开始：认证完的连接不再登记。
@@ -50,12 +55,39 @@ type Node struct {
 	Name string
 }
 
+// TargetInfo 是主控反向请求节点加密 HTTP 管理口或只读轮询口所需的寻址与凭据信息。
+type TargetInfo struct {
+	ID             int64
+	Name           string
+	ConnectionMode string
+	Domain         string
+	DomainV6       string
+	IPAddress      string
+	IPAddressV6    string
+	ListenPort     int64
+	PullAddress    string
+	PullAddressV6  string
+	PullPort       int64
+	AgentToken     string
+	PullToken      string
+}
+
 // Directory 是连接管理要用的服务器仓储（由上层把 core/servers 接进来，base 层不引用 core）。
-// Lookup 按 token 找服务器，找不到时 ok 为假；Online 记一次上线或心跳；Offline 把在线的服务器标为离线。
+// Lookup 按当前库里有效 token 找服务器，找不到时 ok 为假；Online 记一次上线或心跳；Offline 把在线的服务器标为离线。
 type Directory interface {
 	Lookup(ctx context.Context, token string) (node Node, ok bool, err error)
 	Online(ctx context.Context, id int64, ip string, v6 bool, boot, at time.Time) error
 	Offline(ctx context.Context, id int64, at time.Time) error
+}
+
+// PendingClearer 是 Directory 的可选扩展：当节点凭当前有效 token 认证或心跳时清除 rotation_pending / revoke_pending。
+type PendingClearer interface {
+	ClearPending(ctx context.Context, id int64) error
+}
+
+// TargetDirectory 是 Directory 的可选扩展：按 serverID 读取管理口与轮询口反向请求所需寻址与凭据。
+type TargetDirectory interface {
+	Target(ctx context.Context, id int64) (TargetInfo, bool, error)
 }
 
 // Config 是连接管理的依赖。时间常数为零时用默认值（测试里缩短）。
@@ -70,17 +102,24 @@ type Config struct {
 	Version string
 	Logger  *slog.Logger
 	Now     func() time.Time
+	// OnTraffic 在节点经加密 HTTP 上报 traffic 时回调，将快照汇入与 WS/Pull 相同的累计入口。
+	OnTraffic func(ctx context.Context, serverID int64, snap xrpc.TrafficSnapshot) error
 
-	AuthTimeout  time.Duration
-	PingInterval time.Duration
-	PingTimeout  time.Duration
-	FailWindow   time.Duration
-	FailBlock    time.Duration
+	AuthTimeout      time.Duration
+	PingInterval     time.Duration
+	PingTimeout      time.Duration
+	FailWindow       time.Duration
+	FailBlock        time.Duration
+	RotateWindow     time.Duration
+	ConflictWindow   time.Duration
+	ConflictCooldown time.Duration
+	SessionTTL       time.Duration
+	HTTPDialTimeout  time.Duration
 }
 
-// Manager 管所有节点的连接：握手、认证、连接表、心跳、ping 与向节点发请求（node-channel）。
+// Manager 管所有节点的连接与加密 HTTP 双向通道：握手、认证、连接表、双凭据窗口、冲突锁定、心跳与向节点发请求（node-channel）。
 //
-// 一台服务器的在线状态只由它的当前连接写：登记并写上线、写心跳、摘掉并写离线这三件事在这台服务器的锁里排队，
+// 一台服务器的在线状态只由它的当前连接（或持有服务器锁的 HTTP 上报）写：登记并写上线、写心跳、摘掉并写离线这三件事在这台服务器的锁里排队，
 // 进锁之后再核对连接是否还是当前连接——旧连接的离线与心跳不会盖掉新连接写下的状态。持锁时的数据库写入都有期限，
 // 等锁的认证连接照样受认证期限约束。
 type Manager struct {
@@ -88,14 +127,20 @@ type Manager struct {
 	base    context.Context    // Shutdown 时取消：每条连接的 ctx 都跟着它，进行中的状态写入随之取消
 	stopAll context.CancelFunc // 取消 base
 
-	mu        sync.Mutex
-	conns     map[int64]*session
-	locks     map[int64]serverLock // 每台服务器一把（数量与服务器一样多，不回收）
-	fails     map[string]*failRecord
-	lastSweep time.Time
-	live      map[*websocket.Conn]struct{} // 所有正在跑的 Serve 的连接，含还没认证的：Shutdown 全部断开
-	closing   bool                         // Shutdown 开始之后为真：新连接直接断开，认证完的连接不再登记
-	active    sync.WaitGroup               // 正在跑的 Serve：Shutdown 等它们把离线写完；只在 closing 为假时加
+	uplinkSessions *securechan.SessionCache
+	nodeClient     *nodeClient
+
+	mu             sync.Mutex
+	conns          map[int64]*session
+	locks          map[int64]serverLock // 每台服务器一把（数量与服务器一样多，不回收）
+	fails          map[string]*failRecord
+	rotations      map[string]*rotateWindow
+	agentRotations map[int64]*agentRotateWindow
+	conflicts      map[int64]*conflictState
+	lastSweep      time.Time
+	live           map[*websocket.Conn]struct{} // 所有正在跑的 Serve 的连接，含还没认证的：Shutdown 全部断开
+	closing        bool                         // Shutdown 开始之后为真：新连接直接断开，认证完的连接不再登记
+	active         sync.WaitGroup               // 正在跑的 Serve：Shutdown 等它们把离线写完；只在 closing 为假时加
 }
 
 // serverLock 是一台服务器的锁：容量为 1 的 channel，拿锁时可以带期限。
@@ -119,6 +164,8 @@ type session struct {
 	ip           string
 	v6           bool
 	agentVersion string
+	isCurrentTok bool
+	revoked      atomic.Bool
 }
 
 type failRecord struct {
@@ -140,15 +187,39 @@ func New(cfg Config) *Manager {
 	for _, d := range []struct {
 		p   *time.Duration
 		def time.Duration
-	}{{&cfg.AuthTimeout, defaultAuthTimeout}, {&cfg.PingInterval, defaultPingInterval}, {&cfg.PingTimeout, defaultPingTimeout},
-		{&cfg.FailWindow, defaultFailWindow}, {&cfg.FailBlock, defaultFailBlock}, {&cfg.OfflineThreshold, db.DefaultOfflineThreshold}} {
+	}{
+		{&cfg.AuthTimeout, defaultAuthTimeout},
+		{&cfg.PingInterval, defaultPingInterval},
+		{&cfg.PingTimeout, defaultPingTimeout},
+		{&cfg.FailWindow, defaultFailWindow},
+		{&cfg.FailBlock, defaultFailBlock},
+		{&cfg.OfflineThreshold, db.DefaultOfflineThreshold},
+		{&cfg.RotateWindow, defaultRotateWindow},
+		{&cfg.ConflictWindow, defaultConflictWindow},
+		{&cfg.ConflictCooldown, defaultConflictCooldown},
+		{&cfg.SessionTTL, securechan.DefaultSessionTTL},
+		{&cfg.HTTPDialTimeout, defaultHTTPDialTimeout},
+	} {
 		if *d.p <= 0 {
 			*d.p = d.def
 		}
 	}
 	base, stopAll := context.WithCancel(context.Background())
-	return &Manager{cfg: cfg, base: base, stopAll: stopAll, conns: map[int64]*session{}, locks: map[int64]serverLock{},
-		fails: map[string]*failRecord{}, live: map[*websocket.Conn]struct{}{}}
+	m := &Manager{
+		cfg:            cfg,
+		base:           base,
+		stopAll:        stopAll,
+		uplinkSessions: securechan.NewSessionCache(securechan.SessionCacheConfig{TTL: cfg.SessionTTL, Now: cfg.Now}),
+		conns:          map[int64]*session{},
+		locks:          map[int64]serverLock{},
+		fails:          map[string]*failRecord{},
+		rotations:      map[string]*rotateWindow{},
+		agentRotations: map[int64]*agentRotateWindow{},
+		conflicts:      map[int64]*conflictState{},
+		live:           map[*websocket.Conn]struct{}{},
+	}
+	m.nodeClient = newNodeClient(m)
+	return m
 }
 
 func (m *Manager) now() time.Time { return m.cfg.Now().UTC().Truncate(time.Microsecond) }
@@ -286,34 +357,31 @@ func (m *Manager) authenticate(ctx context.Context, conn *xrpc.Conn, ip string) 
 		conn.Close(websocket.StatusPolicyViolation, "bad auth")
 		return nil, 0, false
 	}
-	node, found, err := m.cfg.Directory.Lookup(ctx, auth.Token)
-	if err != nil {
-		m.cfg.Logger.Warn("按 token 查服务器失败", "err", err)
-		return fail(websocket.StatusInternalError, xrpc.AuthUnavailable, "主控查询服务器失败，稍后重试")
+	node, isCurrent, reason, errMsg := m.authorizeNode(ctx, ip, auth.Token, auth.ControlProtocol, auth.MinMasterVersion)
+	if reason != "" {
+		code := websocket.StatusPolicyViolation
+		if reason == xrpc.AuthUnavailable {
+			code = websocket.StatusInternalError
+		}
+		return fail(code, reason, errMsg)
 	}
-	if !found {
-		// 只有 token 不对才计入来源 IP 的失败次数：版本不兼容是配置问题，不是猜 token。
-		m.recordFailure(ip)
-		m.cfg.Logger.Warn("节点认证失败：token 无效", "ip", ip)
-		return fail(websocket.StatusPolicyViolation, xrpc.AuthInvalidToken, "token 无效")
+	s := &session{
+		node:         node,
+		conn:         conn,
+		caller:       xrpc.NewCaller(),
+		ip:           ip,
+		v6:           isV6(ip),
+		agentVersion: auth.AgentVersion,
+		isCurrentTok: isCurrent,
 	}
-	if auth.ControlProtocol > xrpc.ControlProtocol {
-		m.cfg.Logger.Warn("节点认证失败：agent 比主控新", "server", node.Name, "agent_protocol", auth.ControlProtocol)
-		return fail(websocket.StatusPolicyViolation, xrpc.AuthIncompatible, fmt.Sprintf(
-			"agent 的控制协议号 %d 比主控的 %d 新：agent 不能先于主控升级，先升级主控", auth.ControlProtocol, xrpc.ControlProtocol))
-	}
-	if min := auth.MinMasterVersion; min != "" && !selfupdate.IsDev(m.cfg.Version) &&
-		(!selfupdate.Valid(min) || selfupdate.Compare(m.cfg.Version, min) < 0) {
-		m.cfg.Logger.Warn("节点认证失败：主控版本太旧或节点要求非法版本", "server", node.Name, "master", m.cfg.Version, "min", min)
-		return fail(websocket.StatusPolicyViolation, xrpc.AuthIncompatible, fmt.Sprintf(
-			"这个 agent 要求主控至少是 %s，当前主控是 %s：agent 不能先于主控升级，先升级主控", min, m.cfg.Version))
-	}
-	v6 := false
-	if p := net.ParseIP(ip); p != nil && p.To4() == nil {
-		v6 = true
-	}
-	s := &session{node: node, conn: conn, caller: xrpc.NewCaller(), ip: ip, v6: v6, agentVersion: auth.AgentVersion}
 	return s, m.heartbeatInterval(ctx), true
+}
+
+func isV6(ip string) bool {
+	if p := net.ParseIP(ip); p != nil && p.To4() == nil {
+		return true
+	}
+	return false
 }
 
 // heartbeatInterval 是下发给节点的心跳间隔：系统设置的值，最多是离线阈值的三分之一——心跳一直比扫描用的阈值密得多，
@@ -383,6 +451,11 @@ func (m *Manager) activate(ctx context.Context, s *session, interval time.Durati
 		return errClosing
 	}
 	err := m.cfg.Directory.Online(ctx, s.node.ID, s.ip, s.v6, time.Time{}, m.now())
+	if err == nil && s.isCurrentTok {
+		if clearErr := m.clearPending(ctx, s.node.ID); clearErr != nil {
+			m.cfg.Logger.Warn("清除待确认标志失败", "server", s.node.Name, "err", clearErr)
+		}
+	}
 	if err == nil {
 		if werr := s.conn.Write(ctx, xrpc.TypeAuthResult, xrpc.AuthResult{OK: true, HeartbeatInterval: int(interval / time.Second)}); werr != nil {
 			err = fmt.Errorf("%w：%w", errReply, werr)
@@ -404,6 +477,7 @@ func (m *Manager) activate(ctx context.Context, s *session, interval time.Durati
 	}
 	old := m.conns[s.node.ID]
 	m.conns[s.node.ID] = s
+	m.recordActiveIPLocked(s.node.ID, s.ip, m.cfg.Now())
 	m.mu.Unlock()
 	if old != nil {
 		m.cfg.Logger.Info("同一台服务器的新连接取代旧连接", "server", s.node.Name, "old_ip", old.ip, "new_ip", s.ip)
@@ -422,9 +496,18 @@ func (m *Manager) heartbeat(ctx context.Context, s *session, boot time.Time) err
 	if !m.current(s) {
 		return nil
 	}
+	m.touchConflict(s.node.ID, s.ip)
 	wctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
-	return m.cfg.Directory.Online(wctx, s.node.ID, s.ip, s.v6, boot, m.now())
+	if err := m.cfg.Directory.Online(wctx, s.node.ID, s.ip, s.v6, boot, m.now()); err != nil {
+		return err
+	}
+	if s.isCurrentTok {
+		if err := m.clearPending(wctx, s.node.ID); err != nil {
+			m.cfg.Logger.Warn("清除待确认标志失败", "server", s.node.Name, "err", err)
+		}
+	}
+	return nil
 }
 
 // deactivate 在这台服务器的锁里：s 还是当前连接时把它摘掉、把服务器标为离线并返回 true；已被新连接取代时返回 false、不写。
@@ -519,34 +602,46 @@ func (m *Manager) pingLoop(ctx context.Context, s *session) {
 	}
 }
 
-// Call 向一台服务器发请求并等回复；它没有连接时立即返回 ErrOffline。timeout 为 0 时用 xrpc.DefaultTimeout。
+// Call 向一台服务器发请求并等回复：
+//  1. 若有活跃 WebSocket 连接，优先经 WS 下发；
+//  2. 否则查寻址配置（mode 为 http/pull/auto 且已知可达地址与 agent_token），按 domain -> ip_address -> domain_v6 -> ip_address_v6
+//     搭配 listen_port（默认 23889）经加密 HTTP 管理口发送；
+//  3. 均不可达时立即返回 ErrOffline。timeout 为 0 时用 xrpc.DefaultTimeout。
 func (m *Manager) Call(ctx context.Context, serverID int64, method string, params any, timeout time.Duration) (json.RawMessage, error) {
 	m.mu.Lock()
 	s := m.conns[serverID]
 	m.mu.Unlock()
-	if s == nil {
-		return nil, ErrOffline
+	if s != nil && !s.revoked.Load() {
+		return s.caller.Call(ctx, s.conn, method, params, timeout)
 	}
-	return s.caller.Call(ctx, s.conn, method, params, timeout)
+	return m.nodeClient.CallManage(ctx, serverID, method, params, timeout)
 }
 
-// ConnectedIDs 列出现在有连接（已登记）的服务器 id，从小到大。
+// PullTraffic 从指定服务器的只读轮询口（pull_port，默认 23890）拉取一份流量快照，成功时同时返回实际命中的节点地址与是否 IPv6。
+func (m *Manager) PullTraffic(ctx context.Context, serverID int64, timeout time.Duration) (xrpc.TrafficSnapshot, string, bool, error) {
+	return m.nodeClient.PullTraffic(ctx, serverID, timeout)
+}
+
+// ConnectedIDs 列出现在有活跃 WS 连接（已登记且未吊销）的服务器 id，从小到大。
 func (m *Manager) ConnectedIDs() []int64 {
 	m.mu.Lock()
 	ids := make([]int64, 0, len(m.conns))
-	for id := range m.conns {
-		ids = append(ids, id)
+	for id, s := range m.conns {
+		if !s.revoked.Load() {
+			ids = append(ids, id)
+		}
 	}
 	m.mu.Unlock()
 	slices.Sort(ids)
 	return ids
 }
 
-// Connected 报告这台服务器现在有没有连接。
+// Connected 报告这台服务器现在有没有活跃 WS 连接。
 func (m *Manager) Connected(serverID int64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.conns[serverID] != nil
+	s := m.conns[serverID]
+	return s != nil && !s.revoked.Load()
 }
 
 // Shutdown 关掉所有节点连接（含还在握手、认证的），并等各条连接把服务器标为离线（主控停止时、关库之前调用；websocket
@@ -554,6 +649,7 @@ func (m *Manager) Connected(serverID int64) bool {
 // 被取消（不拖到关库之后才落地）。直接断开、不走关闭握手：节点不回应时关闭握手要等 5 秒，主控停止不该被它拖住；
 // 节点看到断开会按退避重连。ctx 到期就不再等，之后可能还有认证失败的回复或关闭握手在后台收尾，它们不写库。
 func (m *Manager) Shutdown(ctx context.Context) {
+	m.nodeClient.CloseIdleConnections()
 	m.mu.Lock()
 	m.closing = true
 	m.stopAll()

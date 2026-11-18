@@ -36,6 +36,7 @@ func TestCatalog(t *testing.T) {
 		"settings set": ClassMasterSettings, "settings rollback": ClassMasterSettings, "settings master-url set": ClassMasterSettings,
 		"settings gates set": ClassMasterSettings, "settings turnstile test": ClassAction, "settings image upload": ClassAction,
 		"server add": ClassConfig, "server install-command": ClassRead, "server list": ClassRead, "server get": ClassRead,
+		"server token show": ClassRead, "server token rotate": ClassAction, "server token revoke": ClassAction,
 		"server limit set": ClassAction, "server limit clear": ClassAction, "server kick": ClassAction,
 		"server connections": ClassRead, "server traffic": ClassRead, "server restart-kernel": ClassAction,
 	}
@@ -70,6 +71,11 @@ func TestCatalog(t *testing.T) {
 	}
 	if c, _ := table.Lookup("server restart-kernel"); c.Danger != v1.DangerRestart || c.Confirm == nil || c.Confirm.Kind != ConfirmObject || c.Confirm.Arg != "name" {
 		t.Errorf("server restart-kernel 应当是重启类、confirm 取 name：%+v", c)
+	}
+	for _, name := range []string{"server token rotate", "server token revoke"} {
+		if c, _ := table.Lookup(name); c.Danger != v1.DangerPermission || c.Confirm == nil || c.Confirm.Kind != ConfirmObject || c.Confirm.Arg != "name" {
+			t.Errorf("%s 应当是权限类、confirm 取 name：%+v", name, c)
+		}
 	}
 	for _, name := range []string{"backup download", "backup restore"} {
 		if c, _ := table.Lookup(name); !c.HumanOnly {

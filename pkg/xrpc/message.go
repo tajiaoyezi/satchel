@@ -66,6 +66,7 @@ const (
 	AuthInvalidToken = "invalid_token" // token 不对
 	AuthIncompatible = "incompatible"  // 控制协议号或版本不兼容
 	AuthUnavailable  = "unavailable"   // 主控暂时出错，稍后重试
+	AuthIPConflict   = "ip_conflict"   // 同一 token 60 秒内已有另一 IP 在使用
 )
 
 // Heartbeat 是节点的心跳：节点进程的启动时间。
@@ -111,8 +112,17 @@ func (e *Error) Error() string { return e.Code + ": " + e.Message }
 // MethodAgentInfo 是节点的 agent.info：回 AgentInfo。
 const MethodAgentInfo = "agent.info"
 
+// MethodAgentHealth 是节点的健康检查方法：回 AgentHealth。
+const MethodAgentHealth = "agent.health"
+
 // AgentInfo 是 agent.info 的结果。
 type AgentInfo struct {
 	AgentVersion    string `json:"agent_version"`
 	ControlProtocol int    `json:"control_protocol"`
+}
+
+// AgentHealth 是 /health 与 agent.health 的非敏感运行态结果。
+type AgentHealth struct {
+	Status string `json:"status"`
+	Mode   string `json:"mode,omitempty"`
 }

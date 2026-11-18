@@ -32,23 +32,44 @@ func TestCreate(t *testing.T) {
 			t.Fatal(err)
 		}
 		tok := s.Status.Token.Reveal()
-		if raw, err := base64.RawURLEncoding.DecodeString(tok); len(tok) != 43 || err != nil || len(raw) != 32 {
-			t.Fatalf("token 应当是 32 字节的 base64url（43 个字符）：%q %v", tok, err)
+		atok := s.Status.AgentToken.Reveal()
+		ptok := s.Status.PullToken.Reveal()
+		for label, v := range map[string]string{"token": tok, "agent_token": atok, "pull_token": ptok} {
+			if raw, err := base64.RawURLEncoding.DecodeString(v); len(v) != 43 || err != nil || len(raw) != 32 {
+				t.Fatalf("%s 应当是 32 字节的 base64url（43 个字符）：%q %v", label, v, err)
+			}
+		}
+		if tok == atok || tok == ptok || atok == ptok {
+			t.Fatalf("三把凭据应当互不相同：%q %q %q", tok, atok, ptok)
 		}
 		if s.Spec.Name != "hk-1" || s.Spec.ConnectionMode != "websocket" || s.Status.Status != StatusPending ||
 			s.Metadata.ResourceVersion != 1 || !s.Spec.Ipv6Enabled || !s.Spec.IncludeInTrafficStats || s.Metadata.ID == 0 {
 			t.Fatalf("新服务器的字段不对：%+v", s)
 		}
 		out, _ := json.Marshal(s)
-		if strings.Contains(string(out), tok) || !strings.Contains(string(out), `"token":"***"`) || s.Metadata.Name != "hk-1" {
-			t.Fatalf("序列化时 token 应当打码：%s", out)
+		for _, v := range []string{tok, atok, ptok} {
+			if strings.Contains(string(out), v) {
+				t.Fatalf("序列化时凭据应当打码：%s", out)
+			}
+		}
+		if !strings.Contains(string(out), `"token":"***"`) || !strings.Contains(string(out), `"agent_token":"***"`) || !strings.Contains(string(out), `"pull_token":"***"`) || s.Metadata.Name != "hk-1" {
+			t.Fatalf("序列化时三把凭据都应当打码：%s", out)
 		}
 		if _, err := r.Create(ctx, "hk-1", "websocket"); v1.AsError(err).Code != v1.CodeNameTaken {
 			t.Fatalf("名字重复应当是 name_taken：%v", err)
 		}
-		other, _ := r.Create(ctx, "hk-2", "websocket")
-		if other.Status.Token.Reveal() == tok {
-			t.Fatal("每台服务器的 token 应当不同")
+		other, _ := r.CreateWith(ctx, CreateParams{
+			Name:          "hk-2",
+			Domain:        "hk2.example.com",
+			DomainV6:      "v6.hk2.example.com",
+			ListenPort:    24889,
+			PullAddress:   "203.0.113.9",
+			PullAddressV6: "2001:db8::9",
+			PullPort:      24890,
+		})
+		if other.Status.Token.Reveal() == tok || other.Spec.ConnectionMode != ModeAuto ||
+			other.Spec.Domain != "hk2.example.com" || other.Spec.ListenPort != 24889 || other.Spec.PullPort != 24890 {
+			t.Fatalf("CreateWith 字段不对：%+v", other)
 		}
 	})
 }
@@ -167,6 +188,109 @@ func TestCoreWrites(t *testing.T) {
 		}
 		if st.Status != StatusConnected || !st.LastHeartbeat.Equal(ts(2)) || got.Metadata.ResourceVersion != 1 {
 			t.Fatalf("不应当碰心跳写的列，也不抬 resourceVersion：%+v rv=%d", st, got.Metadata.ResourceVersion)
+		}
+	})
+}
+
+func TestRotationRevocationAndAutoFallback(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		r, ctx := repo(bdb), context.Background()
+		srv, err := r.CreateWith(ctx, CreateParams{Name: "hk-auto", Mode: ModeAuto, PullAddress: "198.51.100.1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		noAddr, err := r.CreateWith(ctx, CreateParams{Name: "hk-noaddr", Mode: ModeAuto})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pullSrv, err := r.CreateWith(ctx, CreateParams{Name: "hk-pull", Mode: ModePull, PullAddress: "198.51.100.2"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// 凭据轮换 + 回滚 + 确认，全过程不抬 resourceVersion。
+		newTok, newAgent := "newtok0123456789012345678901234567890123456", "newagt0123456789012345678901234567890123456"
+		rot, err := r.BeginRotation(ctx, srv.Metadata.ID, TokensPatch{Token: &newTok, AgentToken: &newAgent}, ts(10))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rot.Metadata.ResourceVersion != 1 || !rot.Status.RotationPending || rot.Status.LastRotatedAt == nil ||
+			rot.Status.Token.Reveal() != newTok || rot.Status.AgentToken.Reveal() != newAgent ||
+			rot.Status.PullToken.Reveal() != srv.Status.PullToken.Reveal() {
+			t.Fatalf("BeginRotation 状态不对：%+v", rot)
+		}
+		if err := r.RollbackRotation(ctx, srv); err != nil {
+			t.Fatal(err)
+		}
+		restored, _ := r.ByID(ctx, srv.Metadata.ID)
+		if restored.Status.RotationPending || restored.Status.Token.Reveal() != srv.Status.Token.Reveal() ||
+			restored.Status.AgentToken.Reveal() != srv.Status.AgentToken.Reveal() {
+			t.Fatalf("RollbackRotation 应当恢复原凭据与标志：%+v", restored)
+		}
+		if _, err := r.BeginRotation(ctx, srv.Metadata.ID, TokensPatch{Token: &newTok}, ts(12)); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.FinishRotation(ctx, srv.Metadata.ID); err != nil {
+			t.Fatal(err)
+		}
+		if afterFinish, _ := r.ByID(ctx, srv.Metadata.ID); afterFinish.Status.RotationPending {
+			t.Fatalf("FinishRotation 应当清除 rotation_pending")
+		}
+
+		// 吊销：立即覆盖且可选置 revoke_pending，ClearPendingFlags 清回 false。
+		revTok := "revtok0123456789012345678901234567890123456"
+		rev, err := r.RevokeTokens(ctx, srv.Metadata.ID, TokensPatch{Token: &revTok}, ts(15), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rev.Status.RevokePending || rev.Status.RotationPending || rev.Status.Token.Reveal() != revTok || rev.Metadata.ResourceVersion != 1 {
+			t.Fatalf("RevokeTokens 状态不对：%+v", rev)
+		}
+		if err := r.ClearPendingFlags(ctx, srv.Metadata.ID); err != nil {
+			t.Fatal(err)
+		}
+		if cleared, _ := r.ByID(ctx, srv.Metadata.ID); cleared.Status.RevokePending || cleared.Status.RotationPending {
+			t.Fatalf("ClearPendingFlags 应当清零待确认标志：%+v", cleared.Status)
+		}
+
+		// auto 回退扫盘：仅无活跃 WS 且有轮询地址的服务器累计；3 轮后转 fallback_to_pull=true；
+		// 轮询采集成功不清除 fallback_to_pull，主动上线心跳后才清零。
+		if targets, err := r.PollTargets(ctx); err != nil || len(targets) != 1 || targets[0].Metadata.ID != pullSrv.Metadata.ID {
+			t.Fatalf("初始 PollTargets 应当只有 hk-pull：%+v err=%v", targets, err)
+		}
+		for round := 1; round <= 2; round++ {
+			n, err := r.SweepAutoFallback(ctx, ts(30), ts(30+round), nil)
+			if err != nil || n != 0 {
+				t.Fatalf("第 %d 轮不应当转入轮询：n=%d err=%v", round, n, err)
+			}
+		}
+		// 若已有活跃 WS 连接则跳过计数。
+		if n, err := r.SweepAutoFallback(ctx, ts(30), ts(33), map[int64]bool{srv.Metadata.ID: true}); err != nil || n != 0 {
+			t.Fatalf("有活跃 WS 不应计数：n=%d err=%v", n, err)
+		}
+		// 第 3 轮触发 fallback_to_pull。
+		if n, err := r.SweepAutoFallback(ctx, ts(30), ts(34), nil); err != nil || n != 1 {
+			t.Fatalf("第 3 轮应当触发 1 台转入轮询：n=%d err=%v", n, err)
+		}
+		if gNoAddr, _ := r.ByID(ctx, noAddr.Metadata.ID); gNoAddr.Status.PushFailCount != 0 || gNoAddr.Status.FallbackToPull {
+			t.Fatalf("没有轮询地址的 auto 不应计数或回退：%+v", gNoAddr.Status)
+		}
+		if targets, err := r.PollTargets(ctx); err != nil || len(targets) != 2 {
+			t.Fatalf("PollTargets 应当包含 hk-auto 与 hk-pull：%d err=%v", len(targets), err)
+		}
+		if err := r.MarkPullSuccess(ctx, srv.Metadata.ID, "198.51.100.1", false, ts(40)); err != nil {
+			t.Fatal(err)
+		}
+		pulled, _ := r.ByID(ctx, srv.Metadata.ID)
+		if pulled.Status.Status != StatusConnected || !pulled.Status.FallbackToPull || pulled.Status.LastPullAt == nil || !pulled.Status.LastPullAt.Equal(ts(40)) {
+			t.Fatalf("MarkPullSuccess 状态不对：%+v", pulled.Status)
+		}
+		if err := r.MarkOnline(ctx, srv.Metadata.ID, "198.51.100.1", false, ts(1), ts(50)); err != nil {
+			t.Fatal(err)
+		}
+		restoredAuto, _ := r.ByID(ctx, srv.Metadata.ID)
+		if restoredAuto.Status.FallbackToPull || restoredAuto.Status.PushFailCount != 0 {
+			t.Fatalf("MarkOnline 应当清零 fallback_to_pull 与 push_fail_count：%+v", restoredAuto.Status)
 		}
 	})
 }

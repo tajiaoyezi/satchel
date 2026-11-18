@@ -62,6 +62,7 @@ import (
 	svcupdate "github.com/satchel/satchel/internal/service/update"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 	"github.com/satchel/satchel/pkg/release"
+	"github.com/satchel/satchel/pkg/xrpc"
 )
 
 // shutdownTimeout 是优雅停止等进行中请求的上限（master-serve「优雅停止」）。
@@ -183,6 +184,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	serversSvc := svcservers.New(coreservers.New(bdb, st), settingsRepo, masterPub, logger)
 	conns := agentconn.New(agentconn.Config{Identity: masterKey, Directory: serversSvc.Directory(), Version: buildinfo.Version, Logger: logger,
 		OfflineThreshold: cfg.OfflineThreshold,
+		OnTraffic: func(ctx context.Context, serverID int64, snap xrpc.TrafficSnapshot) error {
+			return serversSvc.IngestSnapshot(ctx, serverID, snap, time.Now())
+		},
 		HeartbeatInterval: func(ctx context.Context) time.Duration {
 			s, err := settingsRepo.Load(ctx)
 			if err != nil {

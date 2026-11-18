@@ -39,10 +39,14 @@ type fakeDir struct {
 var errDBClosed = errors.New("数据库已关闭")
 
 func (d *fakeDir) Lookup(_ context.Context, token string) (Node, bool, error) {
-	if token == "tok2" { // 第二台，只有 TestConnectedIDs 用；在线状态只记第一台的
+	switch token {
+	case "tok2": // 第二台，ConnectedIDs 与 Shutdown 用；在线状态主要记第一台的
 		return Node{ID: 2, Name: "hk-2"}, true, nil
+	case "tok3":
+		return Node{ID: 3, Name: "hk-3"}, true, nil
+	default:
+		return Node{ID: 1, Name: "hk-1"}, token == "tok", nil
 	}
-	return Node{ID: 1, Name: "hk-1"}, token == "tok", nil
 }
 
 func (d *fakeDir) Online(ctx context.Context, id int64, ip string, _ bool, boot, _ time.Time) error {
@@ -189,7 +193,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// 旧连接的离线写入被卡住时新连接认证：新连接要等旧连接写完离线才写上线，最后是 connected，连接表里有它。
+// 旧连接的离线写入被卡住时同 IP 新连接认证（或超过冲突窗口后的新 IP）：新连接要等旧连接写完离线才写上线，最后是 connected，连接表里有它。
 func TestStaleOfflineDoesNotOverrideNewConnection(t *testing.T) {
 	dir := &fakeDir{}
 	started, release := make(chan struct{}), make(chan struct{})
@@ -197,10 +201,19 @@ func TestStaleOfflineDoesNotOverrideNewConnection(t *testing.T) {
 	dir.offline = func() {
 		once.Do(func() { close(started); <-release })
 	}
-	m, url, pub := serveManager(t, Config{Directory: dir})
+	now := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
+	var nowMu sync.Mutex
+	m, url, pub := serveManager(t, Config{Directory: dir, Now: func() time.Time {
+		nowMu.Lock()
+		defer nowMu.Unlock()
+		return now
+	}})
 	a := mustConnect(t, url, "10.0.0.1", pub)
 	a.ws.Close(websocket.StatusNormalClosure, "bye")
 	<-started // 旧连接的离线写入卡在这里
+	nowMu.Lock()
+	now = now.Add(2 * time.Minute) // 超过同 token 异 IP 保护窗口，合法切到新 IP
+	nowMu.Unlock()
 	done := make(chan error, 1)
 	go func() {
 		_, res, err := connect(t, url, "10.0.0.2", pub)
@@ -220,27 +233,27 @@ func TestStaleOfflineDoesNotOverrideNewConnection(t *testing.T) {
 	}
 }
 
-// 旧连接的心跳写入被卡住时被新连接取代：旧心跳先写完，新连接的上线与心跳后写，最后 IP 与启动时间都是新连接的。
+// 旧连接的心跳写入被卡住时被同 IP 新连接取代：旧心跳先写完，新连接的上线与心跳后写，最后状态是 connected 且启动时间是新连接的。
 func TestStaleHeartbeatDoesNotOverrideNewConnection(t *testing.T) {
 	dir := &fakeDir{}
 	started, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	dir.online = func(_ context.Context, ip string, boot time.Time) error {
-		if ip == "10.0.0.1" && !boot.IsZero() {
+	oldBoot := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
+	dir.online = func(_ context.Context, _ string, boot time.Time) error {
+		if boot.Equal(oldBoot) {
 			once.Do(func() { close(started); <-release })
 		}
 		return nil
 	}
 	m, url, pub := serveManager(t, Config{Directory: dir})
 	a := mustConnect(t, url, "10.0.0.1", pub)
-	oldBoot := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
 	if err := a.conn.Write(context.Background(), xrpc.TypeHeartbeat, xrpc.Heartbeat{BootTime: oldBoot}); err != nil {
 		t.Fatal(err)
 	}
 	<-started // 旧连接的心跳写入卡在这里
 	done := make(chan *testAgent, 1)
 	go func() {
-		b, res, err := connect(t, url, "10.0.0.2", pub)
+		b, res, err := connect(t, url, "10.0.0.1", pub)
 		if err != nil || !res.OK {
 			done <- nil
 			return
@@ -251,19 +264,16 @@ func TestStaleHeartbeatDoesNotOverrideNewConnection(t *testing.T) {
 	close(release)
 	b := <-done
 	if b == nil {
-		t.Fatal("新连接应当认证成功")
+		t.Fatal("同 IP 新连接应当认证成功")
 	}
-	// 三次上线写入：旧连接认证、旧心跳、新连接认证。等旧心跳落地后再看，IP 必须已经是新连接的。
-	waitFor(t, "旧心跳的写入落地", func() bool { n, _ := dir.writes(); return n >= 3 })
-	if _, ip, _ := dir.state(); ip != "10.0.0.2" {
-		t.Fatalf("旧心跳不能盖掉新连接的上线：%s", ip)
-	}
+	// 三次上线写入：旧连接认证、旧心跳、新连接认证。等三次写完后状态仍在线。
+	waitFor(t, "三次上线写入落地", func() bool { n, _ := dir.writes(); return n >= 3 })
 	newBoot := time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC)
 	if err := b.conn.Write(context.Background(), xrpc.TypeHeartbeat, xrpc.Heartbeat{BootTime: newBoot}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "新连接的心跳写进去", func() bool { _, _, boot := dir.state(); return boot.Equal(newBoot) })
-	if status, ip, _ := dir.state(); status != "connected" || ip != "10.0.0.2" || !m.Connected(1) {
+	if status, ip, _ := dir.state(); status != "connected" || ip != "10.0.0.1" || !m.Connected(1) {
 		t.Fatalf("最后应当是新连接的状态：%s %s", status, ip)
 	}
 }
@@ -305,7 +315,7 @@ func TestAuthDeadlineCoversServerLock(t *testing.T) {
 	<-started // 旧连接的离线写入卡在这里，锁一直被占着
 	for i := 0; i < 10; i++ {
 		began := time.Now()
-		if _, res, err := connect(t, url, "10.0.0.2", pub); err != nil || res.OK || res.Reason != xrpc.AuthUnavailable {
+		if _, res, err := connect(t, url, "10.0.0.1", pub); err != nil || res.OK || res.Reason != xrpc.AuthUnavailable {
 			t.Fatalf("第 %d 次：等不到锁时应当收到 unavailable：%+v %v", i+1, res, err)
 		}
 		if d := time.Since(began); d > time.Second {
@@ -435,7 +445,7 @@ func TestAuthResultBeforeRegistration(t *testing.T) {
 	mustConnect(t, url, "10.0.0.1", pub)
 	done := make(chan error, 1)
 	go func() {
-		_, res, err := connect(t, url, "10.0.0.2", pub)
+		_, res, err := connect(t, url, "10.0.0.1", pub)
 		if err == nil && !res.OK {
 			err = fmt.Errorf("认证失败：%+v", res)
 		}
@@ -504,8 +514,14 @@ func TestFailureRecordsExpire(t *testing.T) {
 func TestShutdownHonorsDeadline(t *testing.T) {
 	dir := &fakeDir{}
 	m, url, pub := serveManager(t, Config{Directory: dir})
-	for i := 0; i < 3; i++ {
-		mustConnect(t, url, fmt.Sprintf("10.0.0.%d", i+1), pub) // 三条都不再读
+	for i, tok := range []string{"tok", "tok2", "tok3"} {
+		mustConnectAs := func() {
+			_, res, err := connectAs(t, url, fmt.Sprintf("10.0.0.%d", i+1), pub, tok)
+			if err != nil || !res.OK {
+				t.Fatalf("第 %d 台连接应当成功：%+v %v", i+1, res, err)
+			}
+		}
+		mustConnectAs()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()

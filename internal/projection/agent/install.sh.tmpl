@@ -37,8 +37,12 @@ SERVICE_NAME="satchel-agent"
 BIN_DIR="/usr/local/bin"
 MASTER_URL=""
 TOKEN=""
+AGENT_TOKEN=""
+PULL_TOKEN=""
 MASTER_KEY=""
 CONN_MODE=""
+LISTEN_PORT=""
+PULL_PORT=""
 VERSION=""
 CHANNEL="stable"
 LOCAL_BINARY=""
@@ -56,6 +60,7 @@ die()   { error "$@"; exit 1; }
 usage() {
     cat <<'EOF'
 用法：install.sh --master-url <url> --token <token> --master-key <key> --mode <mode>
+                 [--agent-token <token>] [--pull-token <token>] [--listen-port <port>] [--pull-port <port>]
                  [--version <tag>] [--prerelease] [--binary <path> [--skip-verify]] [--no-start]
 
 安装命令从主控的 `satchel server install-command <服务器>` 取，原样在这台节点上用 root 运行。
@@ -74,8 +79,12 @@ parse_args() {
         case "$1" in
             --master-url) [ $# -ge 2 ] || die "--master-url 需要一个地址"; MASTER_URL="$2"; shift ;;
             --token) [ $# -ge 2 ] || die "--token 需要一个值"; TOKEN="$2"; shift ;;
+            --agent-token) [ $# -ge 2 ] || die "--agent-token 需要一个值"; AGENT_TOKEN="$2"; shift ;;
+            --pull-token) [ $# -ge 2 ] || die "--pull-token 需要一个值"; PULL_TOKEN="$2"; shift ;;
             --master-key) [ $# -ge 2 ] || die "--master-key 需要一个值"; MASTER_KEY="$2"; shift ;;
             --mode) [ $# -ge 2 ] || die "--mode 需要一个值"; CONN_MODE="$2"; shift ;;
+            --listen-port) [ $# -ge 2 ] || die "--listen-port 需要一个端口号"; LISTEN_PORT="$2"; shift ;;
+            --pull-port) [ $# -ge 2 ] || die "--pull-port 需要一个端口号"; PULL_PORT="$2"; shift ;;
             --version) [ $# -ge 2 ] || die "--version 需要一个 tag"; VERSION="$2"; shift ;;
             --prerelease) CHANNEL="prerelease" ;;
             --binary) [ $# -ge 2 ] || die "--binary 需要一个路径"; LOCAL_BINARY="$2"; shift ;;
@@ -273,8 +282,12 @@ install_binary() {
 # 写配置：参数原样交给 satchel-agent join，由它校验并写成 0600 的配置文件。
 join_master() {
     info "写配置（satchel-agent join）…"
-    "${BIN_DIR}/${SERVICE_NAME}" join --master-url "$MASTER_URL" --token "$TOKEN" --master-key "$MASTER_KEY" --mode "$CONN_MODE" \
-        || die "satchel-agent join 失败，见上面的原因"
+    set -- --master-url "$MASTER_URL" --token "$TOKEN" --master-key "$MASTER_KEY" --mode "$CONN_MODE"
+    [ -n "$AGENT_TOKEN" ] && set -- "$@" --agent-token "$AGENT_TOKEN"
+    [ -n "$PULL_TOKEN" ] && set -- "$@" --pull-token "$PULL_TOKEN"
+    [ -n "$LISTEN_PORT" ] && set -- "$@" --listen-port "$LISTEN_PORT"
+    [ -n "$PULL_PORT" ] && set -- "$@" --pull-port "$PULL_PORT"
+    "${BIN_DIR}/${SERVICE_NAME}" join "$@" || die "satchel-agent join 失败，见上面的原因"
 }
 
 write_service() {

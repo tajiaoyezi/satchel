@@ -9,23 +9,26 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 
 ## 加服务器
 
-- 加一台：`satchel server add <名字>`。它属于配置类，令牌要有日常运维权限（`operate`）；名字不能和已有的重复（重复时是 `name_taken`）。
-- 这一版连接模式只有 websocket：`--mode` 省略就是 websocket，写别的值会被拒（`bad_request`）。
-- 服务器建了以后暂时改不了，也删不了（要等配置类的 plan/apply）：不要为了试一试随手建，名字想好再建。
-- 结果是这台服务器的完整对象，`status.status` 是 `pending`；里面的 token 是打码的，安装命令要另外取。
+- 加一台：`satchel server add <名字>`（可选参数 `--mode <模式>`、`--domain`、`--domain-v6`、`--listen-port`、`--pull-address`、`--pull-address-v6`、`--pull-port`）。它属于配置类，令牌要有日常运维权限（`operate`）；名字不能和已有的重复（重复时是 `name_taken`）。
+- `--mode` 支持 `auto`、`websocket`、`http`、`pull`（省略时默认是 `auto`：WebSocket 优先 → 加密 HTTP 上报 → 轮询兜底）；建机时一次生成 `token`（节点上行认证）、`agent_token`（主控管理节点口，默认 `23889`）与 `pull_token`（主控只读轮询口，默认 `23890`）三把互不相同的 43 字符凭据。`pull` 模式必须至少提供一个可达地址。
+- 服务器建了以后其它规格字段暂时改不了，也删不了（要等配置类的 plan/apply）：不要为了试一试随手建，名字想好再建。
+- 结果是这台服务器的完整对象，`status.status` 是 `pending`；里面的三把凭据一律是打码的，原文只经安装命令或 `server token show` 取。
 
 ## 取安装命令
 
 - `satchel server install-command <名字>`。前提是主控地址（`master_url`）已设且是 https，否则返回 `conflict`。
 - 主控地址没设时：这一步只能由人做：请用户在主控本机、用 root 或运行主控的用户、在没有设 `SATCHEL_TOKEN` 与 `SATCHEL_SERVER`、也没用 `satchel login` 存过登录文件的终端里（不是 AI runtime 的终端）执行 `sudo satchel settings master-url set --url https://panel.example.com --resource-version <N> --verify-user <管理员账号>`（版本号先用 `satchel settings show` 看），它会当场要这个管理员的密码（开了两步验证还要验证码）；Docker 部署把开头的 `sudo satchel` 换成 `docker compose exec satchel satchel`。也可以请人用管理员账号登录网页，在「系统设置」页上改。
-- 命令里的 token 原文要密钥读取：令牌没开密钥读取时，命令里 `--token` 后面是打码标记，这样的命令装不上。这时请人在主控本机执行 `sudo satchel server install-command <名字>` 取完整的命令。
-- 拿到的命令由人在节点上用 root 运行（命令里没有 `sudo`，不是 root 时先 `sudo -i` 切到 root）；AI 不经主控去节点上执行它，也不要把带 token 原文的命令贴进对话。
+- 命令里的三把凭据原文（按模式附带 `--token`、`--agent-token`、`--pull-token`）要密钥读取（`secrets`）：令牌没开密钥读取时，命令里这些凭据后面是打码标记，这样的命令装不上。这时请人在主控本机执行 `sudo satchel server install-command <名字>` 取完整的命令。
+- 拿到的命令由人在节点上用 root 运行（命令里没有 `sudo`，不是 root 时先 `sudo -i` 切到 root）；AI 不经主控去节点上执行它，也不要把带凭据原文的命令贴进对话。
 - 结果里的 `master_key_fingerprint` 是主控公钥的指纹，节点上的安装脚本会拿它核对命令里的公钥，对不上就停。
 
-## 看服务器与在线状态
+## 看服务器与管理凭据
 
 - 列出：`satchel server list`。每台有 id、名字、连接模式、状态、最近心跳时间与来源 IP。
-- 查看一台：`satchel server get <名字>`。输出里的 token 一律打码，本机管理员也一样。
+- 查看一台：`satchel server get <名字>`。输出里的三把凭据一律打码，本机管理员也一样。
+- 查看凭据原文：`satchel server token show <名字>`（读类，必须具备 `secrets` 权限，日常运维令牌默认没有），返回三把凭据原文及 `rotation_pending`、`last_rotated_at`、`revoke_pending` 状态。
+- 轮换凭据：`satchel server token rotate <名字> --confirm <名字>`（可选 `--which <范围>`，取值 `all`、`token`、`agent`、`pull`，默认 `all`；动作类，需 `permission` 危险权限）。它与吊销的区别是：**轮换会在短暂双凭据并存窗口内向节点推送新凭据并等其原子落盘确认**，实现不断线平滑切换（节点不可达时回滚返回 `unavailable`；确认超时后只认新凭据，`status.rotation_pending` 保持为真直至新身份首次心跳）。
+- 吊销凭据：`satchel server token revoke <名字> --confirm <名字>`（可选 `--which <范围>`，取值 `all`、`token`、`agent`、`pull`，默认 `all`；动作类，需 `permission` 危险权限）。与轮换不同：**吊销会立刻废除旧凭据并主动断开当前连接、清空会话缓存、绝不向节点推送新凭据**；曾上线过的节点涉及 `token` 时 `status.revoke_pending` 置真，需要人在节点上重新执行配对命令或卸载重装。
 - 状态的含义：`pending` 是还没连上过；`connected` 是在线；`offline` 是连接断开，或者心跳超过离线阈值（默认 90 秒）没来。
 - 节点的心跳间隔取系统设置的 `heartbeat_interval`，但最多是离线阈值的三分之一（默认阈值下最多 30 秒），设得更长也按这个上限下发，在线的节点不会因此被标成离线；改了以后节点下次连上时生效。
 - 刚运行完安装命令，一般几秒到一分钟内变成 `connected`。一直是 `pending` 时，请人在节点上看 satchel-agent 服务的日志（`journalctl -u satchel-agent` 或 `/var/log/satchel-agent.log`）：常见原因是节点连不上主控地址、主控公钥或 token 不对。

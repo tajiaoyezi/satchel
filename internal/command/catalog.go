@@ -28,7 +28,8 @@ var GroupSummaries = map[string]string{
 	"update":                 "主控自升级：检查更新、升到所选渠道的最新版（只对管理员开放；升级属主控自身类危险操作）",
 	"settings update-cdn":    "更新 CDN 的开关（主控自身类危险操作）",
 	"settings image":         "logo、登录壁纸这类图片字段用的图片：上传之后用 settings set 把地址写进字段",
-	"server":                 "服务器（节点）：加服务器、取安装命令、看在线状态，经通道临时限速、踢线、看连接与流量（只对管理员开放）",
+	"server":                 "服务器（节点）：加服务器、取安装命令、管理凭据、看在线状态，经通道临时限速、踢线、看连接与流量（只对管理员开放）",
+	"server token":           "服务器通信凭据：查看原文（需 secrets）、平滑轮换与立即吊销（需 permission）",
 	"server limit":           "主控临时限速：设与撤（只动「主控临时」那一份来源）",
 }
 
@@ -59,16 +60,33 @@ func serverCommands() []*Command {
 	name := Arg{Name: "name", Description: "服务器的名字（server list 里的 name）"}
 	inbound := Flag{Name: "inbound", Type: TypeString, Description: "入站的 tag（节点 kernel.json 里的 inbounds[].tag）"}
 	credential := Flag{Name: "credential", Type: TypeString, Description: "凭据名（入站里用户的名字）"}
+	which := Flag{Name: "which", Type: TypeString, Default: "all", Description: "凭据范围：all（默认）、token、agent 或 pull"}
 	return []*Command{
-		{Path: []string{"server", "add"}, Summary: "加一台服务器并生成它的 token（这一版连接模式只有 websocket；建了以后暂时改不了也删不了）", Class: ClassConfig,
-			Args:  []Arg{name},
-			Flags: []Flag{{Name: "mode", Type: TypeString, Default: "websocket", Description: "连接模式：这一版只支持 websocket"}}},
-		{Path: []string{"server", "install-command"}, Summary: "给出这台服务器的一键安装命令（主控地址必须是 https；token 原文要密钥读取）", Class: ClassRead,
+		{Path: []string{"server", "add"}, Summary: "加一台服务器并生成三把通信凭据（支持 auto、websocket、http、pull 四种连接模式；建了以后其它规格改删等 plan/apply）", Class: ClassConfig,
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "mode", Type: TypeString, Default: "auto", Description: "连接模式：auto（默认）、websocket、http 或 pull"},
+				{Name: "domain", Type: TypeString, Description: "管理入口域名或 IPv4 主机名"},
+				{Name: "domain-v6", Type: TypeString, Description: "管理入口 IPv6 域名"},
+				{Name: "listen-port", Type: TypeInt, Description: "节点管理监听端口（0 表示按默认 23889 使用）"},
+				{Name: "pull-address", Type: TypeString, Description: "轮询只读口 IPv4 或主机名（pull 模式必填至少一个可达地址）"},
+				{Name: "pull-address-v6", Type: TypeString, Description: "轮询只读口 IPv6 地址"},
+				{Name: "pull-port", Type: TypeInt, Description: "节点只读轮询端口（0 表示按默认 23890 使用）"},
+			}},
+		{Path: []string{"server", "install-command"}, Summary: "给出这台服务器的一键安装命令（主控地址必须是 https；凭据原文要密钥读取）", Class: ClassRead,
 			Args: []Arg{name}},
 		{Path: []string{"server", "list"}, Summary: "列出服务器与在线状态（pending 还没连上过，connected 在线，offline 离线）", Class: ClassRead, List: true,
 			Columns: []string{"id", "name", "connection_mode", "status", "last_heartbeat", "ip_address"}},
-		{Path: []string{"server", "get"}, Summary: "查看一台服务器的完整对象（token 一律打码）", Class: ClassRead,
+		{Path: []string{"server", "get"}, Summary: "查看一台服务器的完整对象（三把凭据一律打码）", Class: ClassRead,
 			Args: []Arg{name}},
+		{Path: []string{"server", "token", "show"}, Summary: "查看服务器的三把凭据原文与轮换/吊销待确认状态（需要 secrets 权限范围）", Class: ClassRead,
+			Args: []Arg{name}},
+		{Path: []string{"server", "token", "rotate"}, Summary: "平滑轮换服务器凭据并推送节点原子落盘（开启短暂双凭据窗口；需 permission 危险权限与 --confirm）",
+			Class: ClassAction, Danger: v1.DangerPermission, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"},
+			Args: []Arg{name}, Flags: []Flag{which}},
+		{Path: []string{"server", "token", "revoke"}, Summary: "立即吊销服务器凭据并踢断活跃连接、清理会话缓存（不推新凭据；需 permission 危险权限与 --confirm）",
+			Class: ClassAction, Danger: v1.DangerPermission, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"},
+			Args: []Arg{name}, Flags: []Flag{which}},
 		{Path: []string{"server", "limit", "set"}, Summary: "给一台在线服务器上「入站 × 凭据」设主控临时限速（0 表示这一份显式不限速；结果里有三份来源与生效值）", Class: ClassAction,
 			Args: []Arg{name}, Flags: []Flag{inbound, credential,
 				{Name: "mbps", Type: TypeInt, Description: "限速值，单位 Mbps，不小于 0；0 表示这一份显式不限速"},
