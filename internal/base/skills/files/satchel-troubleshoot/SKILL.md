@@ -30,8 +30,9 @@ description: "主控出问题时用：看日志、内置定时任务的运行记
 
 ## 看长任务
 
-- `satchel job list --status failed` 列出失败的长任务；`satchel job get <job_id>` 看一个的状态、开始与结束时间、退出码与结果。
+- `satchel job list --status failed` 列出失败的长任务；按指定服务器筛选用 `satchel job list --server-name <服务器名>`；`satchel job get <job_id>` 看一个的状态、开始与结束时间、退出码与结果。
 - 主控重启时没跑完的 job 标为 `failed`（`update apply` 的 job 例外：由升级之后起来的进程写成 `done` 或 `failed`）。
+- 排查某台在线节点的异常时，可配合 `satchel-servers` 的 `satchel server system-info <服务器名>`、`satchel server logs files <服务器名>` 与 `satchel server logs list <服务器名>` 只读查看节点硬件状态与日志；需要更详细的节点调试日志时用 `satchel settings set --set agent_log_enabled=true --resource-version <N>` 临时开启并在排查完关闭。
 
 ## 看审计与安全事件
 

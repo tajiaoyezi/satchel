@@ -43,13 +43,19 @@
 | `server limit clear` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/limit/clear/{name}` |
 | `server limit set` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/limit/set/{name}` |
 | `server list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server` |
+| `server logs files` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server/logs/files/{name}` |
+| `server logs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server/logs/{name}` |
+| `server nics` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/nics/{name}` |
 | `server probe-master-url` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/probe-master-url/{name}` |
 | `server restart-kernel` | action | operate | restart | object (name) | 否 | 否 | 否 | `POST /api/v1/server/restart-kernel/{name}` |
+| `server speed` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/speed/{name}` |
 | `server switch-listen-port` | action | operate | permission | object (name) | 否 | 否 | 否 | `POST /api/v1/server/switch-listen-port/{name}` |
+| `server system-info` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/system-info/{name}` |
 | `server token revoke` | action | operate | permission | object (name) | 否 | 否 | 否 | `POST /api/v1/server/token/revoke/{name}` |
 | `server token rotate` | action | operate | permission | object (name) | 否 | 否 | 否 | `POST /api/v1/server/token/rotate/{name}` |
 | `server token show` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/token/show/{name}` |
 | `server traffic` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/traffic/{name}` |
+| `server traffic-stats set` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/traffic-stats/set/{name}` |
 | `server uninstall` | action | operate | master | object (name) | 否 | 否 | 否 | `POST /api/v1/server/uninstall/{name}` |
 | `server update apply` | action | operate | restart | object (name) | 否 | 否 | 否 | `POST /api/v1/server/update/apply/{name}/{version}` |
 | `server update batch` | action | operate | batch | count | 否 | 否 | 否 | `POST /api/v1/server/update/batch/{version}` |

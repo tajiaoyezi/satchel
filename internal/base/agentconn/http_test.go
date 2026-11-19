@@ -537,7 +537,7 @@ func newFakeNodeEndpoint(t *testing.T, token string, masterPub ed25519.PublicKey
 			sid, _ := securechan.GenerateSessionID()
 			_ = n.sessions.Put(sid, sess, 1, "node")
 			_ = json.NewEncoder(w).Encode(xrpc.NodeHandshakeFinishResp{SessionID: sid})
-		case xrpc.HTTPNodePathRPC:
+		case xrpc.HTTPNodePathRPC, xrpc.HTTPNodePathPullSpeed:
 			if n.force412.Swap(false) {
 				w.WriteHeader(http.StatusPreconditionFailed)
 				return
@@ -573,6 +573,15 @@ func newFakeNodeEndpoint(t *testing.T, token string, masterPub ed25519.PublicKey
 				reply.Result, _ = json.Marshal(xrpc.AgentInfo{AgentVersion: "0.2.0", ControlProtocol: 1})
 			case xrpc.MethodTrafficSnapshot:
 				reply.Result, _ = json.Marshal(xrpc.TrafficSnapshot{BootID: "pull-1", Generation: 2, KernelRunning: true})
+			case xrpc.MethodSpeedGet:
+				reply.Result, _ = json.Marshal(xrpc.SpeedReport{UploadSpeed: 51200, DownloadSpeed: 102400, SystemRxBytes: 9000, SystemTxBytes: 4000, SystemBootTimeUnix: 1700000100})
+			case xrpc.MethodAgentConfigUpdate:
+				var params xrpc.AgentConfigUpdate
+				if err := json.Unmarshal(call.Params, &params); err != nil {
+					reply.Error = &xrpc.Error{Code: xrpc.CodeBadParams, Message: err.Error()}
+				} else {
+					reply.Result, _ = json.Marshal(xrpc.AgentConfigUpdateAck{Applied: params, UpdatedAt: time.Now().UTC()})
+				}
 			case xrpc.MethodTokenRotate:
 				var params xrpc.TokenRotateParams
 				if err := json.Unmarshal(call.Params, &params); err != nil {
@@ -899,5 +908,143 @@ func TestRuntimeMetadataSameHostAndMasterURLCatchUp(t *testing.T) {
 	dir.mu.Unlock()
 	if offCount == 0 {
 		t.Fatal("Disconnect 应当调用 Directory.Offline")
+	}
+}
+
+func TestTelemetrySpeedConfigPushAndPullSpeed(t *testing.T) {
+	dir := newExtDir()
+	dir.mu.Lock()
+	dir.tokens["tok2"] = Node{ID: 2, Name: "hk-http"}
+	dir.mu.Unlock()
+
+	var (
+		mu       sync.Mutex
+		speeds   = map[int64]xrpc.SpeedReport{}
+		offlines = map[int64]int{}
+		cfg      = xrpc.AgentConfig{HeartbeatInterval: 40, SpeedCollectInterval: 5, TrafficCollectInterval: 45, AgentLogEnabled: true}
+	)
+	m, srv, pub := serveHTTPAndWS(t, Config{
+		Directory:        dir,
+		OfflineThreshold: 60 * time.Second, // 60/3 = 20s，验证心跳钳位
+		AgentConfig: func(context.Context) xrpc.AgentConfig {
+			mu.Lock()
+			defer mu.Unlock()
+			return cfg
+		},
+		OnSpeed: func(_ context.Context, serverID int64, report xrpc.SpeedReport) {
+			mu.Lock()
+			speeds[serverID] = report
+			mu.Unlock()
+		},
+		OnOffline: func(serverID int64) {
+			mu.Lock()
+			offlines[serverID]++
+			mu.Unlock()
+		},
+	})
+	wsURL := "ws" + srv.URL[len("http"):] + "/api/remote/ws"
+
+	// 1. WS 认证收到钳位后的完整 AgentConfig，发送 speed 帧触发 OnSpeed。
+	wsAgent, res, err := connect(t, wsURL, "198.51.100.11", pub)
+	if err != nil || !res.OK || res.Config == nil || res.HeartbeatInterval != 20 || res.Config.HeartbeatInterval != 20 ||
+		res.Config.SpeedCollectInterval != 5 || res.Config.TrafficCollectInterval != 45 || !res.Config.AgentLogEnabled {
+		t.Fatalf("WS AuthResult.Config 不对：err=%v res=%+v", err, res)
+	}
+	if err := wsAgent.conn.Write(context.Background(), xrpc.TypeSpeed, xrpc.SpeedReport{UploadSpeed: 1000, DownloadSpeed: 2000, SystemBootTimeUnix: 101}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "ws OnSpeed", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return speeds[1].UploadSpeed == 1000 && speeds[1].DownloadSpeed == 2000 && speeds[1].SystemBootTimeUnix == 101
+	})
+
+	// 2. HTTP 上行 speed 触发 OnSpeed 且在回复中携回 AgentConfig。
+	sid, sess := httpHandshakeClient(t, srv.URL, "198.51.100.12", pub)
+	code, rep := httpCallRPC(t, srv.URL, "198.51.100.12", sid, sess, xrpc.AgentHTTPRPC{
+		Method:          xrpc.HTTPRPCMethodSpeed,
+		Token:           "tok2",
+		AgentVersion:    "0.2.0",
+		ControlProtocol: xrpc.ControlProtocol,
+		Speed:           &xrpc.SpeedReport{UploadSpeed: 3000, DownloadSpeed: 4000, SystemBootTimeUnix: 202},
+	})
+	if code != http.StatusOK || !rep.OK || rep.Config == nil || !rep.Config.AgentLogEnabled || rep.Config.SpeedCollectInterval != 5 {
+		t.Fatalf("HTTP speed 回复应携带 AgentConfig：code=%d rep=%+v", code, rep)
+	}
+	mu.Lock()
+	s2 := speeds[2]
+	mu.Unlock()
+	if s2.UploadSpeed != 3000 || s2.DownloadSpeed != 4000 {
+		t.Fatalf("HTTP OnSpeed 未记录：%+v", s2)
+	}
+
+	// 3. BroadcastConfig 覆盖 WS 与反向 HTTP 管理口；PullSpeed 走只读轮询口 /api/child/speed。
+	wsCfgCh := make(chan xrpc.AgentConfig, 1)
+	go func() {
+		for {
+			msg, err := wsAgent.conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			if msg.Type == xrpc.TypeCall {
+				var c xrpc.Call
+				if xrpc.Decode(msg, &c) == nil && c.Method == xrpc.MethodAgentConfigUpdate {
+					var p xrpc.AgentConfigUpdate
+					_ = json.Unmarshal(c.Params, &p)
+					wsCfgCh <- p
+					ack, _ := json.Marshal(xrpc.AgentConfigUpdateAck{Applied: p, UpdatedAt: time.Now().UTC()})
+					_ = wsAgent.conn.Write(context.Background(), xrpc.TypeReply, xrpc.Reply{ID: c.ID, Result: ack})
+				}
+			}
+		}
+	}()
+	manageNode, managePort := newFakeNodeEndpoint(t, "agent-tok-2", pub)
+	pullNode, pullPort := newFakeNodeEndpoint(t, "pull-tok-2", pub)
+	dir.mu.Lock()
+	dir.targets[2] = TargetInfo{
+		ID: 2, Name: "hk-http", ConnectionMode: "http", IPAddress: "127.0.0.1",
+		ListenPort: managePort, PullAddress: "127.0.0.1", PullPort: pullPort,
+		AgentToken: "agent-tok-2", PullToken: "pull-tok-2",
+	}
+	dir.mu.Unlock()
+
+	m.BroadcastConfig(context.Background(), []int64{2}, xrpc.AgentConfig{
+		HeartbeatInterval: 15, SpeedCollectInterval: 2, TrafficCollectInterval: 30, AgentLogEnabled: false,
+	})
+	select {
+	case gotCfg := <-wsCfgCh:
+		if gotCfg.HeartbeatInterval != 15 || gotCfg.SpeedCollectInterval != 2 || gotCfg.AgentLogEnabled {
+			t.Fatalf("WS BroadcastConfig 载荷不对：%+v", gotCfg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("等待 WS BroadcastConfig 超时")
+	}
+	manageNode.mu.Lock()
+	sawManageCfg := len(manageNode.calls) == 1 && manageNode.calls[0] == xrpc.MethodAgentConfigUpdate
+	manageNode.mu.Unlock()
+	if !sawManageCfg {
+		t.Fatalf("管理口应当收到 agent.config_update：%v", manageNode.calls)
+	}
+
+	pulled, host, v6, err := m.PullSpeed(context.Background(), 2, 2*time.Second)
+	if err != nil || host != "127.0.0.1" || v6 || pulled.UploadSpeed != 51200 || pulled.DownloadSpeed != 102400 {
+		t.Fatalf("PullSpeed 结果不对：rep=%+v host=%s v6=%v err=%v", pulled, host, v6, err)
+	}
+	pullNode.mu.Lock()
+	sawPull := len(pullNode.calls) == 1 && pullNode.calls[0] == xrpc.MethodSpeedGet
+	pullNode.mu.Unlock()
+	if !sawPull {
+		t.Fatalf("轮询口应当收到 speed.get：%v", pullNode.calls)
+	}
+
+	// 4. Disconnect 触发 OnOffline。
+	if err := m.Disconnect(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	off1 := offlines[1]
+	mu.Unlock()
+	if off1 == 0 {
+		t.Fatal("Disconnect 应当触发 OnOffline 回调")
 	}
 }

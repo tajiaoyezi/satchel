@@ -41,6 +41,8 @@ func TestCatalog(t *testing.T) {
 		"server connections": ClassRead, "server traffic": ClassRead, "server restart-kernel": ClassAction,
 		"server update check": ClassRead, "server update apply": ClassAction, "server update batch": ClassAction,
 		"server uninstall": ClassAction, "server switch-listen-port": ClassAction, "server probe-master-url": ClassRead,
+		"server system-info": ClassRead, "server nics": ClassRead, "server speed": ClassRead,
+		"server traffic-stats set": ClassConfig, "server logs list": ClassRead, "server logs files": ClassRead,
 	}
 	if len(table.All()) != len(want) {
 		t.Fatalf("目录里应当恰好 %d 条命令，得到 %v", len(want), table.Names())
@@ -54,7 +56,7 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 的类别应当是 %s，得到 %s", name, class, c.Class)
 		}
 	}
-	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list"} {
+	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "server logs list", "server logs files"} {
 		if c, _ := table.Lookup(name); !c.List {
 			t.Errorf("%s 应当是列表命令", name)
 		}

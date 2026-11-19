@@ -114,6 +114,9 @@ type Config struct {
 	Directory Directory
 	// HeartbeatInterval 是系统设置的心跳间隔（heartbeat_interval）；认证成功时下发给节点，最多是离线阈值的三分之一。
 	HeartbeatInterval func(context.Context) time.Duration
+	// AgentConfig 返回下发给节点的完整运行配置（含 heartbeat/speed/traffic 周期与 agent_log_enabled）；
+	// 为空时退回由 HeartbeatInterval 组装默认配置。
+	AgentConfig func(context.Context) xrpc.AgentConfig
 	// OfflineThreshold 是离线阈值（SATCHEL_OFFLINE_THRESHOLD_SECONDS）；为零时用 db.DefaultOfflineThreshold。
 	OfflineThreshold time.Duration
 	// Version 是主控的版本号。
@@ -128,6 +131,10 @@ type Config struct {
 	Now               func() time.Time
 	// OnTraffic 在节点经加密 HTTP 上报 traffic 时回调，将快照汇入与 WS/Pull 相同的累计入口。
 	OnTraffic func(ctx context.Context, serverID int64, snap xrpc.TrafficSnapshot) error
+	// OnSpeed 在节点经 WS speed 帧或加密 HTTP speed RPC 上报实时网速与系统网卡累计时回调。
+	OnSpeed func(ctx context.Context, serverID int64, report xrpc.SpeedReport)
+	// OnOffline 在节点 WS 断开或被主动 Disconnect 时回调，用于清零内存实时网速缓存。
+	OnOffline func(serverID int64)
 
 	AuthTimeout      time.Duration
 	PingInterval     time.Duration
@@ -442,6 +449,40 @@ func (m *Manager) heartbeatInterval(ctx context.Context) time.Duration {
 	return min(m.cfg.HeartbeatInterval(ctx), m.cfg.OfflineThreshold/3)
 }
 
+// agentConfig 返回统一下发给节点的运行配置，并将心跳间隔钳位在离线阈值的三分之一以内。
+func (m *Manager) agentConfig(ctx context.Context) xrpc.AgentConfig {
+	maxHB := int((m.cfg.OfflineThreshold / 3) / time.Second)
+	if maxHB < 1 {
+		maxHB = 1
+	}
+	var cfg xrpc.AgentConfig
+	if m.cfg.AgentConfig != nil {
+		cfg = m.cfg.AgentConfig(ctx)
+	} else {
+		cfg = xrpc.AgentConfig{
+			HeartbeatInterval:      int(m.heartbeatInterval(ctx) / time.Second),
+			SpeedCollectInterval:   3,
+			TrafficCollectInterval: 60,
+		}
+	}
+	if cfg.HeartbeatInterval <= 0 {
+		cfg.HeartbeatInterval = int(m.heartbeatInterval(ctx) / time.Second)
+	}
+	if cfg.HeartbeatInterval > maxHB {
+		cfg.HeartbeatInterval = maxHB
+	}
+	if cfg.HeartbeatInterval < 1 {
+		cfg.HeartbeatInterval = 1
+	}
+	if cfg.SpeedCollectInterval < 1 {
+		cfg.SpeedCollectInterval = 3
+	}
+	if cfg.TrafficCollectInterval < 1 {
+		cfg.TrafficCollectInterval = 60
+	}
+	return cfg
+}
+
 // reject 回认证失败并断开。回复用自己的写期限：认证期限可能已经到了（例如等锁超时），节点仍要收到原因，按它退避。
 func reject(conn *xrpc.Conn, code websocket.StatusCode, reason, msg string) {
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
@@ -512,7 +553,14 @@ func (m *Manager) activate(ctx context.Context, s *session, interval time.Durati
 		}
 	}
 	if err == nil {
-		if werr := s.conn.Write(ctx, xrpc.TypeAuthResult, xrpc.AuthResult{OK: true, HeartbeatInterval: int(interval / time.Second)}); werr != nil {
+		cfg := m.agentConfig(ctx)
+		if interval > 0 {
+			ivSec := int(interval / time.Second)
+			if ivSec > 0 && ivSec < cfg.HeartbeatInterval {
+				cfg.HeartbeatInterval = ivSec
+			}
+		}
+		if werr := s.conn.Write(ctx, xrpc.TypeAuthResult, xrpc.AuthResult{OK: true, HeartbeatInterval: cfg.HeartbeatInterval, Config: &cfg}); werr != nil {
 			err = fmt.Errorf("%w：%w", errReply, werr)
 		}
 	}
@@ -614,6 +662,9 @@ func (m *Manager) deactivate(s *session) bool {
 
 // markOffline 把服务器标为离线，持着这台服务器的锁调用。它一定要做，不跟连接的 ctx：写入最多 writeTimeout，失败只记日志。
 func (m *Manager) markOffline(s *session) {
+	if m.cfg.OnOffline != nil {
+		m.cfg.OnOffline(s.node.ID)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
 	if err := m.cfg.Directory.Offline(ctx, s.node.ID, m.now()); err != nil {
@@ -644,6 +695,15 @@ func (m *Manager) readLoop(ctx context.Context, s *session) error {
 			}
 			if hb.MasterURL != "" {
 				go m.maybeSyncMasterURL(s.node.ID, s.node.Name, hb.MasterURL)
+			}
+		case xrpc.TypeSpeed:
+			var rep xrpc.SpeedReport
+			if err := xrpc.Decode(msg, &rep); err != nil {
+				return err
+			}
+			m.touchConflict(s.node.ID, s.ip)
+			if m.cfg.OnSpeed != nil {
+				m.cfg.OnSpeed(ctx, s.node.ID, rep)
 			}
 		case xrpc.TypeReply:
 			var r xrpc.Reply
@@ -708,6 +768,68 @@ func (m *Manager) Call(ctx context.Context, serverID int64, method string, param
 // PullTraffic 从指定服务器的只读轮询口（pull_port，默认 23890）拉取一份流量快照，成功时同时返回实际命中的节点地址与是否 IPv6。
 func (m *Manager) PullTraffic(ctx context.Context, serverID int64, timeout time.Duration) (xrpc.TrafficSnapshot, string, bool, error) {
 	return m.nodeClient.PullTraffic(ctx, serverID, timeout)
+}
+
+// PullSpeed 从指定服务器的只读轮询口（pull_port，默认 23890）拉取实时网速与系统网卡快照，成功时返回命中的节点地址与是否 IPv6。
+func (m *Manager) PullSpeed(ctx context.Context, serverID int64, timeout time.Duration) (xrpc.SpeedReport, string, bool, error) {
+	return m.nodeClient.PullSpeed(ctx, serverID, timeout)
+}
+
+// BroadcastConfig 向指定服务器列表及所有当前 WS 在线节点异步推送最新运行配置（agent.config_update），有界并发且不阻塞主流程。
+func (m *Manager) BroadcastConfig(ctx context.Context, serverIDs []int64, cfg xrpc.AgentConfig) {
+	maxHB := int((m.cfg.OfflineThreshold / 3) / time.Second)
+	if maxHB < 1 {
+		maxHB = 1
+	}
+	if cfg.HeartbeatInterval > maxHB {
+		cfg.HeartbeatInterval = maxHB
+	}
+	if cfg.HeartbeatInterval < 1 {
+		cfg.HeartbeatInterval = 1
+	}
+	if cfg.SpeedCollectInterval < 1 {
+		cfg.SpeedCollectInterval = 3
+	}
+	if cfg.TrafficCollectInterval < 1 {
+		cfg.TrafficCollectInterval = 60
+	}
+	seen := make(map[int64]struct{}, len(serverIDs))
+	targets := make([]int64, 0, len(serverIDs))
+	for _, id := range m.ConnectedIDs() {
+		if id > 0 {
+			seen[id] = struct{}{}
+			targets = append(targets, id)
+		}
+	}
+	for _, id := range serverIDs {
+		if id > 0 {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				targets = append(targets, id)
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return
+	}
+	const maxConc = 8
+	const pushTimeout = 5 * time.Second
+	sem := make(chan struct{}, maxConc)
+	var wg sync.WaitGroup
+	for _, id := range targets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(sid int64) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			pctx, cancel := context.WithTimeout(ctx, pushTimeout)
+			defer cancel()
+			if _, err := m.Call(pctx, sid, xrpc.MethodAgentConfigUpdate, cfg, pushTimeout); err != nil && !errors.Is(err, ErrOffline) {
+				m.cfg.Logger.Debug("推送节点运行配置失败", "server_id", sid, "err", err)
+			}
+		}(id)
+	}
+	wg.Wait()
 }
 
 // ConnectedIDs 列出现在有活跃 WS 连接（已登记且未吊销）的服务器 id，从小到大。
@@ -803,6 +925,9 @@ func (m *Manager) Disconnect(ctx context.Context, serverID int64) error {
 	delete(m.runtimes, serverID)
 	delete(m.masterPush, serverID)
 	m.mu.Unlock()
+	if m.cfg.OnOffline != nil {
+		m.cfg.OnOffline(serverID)
+	}
 
 	wctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()

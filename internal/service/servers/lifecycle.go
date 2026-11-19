@@ -157,10 +157,11 @@ func (s *Service) isReleaseCompatible(rel *release.Release) (bool, string) {
 }
 
 func (s *Service) recordRuntime(id int64, info xrpc.AgentInfo) {
-	if s.conns == nil {
+	conns := s.getConns()
+	if conns == nil {
 		return
 	}
-	if rt, ok := s.conns.(runtimeTracker); ok {
+	if rt, ok := conns.(runtimeTracker); ok {
 		rt.RecordRuntime(id, agentconn.NodeRuntime{
 			AgentVersion:     info.AgentVersion,
 			InDocker:         info.InDocker,
@@ -174,14 +175,15 @@ func (s *Service) recordRuntime(id int64, info xrpc.AgentInfo) {
 
 func (s *Service) inspectNodeInfo(ctx context.Context, srv *core.Server) (agentconn.NodeRuntime, bool, error) {
 	var cached agentconn.NodeRuntime
-	if s.conns != nil {
-		if tracker, ok := s.conns.(runtimeTracker); ok {
+	conns := s.getConns()
+	if conns != nil {
+		if tracker, ok := conns.(runtimeTracker); ok {
 			if c, exists := tracker.Runtime(srv.Metadata.ID); exists {
 				cached = c
 			}
 		}
 	}
-	if s.conns == nil {
+	if conns == nil {
 		return cached, false, v1.Newf(v1.CodeUnavailable, "服务器 %q 现在没有连接", srv.Spec.Name)
 	}
 	var info xrpc.AgentInfo
@@ -416,14 +418,15 @@ func (s *Service) runSingleServerUpdate(ctx context.Context, target preparedUpda
 		FromVersion: target.fromVer,
 		ToVersion:   rel.Version,
 	}
-	if s.conns == nil {
+	conns := s.getConns()
+	if conns == nil {
 		setFailureOutcome(&out, xrpc.DiskStateOld, true, true, "节点连接管理器未就绪")
 		return out
 	}
 
 	var ack xrpc.AgentUpdateAck
 	rpcCtx, cancelRPC := context.WithTimeout(ctx, s.updateTimeout)
-	raw, err := s.conns.Call(rpcCtx, srv.Metadata.ID, xrpc.MethodAgentUpdate, xrpc.AgentUpdateParams{
+	raw, err := conns.Call(rpcCtx, srv.Metadata.ID, xrpc.MethodAgentUpdate, xrpc.AgentUpdateParams{
 		Version:                 rel.Version,
 		Channel:                 channel,
 		UseCDN:                  cdnEnabled,
@@ -739,8 +742,8 @@ func (s *Service) uninstall(ctx context.Context, inv *command.Invocation) (any, 
 	if err := s.call(ctx, srv, xrpc.MethodAgentUninstall, xrpc.AgentUninstallParams{DetachDelayMS: 1000}, &ack, callTimeout); err != nil {
 		return nil, err
 	}
-	if s.conns != nil {
-		if disc, ok := s.conns.(serverDisconnector); ok {
+	if conns := s.getConns(); conns != nil {
+		if disc, ok := conns.(serverDisconnector); ok {
 			if derr := disc.Disconnect(ctx, srv.Metadata.ID); derr != nil {
 				s.logger.Warn("卸载后断开节点连接或标离线失败", "server", srv.Spec.Name, "err", derr)
 			}
@@ -804,7 +807,7 @@ func (s *Service) switchListenPort(ctx context.Context, inv *command.Invocation)
 	if effListen == effPull {
 		return nil, v1.Newf(v1.CodeBadRequest, "管理监听端口（%d）与轮询只读端口（%d）不能相同", effListen, effPull)
 	}
-	if s.conns == nil {
+	if s.getConns() == nil {
 		return nil, v1.Newf(v1.CodeUnavailable, "服务器 %q 现在没有连接", srv.Spec.Name)
 	}
 	var ack xrpc.SwitchPortsAck
@@ -853,7 +856,7 @@ func (s *Service) probeMasterURL(ctx context.Context, inv *command.Invocation) (
 	if probeURL == "" || perr != nil || u.Scheme != "https" || u.Host == "" {
 		return nil, v1.Newf(v1.CodeConflict, "系统设置中的 %s 地址（%q）未配置为合法 https origin", target, probeURL)
 	}
-	if s.conns == nil {
+	if s.getConns() == nil {
 		return nil, v1.Newf(v1.CodeUnavailable, "服务器 %q 现在没有连接", srv.Spec.Name)
 	}
 	var res xrpc.ProbeMasterResult
@@ -902,7 +905,7 @@ func (s *Service) ProbeAllNodesMasterURL(ctx context.Context, candidateURL strin
 				SameHost: srv.Status.SameHostAsMaster,
 				Pending:  srv.Status.Status == core.StatusPending,
 			}
-			if s.conns == nil {
+			if s.getConns() == nil {
 				item.State = "offline"
 				item.Error = "节点未连接"
 				out[i] = item
@@ -947,7 +950,8 @@ func (s *Service) PushNodesMasterURL(ctx context.Context, targetURL string, serv
 	if len(serverNames) == 0 {
 		return nil
 	}
-	if s.conns == nil {
+	conns := s.getConns()
+	if conns == nil {
 		return v1.New(v1.CodeUnavailable, "节点连接管理器未就绪")
 	}
 	srvs := make([]*core.Server, 0, len(serverNames))
@@ -958,7 +962,7 @@ func (s *Service) PushNodesMasterURL(ctx context.Context, targetURL string, serv
 		}
 		srvs = append(srvs, srv)
 	}
-	if blocker, ok := s.conns.(masterSyncBlocker); ok {
+	if blocker, ok := conns.(masterSyncBlocker); ok {
 		for _, srv := range srvs {
 			blocker.SetMasterSyncBlocked(srv.Metadata.ID, true)
 		}

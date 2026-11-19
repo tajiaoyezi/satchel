@@ -31,13 +31,17 @@ const (
 // Digest 生成参数摘要（与审计摘要同一套打码）；由装配根注入横切层 audit 的 Digest，业务层引用不了横切层。
 type Digest func(cmd *command.Command, inv *command.Invocation) string
 
+// ServerLookup 按服务器名字查 server_id；在装配根注入，避免 service/jobs 引用 service/servers。
+type ServerLookup func(ctx context.Context, name string) (int64, bool, error)
+
 // Service 持有仓储与正在跑的 job。
 type Service struct {
-	repo   *core.Repo
-	table  *command.Table
-	digest Digest
-	logger *slog.Logger
-	now    func() time.Time
+	repo         *core.Repo
+	table        *command.Table
+	digest       Digest
+	logger       *slog.Logger
+	now          func() time.Time
+	serverLookup ServerLookup
 
 	base   context.Context // 工作用的 ctx 从它派生，Stop 时取消
 	cancel context.CancelFunc
@@ -76,6 +80,11 @@ func New(repo *core.Repo, table *command.Table, digest Digest, logger *slog.Logg
 	}
 	base, cancel := context.WithCancel(context.Background())
 	return &Service{repo: repo, table: table, digest: digest, logger: logger, now: time.Now, base: base, cancel: cancel, progress: map[string]any{}, final: map[string]*core.Job{}}
+}
+
+// SetServerLookup 注入按服务器名称反查 server_id 的回调函数（供 job list --server-name 使用）。
+func (s *Service) SetServerLookup(fn ServerLookup) {
+	s.serverLookup = fn
 }
 
 // Start 受理一个长任务：插一行 queued，在 goroutine 里跑 run，按结果改 done 或 failed；立刻返回受理时的 job。
@@ -304,12 +313,26 @@ func (s *Service) list(ctx context.Context, inv *command.Invocation) (any, error
 	default:
 		return nil, v1.Newf(v1.CodeBadRequest, "--status 不认识 %q", status).WithNext("写 queued、running、done、failed、unknown 之一")
 	}
-	total, err := s.repo.Count(ctx, status)
+	filter := core.ListFilter{Status: status}
+	if serverName := inv.String("server-name", ""); serverName != "" {
+		if s.serverLookup == nil {
+			return &command.PageResult{Items: []any{}, Total: 0}, nil
+		}
+		sid, ok, err := s.serverLookup(ctx, serverName)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return &command.PageResult{Items: []any{}, Total: 0}, nil
+		}
+		filter.ServerID = &sid
+	}
+	total, err := s.repo.CountFiltered(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
 	// 多取一条，用来判断有没有下一页。
-	rows, err := s.repo.List(ctx, status, page.Limit+1, beforeID)
+	rows, err := s.repo.ListFiltered(ctx, filter, page.Limit+1, beforeID)
 	if err != nil {
 		return nil, err
 	}

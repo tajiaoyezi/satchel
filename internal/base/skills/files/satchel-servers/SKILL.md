@@ -24,7 +24,7 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 
 ## 看服务器与管理凭据
 
-- 列出：`satchel server list`。每台有 id、名字、连接模式、状态、最近心跳时间与来源 IP。
+- 列出：`satchel server list`。每台有 id、名字、连接模式、状态、最近心跳时间、来源 IP 与最近上下行实时网速（`current_upload_speed`、`current_download_speed` 与 `speed_updated_at`）。
 - 查看一台：`satchel server get <名字>`。输出里的三把凭据一律打码，本机管理员也一样。
 - 查看凭据原文：`satchel server token show <名字>`（读类，必须具备 `secrets` 权限，日常运维令牌默认没有），返回三把凭据原文及 `rotation_pending`、`last_rotated_at`、`revoke_pending` 状态。
 - 轮换凭据：`satchel server token rotate <名字> --confirm <名字>`（可选 `--which <范围>`，取值 `all`、`token`、`agent`、`pull`，默认 `all`；动作类，需 `permission` 危险权限）。它与吊销的区别是：**轮换会在短暂双凭据并存窗口内向节点推送新凭据并等其原子落盘确认**，实现不断线平滑切换（节点不可达时回滚返回 `unavailable`；确认超时后只认新凭据，`status.rotation_pending` 保持为真直至新身份首次心跳）。
@@ -61,6 +61,17 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 - 远程卸载：`satchel server uninstall <名字> --confirm <名字>`（需 `master` 危险类权限）。拒绝 Docker 容器及正在跑 `exec` 的节点；节点派生脱离服务进程组的纯 Go 卸载器清理二进制、服务单元与配置/状态目录，主控随后断连并将状态标为 `offline`（保留数据库记录）。
 - 热切换端口：`satchel server switch-listen-port <名字> --listen-port 24889 --pull-port 24890 --confirm <名字>`（需 `permission` 危险类权限；两个端口 flag 至少给一个，范围 `1..65535` 且两口不能相等）。先通知节点将新端口原子写入配置并在进程内平滑重绑监听口（不断开当前代理连接，也不重启 `sing-box`），确认成功后再更新主控数据库并抬升 `resourceVersion`。
 - 只读探测主控地址：`satchel server probe-master-url <名字> --target master`（或 `--target recovery`，不接受任意 URL 以防 SSRF）。让节点用本地主控公钥握手测试内置设置里的地址并回报连通性与延迟。
+
+## 节点遥测、流量口径与远程只读日志
+
+- 查看硬件与系统信息：`satchel server system-info <名字>`（读类；经统一通道返回主机名、系统、内核、CPU、内存、磁盘、负载、TFO 与采集时间；节点离线返 `unavailable`，旧版节点不支持返 `conflict`）。
+- 查看活跃网卡与可绑定地址：`satchel server nics <名字>`（读类；仅列出启用中的非回环网卡，剔除 loopback 与 link-local，按 `global`、`private` 与 `ula` 标出作用域）。
+- 查看实时网速：`satchel server speed <名字>` 或不带参数查看全部 `satchel server speed`（读类，直接读主控内存与库快照，不发节点 RPC，节点离线时返回清零后的速率）。
+- 配置流量统计口径：`satchel server traffic-stats set <名字> --resource-version <N> --mode both --source system --include true`（配置类，需日常运维权限与乐观并发版本号；`--mode` 可选 `both`、`upload`、`download` 或 `max`，`--source` 可选 `core` 或 `system`，`--include` 可选 `true` 或 `false`，三个开关至少提供一个；更新结果连同系统物理网卡周期累计也会在 `satchel server traffic <名字>` 中展示）。
+- 远程只读查看节点日志与日志文件：
+  - 列出节点日志文件：`satchel server logs files <名字>`（读类列表，列出节点日志目录内 `satchel-agent` 与内嵌内核 `core` 的当前和轮转文件，活跃文件排在最前）。
+  - 分页查看日志行：`satchel server logs list <名字> --service agent --level warn`（读类列表；`--service` 可选 `agent`、`core` 或 `nginx`，`--level` 可选 `debug`、`info`、`warn`、`error`，`--grep` 区分大小写且在审计摘要里打码，`--file` 可查看 `server logs files` 列出的 `agent` 或 `core` 轮转文件，含路径穿越的文件名返回 `not_found`）。
+  - 远程日志遵循主控同样的只读策略，不提供手动删除或清空日志文件命令；需要查看节点详细调试日志时，可先用 `satchel settings set --set agent_log_enabled=true --resource-version <N>` 热开启（全连接模式均实时生效、无需重启节点），排查结束后再关闭。
 
 ## 注意
 

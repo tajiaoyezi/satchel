@@ -24,6 +24,7 @@ const (
 	TypeAuthResult      = "auth_result"
 	TypeHeartbeat       = "heartbeat"
 	TypeHeartbeatAck    = "heartbeat_ack"
+	TypeSpeed           = "speed"
 	TypeCall            = "rpc_call"
 	TypeReply           = "rpc_reply"
 )
@@ -56,12 +57,21 @@ type Auth struct {
 	MasterURL        string `json:"master_url,omitempty"`
 }
 
-// AuthResult 是主控对认证的回复；成功时带主控要求的心跳间隔（秒），失败时带给机器读的原因与给人看的说明。
+// AgentConfig 是主控向节点统一下发的运行期配置：经 WS AuthResult、加密 HTTP 回复与 agent.config_update 同步。
+type AgentConfig struct {
+	HeartbeatInterval      int  `json:"heartbeat_interval,omitempty"`
+	SpeedCollectInterval   int  `json:"speed_collect_interval,omitempty"`
+	TrafficCollectInterval int  `json:"traffic_collect_interval,omitempty"`
+	AgentLogEnabled        bool `json:"agent_log_enabled"`
+}
+
+// AuthResult 是主控对认证的回复；成功时带主控要求的心跳间隔（秒）与可选运行配置块，失败时带给机器读的原因与给人看的说明。
 type AuthResult struct {
-	OK                bool   `json:"ok"`
-	Reason            string `json:"reason,omitempty"`
-	Message           string `json:"message,omitempty"`
-	HeartbeatInterval int    `json:"heartbeat_interval,omitempty"`
+	OK                bool         `json:"ok"`
+	Reason            string       `json:"reason,omitempty"`
+	Message           string       `json:"message,omitempty"`
+	HeartbeatInterval int          `json:"heartbeat_interval,omitempty"`
+	Config            *AgentConfig `json:"config,omitempty"`
 }
 
 // 认证失败的原因：节点据此选退避（只有 token 无效会累计到长时间的惩罚等待）。
@@ -104,7 +114,8 @@ type Reply struct {
 // 回复里的错误码。
 const (
 	CodeUnknownMethod = "unknown_method" // 对方不认识这个方法
-	CodeBadParams     = "bad_params"     // 参数解不开
+	CodeBadParams     = "bad_params"     // 参数解不开或不合法
+	CodeNotFound      = "not_found"      // 目标对象或白名单文件不存在
 	CodeFailed        = "failed"         // 方法执行失败
 )
 

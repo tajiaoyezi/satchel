@@ -20,6 +20,18 @@ const (
 	MethodAgentSwitchPorts  = "agent.switch_ports"      // SwitchPortsParams → SwitchPortsAck
 	MethodAgentProbeMaster  = "agent.probe_master_url"  // ProbeMasterParams → ProbeMasterResult
 	MethodAgentUpdateMaster = "agent.update_master_url" // UpdateMasterParams → UpdateMasterAck
+	MethodSystemInfo        = "system.info"             // 无参数 → SystemInfo
+	MethodSystemNICs        = "system.nics"             // 无参数 → SystemNICs
+	MethodSpeedGet          = "speed.get"               // 无参数 → SpeedReport
+	MethodAgentLogs         = "agent.logs"              // AgentLogsParams → AgentLogsResult
+	MethodAgentLogFiles     = "agent.logs.files"        // 无参数 → AgentLogFilesResult
+	MethodAgentConfigUpdate = "agent.config_update"     // AgentConfigUpdate → AgentConfigUpdateAck
+)
+
+// 节点只读日志拉取的上限，确保远低于单帧 ReadLimit（4 MiB）。
+const (
+	AgentLogsMaxReplyBytes = 512 << 10
+	AgentLogsMaxScanLines  = 5000
 )
 
 // 节点远程升级确认失败时的磁盘三态口径（第 09 章）。
@@ -216,4 +228,113 @@ type UpdateMasterParams struct {
 type UpdateMasterAck struct {
 	MasterURL string    `json:"master_url"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// SpeedReport 是实时网速上报（WS speed 帧、HTTP method=speed）与 speed.get 的统一载荷。
+type SpeedReport struct {
+	UploadSpeed        int64     `json:"upload_speed"`
+	DownloadSpeed      int64     `json:"download_speed"`
+	SystemRxBytes      int64     `json:"system_rx_bytes,omitempty"`
+	SystemTxBytes      int64     `json:"system_tx_bytes,omitempty"`
+	SystemBootTimeUnix int64     `json:"system_boot_time_unix,omitempty"`
+	At                 time.Time `json:"at,omitempty"`
+}
+
+// SystemInfo 是 system.info 返回的节点系统与硬件只读信息。
+type SystemInfo struct {
+	Hostname           string    `json:"hostname"`
+	OS                 string    `json:"os"`
+	Kernel             string    `json:"kernel"`
+	Arch               string    `json:"arch"`
+	UptimeSeconds      int64     `json:"uptime_seconds"`
+	CPUModel           string    `json:"cpu_model"`
+	CPUCores           int       `json:"cpu_cores"`
+	CPUThreads         int       `json:"cpu_threads"`
+	CPUPct             float64   `json:"cpu_pct"`
+	LoadAvg            string    `json:"loadavg"`
+	Load1              float64   `json:"load1"`
+	Load5              float64   `json:"load5"`
+	Load15             float64   `json:"load15"`
+	MemTotalBytes      int64     `json:"mem_total_bytes"`
+	MemUsedBytes       int64     `json:"mem_used_bytes"`
+	MemAvailableBytes  int64     `json:"mem_available_bytes"`
+	DiskTotalBytes     int64     `json:"disk_total_bytes"`
+	DiskUsedBytes      int64     `json:"disk_used_bytes"`
+	DiskAvailableBytes int64     `json:"disk_available_bytes"`
+	TCPFastOpenServer  bool      `json:"tcp_fast_open_server"`
+	AgentVersion       string    `json:"agent_version"`
+	InDocker           bool      `json:"in_docker"`
+	CollectedAt        time.Time `json:"collected_at"`
+}
+
+// NICAddr 是一块活跃非回环网卡上的可绑定单播地址。
+type NICAddr struct {
+	IP     string `json:"ip"`
+	Family string `json:"family"` // "v4" 或 "v6"
+	CIDR   string `json:"cidr"`
+	Scope  string `json:"scope"` // "global" | "private" | "ula"
+}
+
+// NICInfo 是一块启用中的非回环网卡及其地址列表。
+type NICInfo struct {
+	Name  string    `json:"name"`
+	Addrs []NICAddr `json:"addrs"`
+}
+
+// SystemNICs 是 system.nics 的回复。
+type SystemNICs struct {
+	NICs []NICInfo `json:"nics"`
+}
+
+// AgentLogsParams 是 agent.logs 的查询参数。
+type AgentLogsParams struct {
+	Service string `json:"service,omitempty"` // "agent" | "core" | "nginx"
+	Level   string `json:"level,omitempty"`   // "debug" | "info" | "warn" | "error"
+	Grep    string `json:"grep,omitempty"`
+	File    string `json:"file,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+	Offset  int    `json:"offset,omitempty"`
+}
+
+// AgentLogEntry 是节点返回的单条日志（与主控 logs list 条目形状对齐）。
+type AgentLogEntry struct {
+	Time  string            `json:"time,omitempty"`
+	Level string            `json:"level,omitempty"`
+	Msg   string            `json:"msg,omitempty"`
+	Attrs map[string]string `json:"attrs,omitempty"`
+	Raw   string            `json:"raw,omitempty"`
+}
+
+// AgentLogsResult 是 agent.logs 的回复。
+type AgentLogsResult struct {
+	Service   string          `json:"service"`
+	File      string          `json:"file,omitempty"`
+	Items     []AgentLogEntry `json:"items"`
+	Total     int             `json:"total"`
+	Truncated bool            `json:"truncated,omitempty"`
+	Message   string          `json:"message,omitempty"`
+}
+
+// AgentLogFileInfo 是节点日志目录中单个白名单文件的元数据。
+type AgentLogFileInfo struct {
+	Name     string    `json:"name"`
+	Size     int64     `json:"size"`
+	Modified time.Time `json:"modified"`
+	Active   bool      `json:"active"`
+}
+
+// AgentLogFilesResult 是 agent.logs.files 的回复。
+type AgentLogFilesResult struct {
+	Dir       string             `json:"dir"`
+	TotalSize int64              `json:"total_size"`
+	Files     []AgentLogFileInfo `json:"files"`
+}
+
+// AgentConfigUpdate 是 agent.config_update 的参数：复用统一 AgentConfig。
+type AgentConfigUpdate = AgentConfig
+
+// AgentConfigUpdateAck 是 agent.config_update 生效后的回复。
+type AgentConfigUpdateAck struct {
+	Applied   AgentConfig `json:"applied"`
+	UpdatedAt time.Time   `json:"updated_at"`
 }

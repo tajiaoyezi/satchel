@@ -25,3 +25,46 @@ func (st *State) TrafficCollectInterval() time.Duration {
 	}
 	return trafficCollectIntervalDefault * time.Second
 }
+
+const (
+	speedCollectIntervalDefault = 3
+	dashboardRefreshDefaultMS   = 5000
+	dashboardRefreshMinMS       = 1000
+	dashboardRefreshMaxMS       = 60000
+)
+
+// SpeedCollectInterval 是节点实时网速上报与 pull 轮询采集间隔（node-telemetry）。
+// 写入时已保证不小于 1；不是正数时按默认 3 秒取。
+func (st *State) SpeedCollectInterval() time.Duration {
+	if n, ok := st.Values["speed_collect_interval"].(int64); ok && n >= 1 {
+		return time.Duration(n) * time.Second
+	}
+	return speedCollectIntervalDefault * time.Second
+}
+
+// AgentLogEnabled 报告节点调试日志（DEBUG 级别）是否开启（node-telemetry）。
+func (st *State) AgentLogEnabled() bool {
+	if b, ok := st.Values["agent_log_enabled"].(bool); ok {
+		return b
+	}
+	return false
+}
+
+// DashboardRefreshIntervalMS 返回仪表盘 WebSocket 刷新周期（毫秒），钳位在 [1000, 60000]，默认 5000。
+func (st *State) DashboardRefreshIntervalMS() int {
+	if n, ok := st.Values["dashboard_refresh_interval_ms"].(int64); ok {
+		if n < dashboardRefreshMinMS {
+			return dashboardRefreshMinMS
+		}
+		if n > dashboardRefreshMaxMS {
+			return dashboardRefreshMaxMS
+		}
+		return int(n)
+	}
+	return dashboardRefreshDefaultMS
+}
+
+// DashboardRefreshInterval 返回仪表盘 WebSocket 刷新周期的 time.Duration 形式。
+func (st *State) DashboardRefreshInterval() time.Duration {
+	return time.Duration(st.DashboardRefreshIntervalMS()) * time.Millisecond
+}

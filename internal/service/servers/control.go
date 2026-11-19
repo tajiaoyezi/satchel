@@ -26,7 +26,18 @@ type Conns interface {
 }
 
 // SetConns 在建好连接管理之后把它设回来（连接管理又要用本服务给的 Directory，只能后设）。
-func (s *Service) SetConns(c Conns) { s.conns = c }
+func (s *Service) SetConns(c Conns) {
+	s.connsMu.Lock()
+	s.conns = c
+	s.connsMu.Unlock()
+}
+
+func (s *Service) getConns() Conns {
+	s.connsMu.RLock()
+	c := s.conns
+	s.connsMu.RUnlock()
+	return c
+}
 
 const (
 	// callTimeout 是普通命令与拉取每次调节点的超时（m2-03 design 第 5 条）。
@@ -41,7 +52,11 @@ const (
 
 // call 向一台服务器发请求，把节点与连接的错误换成四字段错误（m2-03 design 第 5 条，node-limiter「这几条命令的前提与错误」）。
 func (s *Service) call(ctx context.Context, srv *core.Server, method string, params, result any, timeout time.Duration) error {
-	raw, err := s.conns.Call(ctx, srv.Metadata.ID, method, params, timeout)
+	conns := s.getConns()
+	if conns == nil {
+		return nodeError(srv.Spec.Name, method, timeout, agentconn.ErrOffline)
+	}
+	raw, err := conns.Call(ctx, srv.Metadata.ID, method, params, timeout)
 	if err != nil {
 		return nodeError(srv.Spec.Name, method, timeout, err)
 	}
@@ -72,6 +87,8 @@ func nodeError(name, method string, timeout time.Duration, err error) error {
 			WithNext("升级这台节点的 satchel-agent")
 	case errors.As(err, &xe) && xe.Code == xrpc.CodeBadParams:
 		return v1.Newf(v1.CodeBadRequest, "服务器 %q 拒绝了 %s：%s", name, method, xe.Message)
+	case errors.As(err, &xe) && xe.Code == xrpc.CodeNotFound:
+		return v1.Newf(v1.CodeNotFound, "%s", xe.Message)
 	case errors.As(err, &xe):
 		return v1.Newf(v1.CodeInternal, "服务器 %q 执行 %s 失败：%s", name, method, xe.Message)
 	default:
@@ -283,16 +300,25 @@ func (s *Service) restartKernel(ctx context.Context, inv *command.Invocation) (a
 	return &RestartResult{Server: srv.Spec.Name, Running: res.Running, Version: res.Version, StartedAt: res.StartedAt, Inbounds: inbounds}, nil
 }
 
-// TrafficView 是 server traffic 的结果：主控内存里的累计与库里的内核状态（node-traffic「看累计」）。
+// TrafficView 是 server traffic 的结果：主控内存里的累计与库里的内核状态，以及流量统计口径、系统网卡累计与实时网速（node-traffic / node-telemetry）。
 type TrafficView struct {
-	Server        string         `json:"server"`
-	Since         *time.Time     `json:"since"`
-	CollectedAt   *time.Time     `json:"collected_at"`
-	CoreRunning   bool           `json:"core_running"`
-	CoreVersion   string         `json:"core_version"`
-	CoreBootTime  *time.Time     `json:"core_boot_time"`
-	CoreBootCount int64          `json:"core_boot_count"`
-	Traffic       []TrafficTotal `json:"traffic"`
+	Server                 string         `json:"server"`
+	Since                  *time.Time     `json:"since"`
+	CollectedAt            *time.Time     `json:"collected_at"`
+	CoreRunning            bool           `json:"core_running"`
+	CoreVersion            string         `json:"core_version"`
+	CoreBootTime           *time.Time     `json:"core_boot_time"`
+	CoreBootCount          int64          `json:"core_boot_count"`
+	Traffic                []TrafficTotal `json:"traffic"`
+	TrafficSource          string         `json:"traffic_source"`
+	TrafficStatsMode       string         `json:"traffic_stats_mode"`
+	IncludeInTrafficStats  bool           `json:"include_in_traffic_stats"`
+	SystemRxCycle          int64          `json:"system_rx_cycle"`
+	SystemTxCycle          int64          `json:"system_tx_cycle"`
+	SystemTrafficUpdatedAt *time.Time     `json:"system_traffic_updated_at"`
+	CurrentUploadSpeed     int64          `json:"current_upload_speed"`
+	CurrentDownloadSpeed   int64          `json:"current_download_speed"`
+	SpeedUpdatedAt         *time.Time     `json:"speed_updated_at"`
 }
 
 // traffic 读内存里的累计，不经通道、不要求服务器在线。
@@ -305,8 +331,25 @@ func (s *Service) traffic(ctx context.Context, inv *command.Invocation) (any, er
 		return nil, err
 	}
 	st := srv.Status
-	v := &TrafficView{Server: srv.Spec.Name, CoreRunning: st.CoreRunning, CoreVersion: st.CoreVersion, CoreBootTime: st.CoreBootTime,
-		CoreBootCount: st.CoreBootCount, Traffic: []TrafficTotal{}}
+	up, down, speedAt := s.effectiveSpeed(srv)
+	rxCycle, txCycle, sysAt := s.effectiveSystemTraffic(srv)
+	v := &TrafficView{
+		Server:                 srv.Spec.Name,
+		CoreRunning:            st.CoreRunning,
+		CoreVersion:            st.CoreVersion,
+		CoreBootTime:           st.CoreBootTime,
+		CoreBootCount:          st.CoreBootCount,
+		Traffic:                []TrafficTotal{},
+		TrafficSource:          srv.Spec.TrafficSource,
+		TrafficStatsMode:       srv.Spec.TrafficStatsMode,
+		IncludeInTrafficStats:  srv.Spec.IncludeInTrafficStats,
+		SystemRxCycle:          rxCycle,
+		SystemTxCycle:          txCycle,
+		SystemTrafficUpdatedAt: sysAt,
+		CurrentUploadSpeed:     up,
+		CurrentDownloadSpeed:   down,
+		SpeedUpdatedAt:         speedAt,
+	}
 	s.mu.Lock()
 	if a := s.accs[srv.Metadata.ID]; a != nil {
 		since, at := a.since, a.at
@@ -362,8 +405,8 @@ func (s *Service) CollectTraffic(now func() time.Time) func(context.Context) (st
 
 		wsSet := map[int64]bool{}
 		var targets []collectTarget
-		if s.conns != nil {
-			for _, id := range s.conns.ConnectedIDs() {
+		if conns := s.getConns(); conns != nil {
+			for _, id := range conns.ConnectedIDs() {
 				wsSet[id] = true
 				targets = append(targets, collectTarget{id: id, viaPull: false})
 			}
@@ -422,7 +465,11 @@ func (s *Service) CollectTraffic(now func() time.Time) func(context.Context) (st
 
 // collectOne 向一台服务器经 Call（WS/管理口）要快照并并入累计。
 func (s *Service) collectOne(ctx context.Context, id int64, now func() time.Time) error {
-	raw, err := s.conns.Call(ctx, id, xrpc.MethodTrafficSnapshot, nil, callTimeout)
+	conns := s.getConns()
+	if conns == nil {
+		return agentconn.ErrOffline
+	}
+	raw, err := conns.Call(ctx, id, xrpc.MethodTrafficSnapshot, nil, callTimeout)
 	if err != nil {
 		return err
 	}
@@ -434,7 +481,7 @@ func (s *Service) collectOne(ctx context.Context, id int64, now func() time.Time
 }
 
 func (s *Service) collectOnePull(ctx context.Context, id int64, now func() time.Time) error {
-	pc, ok := s.conns.(pullCaller)
+	pc, ok := s.getConns().(pullCaller)
 	if !ok {
 		return agentconn.ErrOffline
 	}

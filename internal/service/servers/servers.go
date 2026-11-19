@@ -43,8 +43,10 @@ type Service struct {
 	pollTimeout    time.Duration
 	updateTimeout  time.Duration
 	logger         *slog.Logger
+	connsMu        sync.RWMutex
 	conns          Conns // 建好连接管理之后由 SetConns 设上
 	trafficState
+	telemetryState
 	lifecycleMu sync.Mutex
 	updating    map[int64]bool
 }
@@ -64,7 +66,12 @@ func New(repo *core.Repo, settings *coresettings.Repo, masterKey ed25519.PublicK
 		updateTimeout:  defaultUpdateRPCTimeout,
 		logger:         logger,
 		trafficState:   trafficState{accs: map[int64]*accumulator{}, lastPull: map[int64]time.Time{}, srvLocks: map[int64]*sync.Mutex{}},
-		updating:       map[int64]bool{},
+		telemetryState: telemetryState{
+			speeds:               map[int64]speedSample{},
+			sysTraffic:           map[int64]*sysTrafficMem{},
+			speedPersistInterval: defaultSpeedPersistInterval,
+		},
+		updating: map[int64]bool{},
 	}
 }
 
@@ -90,6 +97,12 @@ func (s *Service) Bindings() command.Bindings {
 		"server uninstall":          s.uninstall,
 		"server switch-listen-port": s.switchListenPort,
 		"server probe-master-url":   s.probeMasterURL,
+		"server system-info":        s.systemInfo,
+		"server nics":               s.nics,
+		"server speed":              s.speed,
+		"server traffic-stats set":  s.trafficStatsSet,
+		"server logs list":          s.logsList,
+		"server logs files":         s.logsFiles,
 	}
 }
 
@@ -100,10 +113,12 @@ func requireAdmin(ctx context.Context) error {
 	return nil
 }
 
-func summaryOf(r *core.Server) Summary {
+func (s *Service) summaryOf(r *core.Server) Summary {
+	up, down, speedAt := s.effectiveSpeed(r)
 	return Summary{
 		ID: r.Metadata.ID, Name: r.Spec.Name, ConnectionMode: r.Spec.ConnectionMode,
 		Status: r.Status.Status, LastHeartbeat: r.Status.LastHeartbeat, IPAddress: r.Status.IPAddress, IPAddressV6: r.Status.IPAddressV6,
+		CurrentUploadSpeed: up, CurrentDownloadSpeed: down, SpeedUpdatedAt: speedAt,
 	}
 }
 
@@ -274,13 +289,16 @@ func shellModeArg(mode string) string {
 
 // Summary 是 server list 的一行。
 type Summary struct {
-	ID             int64      `json:"id"`
-	Name           string     `json:"name"`
-	ConnectionMode string     `json:"connection_mode"`
-	Status         string     `json:"status"`
-	LastHeartbeat  *time.Time `json:"last_heartbeat"`
-	IPAddress      *string    `json:"ip_address"`
-	IPAddressV6    string     `json:"ip_address_v6"`
+	ID                   int64      `json:"id"`
+	Name                 string     `json:"name"`
+	ConnectionMode       string     `json:"connection_mode"`
+	Status               string     `json:"status"`
+	LastHeartbeat        *time.Time `json:"last_heartbeat"`
+	IPAddress            *string    `json:"ip_address"`
+	IPAddressV6          string     `json:"ip_address_v6"`
+	CurrentUploadSpeed   int64      `json:"current_upload_speed"`
+	CurrentDownloadSpeed int64      `json:"current_download_speed"`
+	SpeedUpdatedAt       *time.Time `json:"speed_updated_at"`
 }
 
 func (s *Service) list(ctx context.Context, inv *command.Invocation) (any, error) {
@@ -312,7 +330,7 @@ func (s *Service) list(ctx context.Context, inv *command.Invocation) (any, error
 		res.NextCursor = command.EncodeIDCursor(rows[len(rows)-1].Metadata.ID)
 	}
 	for _, r := range rows {
-		res.Items = append(res.Items, summaryOf(r))
+		res.Items = append(res.Items, s.summaryOf(r))
 	}
 	return res, nil
 }
@@ -343,7 +361,7 @@ func (s *Service) Overview(ctx context.Context, limit int) ([]any, int, error) {
 	}
 	items := make([]any, 0, len(rows))
 	for _, r := range rows {
-		items = append(items, summaryOf(r))
+		items = append(items, s.summaryOf(r))
 	}
 	return items, total, nil
 }
@@ -416,13 +434,17 @@ func (s *Service) SweepOffline(threshold time.Duration, now func() time.Time) fu
 	return func(ctx context.Context) (string, error) {
 		at := now().UTC().Truncate(time.Microsecond)
 		before := at.Add(-threshold)
-		n, err := s.repo.SweepOffline(ctx, before, at)
+		ids, err := s.repo.SweepOfflineIDs(ctx, before, at)
 		if err != nil {
 			return "", err
 		}
+		for _, id := range ids {
+			s.ClearSpeed(id, at)
+		}
+		n := len(ids)
 		activeWS := map[int64]bool{}
-		if s.conns != nil {
-			for _, id := range s.conns.ConnectedIDs() {
+		if conns := s.getConns(); conns != nil {
+			for _, id := range conns.ConnectedIDs() {
 				activeWS[id] = true
 			}
 		}

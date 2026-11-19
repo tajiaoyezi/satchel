@@ -314,3 +314,75 @@ func TestRotationRevocationAndAutoFallback(t *testing.T) {
 		}
 	})
 }
+
+func TestTelemetryAndTrafficStatsWrites(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		r, ctx := repo(bdb), context.Background()
+		srv, err := r.Create(ctx, "hk-tel", ModeAuto)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if srv.Spec.TrafficStatsMode != TrafficStatsBoth || srv.Spec.TrafficSource != TrafficSourceSystem || !srv.Spec.IncludeInTrafficStats {
+			t.Fatalf("新建服务器默认流量统计口径不对：%+v", srv.Spec)
+		}
+
+		// UpdateSpeed 与 UpdateSystemTraffic 均为 status 档，不抬 resourceVersion；负速度钳位到 0。
+		if err := r.UpdateSpeed(ctx, srv.Metadata.ID, -10, 204800, ts(10)); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.UpdateSystemTraffic(ctx, srv.Metadata.ID, SystemTrafficUpdate{
+			RxCycle: 3000, TxCycle: 1500, LastSeenRx: 8000, LastSeenTx: 3500, BootTimeUnix: 1700000000, UpdatedAt: ts(11),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := r.ByID(ctx, srv.Metadata.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Metadata.ResourceVersion != 1 || got.Status.CurrentUploadSpeed != 0 || got.Status.CurrentDownloadSpeed != 204800 ||
+			got.Status.SpeedUpdatedAt == nil || !got.Status.SpeedUpdatedAt.Equal(ts(10)) ||
+			got.Status.SystemRxCycle != 3000 || got.Status.SystemTxCycle != 1500 || got.Status.SystemBootTimeUnix != 1700000000 ||
+			got.Status.SystemTrafficUpdatedAt == nil || !got.Status.SystemTrafficUpdatedAt.Equal(ts(11)) {
+			t.Fatalf("遥测状态写不对：rv=%d status=%+v", got.Metadata.ResourceVersion, got.Status)
+		}
+
+		// MarkOffline 清零网速且不抬版本。
+		if err := r.MarkOnline(ctx, srv.Metadata.ID, "203.0.113.10", false, ts(1), ts(12)); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.UpdateSpeed(ctx, srv.Metadata.ID, 51200, 102400, ts(13)); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := r.MarkOffline(ctx, srv.Metadata.ID, ts(14)); err != nil || !ok {
+			t.Fatalf("MarkOffline 失败：%v %v", ok, err)
+		}
+		got, _ = r.ByID(ctx, srv.Metadata.ID)
+		if got.Status.CurrentUploadSpeed != 0 || got.Status.CurrentDownloadSpeed != 0 || got.Metadata.ResourceVersion != 1 {
+			t.Fatalf("MarkOffline 应当清零实时网速且不抬版本：%+v rv=%d", got.Status, got.Metadata.ResourceVersion)
+		}
+
+		// UpdateTrafficStats 空补丁报 bad_request，版本冲突报 version_conflict，合法写入抬版本。
+		if _, err := r.UpdateTrafficStats(ctx, srv.Metadata.ID, 1, TrafficStatsPatch{}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Fatalf("空补丁应当是 bad_request：%v", err)
+		}
+		modeMax := TrafficStatsMax
+		srcCore := TrafficSourceCore
+		incFalse := false
+		if _, err := r.UpdateTrafficStats(ctx, srv.Metadata.ID, 99, TrafficStatsPatch{Mode: &modeMax}); v1.AsError(err).Code != v1.CodeVersionConflict {
+			t.Fatalf("过期版本应当是 version_conflict：%v", err)
+		}
+		updated, err := r.UpdateTrafficStats(ctx, srv.Metadata.ID, 1, TrafficStatsPatch{Mode: &modeMax, Source: &srcCore, Include: &incFalse})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if updated.Metadata.ResourceVersion != 2 || updated.Spec.TrafficStatsMode != TrafficStatsMax ||
+			updated.Spec.TrafficSource != TrafficSourceCore || updated.Spec.IncludeInTrafficStats {
+			t.Fatalf("UpdateTrafficStats 结果不对：rv=%d spec=%+v", updated.Metadata.ResourceVersion, updated.Spec)
+		}
+
+		all, err := r.ListAll(ctx)
+		if err != nil || len(all) != 1 || all[0].Metadata.ID != srv.Metadata.ID {
+			t.Fatalf("ListAll 结果不对：%v %v", all, err)
+		}
+	})
+}

@@ -52,6 +52,29 @@ var Modes = []string{ModeAuto, ModeWebsocket, ModeHTTP, ModePull}
 // ValidMode 报告 mode 是否为四种允许的连接模式之一。
 func ValidMode(mode string) bool { return slices.Contains(Modes, mode) }
 
+// 流量统计方向与数据源枚举（servers.traffic_stats_mode / servers.traffic_source）。
+const (
+	TrafficStatsBoth     = "both"
+	TrafficStatsUpload   = "upload"
+	TrafficStatsDownload = "download"
+	TrafficStatsMax      = "max"
+
+	TrafficSourceCore   = "core"
+	TrafficSourceSystem = "system"
+)
+
+// TrafficStatsModes 与 TrafficSources 是合法取值列表。
+var (
+	TrafficStatsModes = []string{TrafficStatsBoth, TrafficStatsUpload, TrafficStatsDownload, TrafficStatsMax}
+	TrafficSources    = []string{TrafficSourceCore, TrafficSourceSystem}
+)
+
+// ValidTrafficStatsMode 报告 m 是否为合法的流量统计方向。
+func ValidTrafficStatsMode(m string) bool { return slices.Contains(TrafficStatsModes, m) }
+
+// ValidTrafficSource 报告 s 是否为合法的流量统计数据源。
+func ValidTrafficSource(s string) bool { return slices.Contains(TrafficSources, s) }
+
 // Server 是一台服务器的资源对象。
 type Server = v1.Object[v1.ServerSpec, v1.ServerStatus]
 
@@ -140,6 +163,8 @@ func (r *Repo) CreateWith(ctx context.Context, p CreateParams) (*Server, error) 
 		AgentToken:            tokens[1],
 		PullToken:             tokens[2],
 		Ipv6Enabled:           true,
+		TrafficStatsMode:      TrafficStatsBoth,
+		TrafficSource:         TrafficSourceSystem,
 		IncludeInTrafficStats: true,
 	}
 	if err := r.store.Insert(ctx, m); err != nil {
@@ -213,6 +238,20 @@ func (r *Repo) List(ctx context.Context, afterID int64, limit int) ([]*Server, e
 	return out, nil
 }
 
+// ListAll 按 id 从小到大列出全部未软删除的服务器（供全量实时网速查询与仪表盘 WS 快照使用）。
+func (r *Repo) ListAll(ctx context.Context) ([]*Server, error) {
+	var rows []model.Server
+	err := r.db.NewSelect().Model(&rows).Where("deleted_at IS NULL").OrderExpr("id ASC").Scan(ctx)
+	if err != nil {
+		return nil, v1.Wrap(v1.CodeDatabase, "列出全部服务器失败", err)
+	}
+	out := make([]*Server, len(rows))
+	for i := range rows {
+		out[i] = object(&rows[i])
+	}
+	return out, nil
+}
+
 // MarkOnline 记一次上线或心跳：status 为 connected、最近心跳时间、来源 IP（IPv4 写 ip_address，IPv6 写 ip_address_v6，
 // 空串不写）、节点进程的启动时间，清空 offline_since，并清零 auto 回退计数（push_fail_count=0、fallback_to_pull=false）。
 func (r *Repo) MarkOnline(ctx context.Context, id int64, ip string, v6 bool, boot time.Time, at time.Time) error {
@@ -266,6 +305,88 @@ func (r *Repo) UpdatePorts(ctx context.Context, id, resourceVersion, listenPort,
 		return nil, err
 	}
 	return r.ByID(ctx, id)
+}
+
+// TrafficStatsPatch 描述一次流量统计口径更新（非 nil 字段写入）。
+type TrafficStatsPatch struct {
+	Mode    *string
+	Source  *string
+	Include *bool
+}
+
+// UpdateTrafficStats 按乐观并发更新服务器流量统计口径（traffic_stats_mode / traffic_source / include_in_traffic_stats），抬升 resourceVersion。
+func (r *Repo) UpdateTrafficStats(ctx context.Context, id, resourceVersion int64, patch TrafficStatsPatch) (*Server, error) {
+	m := &model.Server{
+		ID:              id,
+		ResourceVersion: resourceVersion,
+	}
+	cols := make([]string, 0, 3)
+	if patch.Mode != nil {
+		m.TrafficStatsMode = *patch.Mode
+		cols = append(cols, "traffic_stats_mode")
+	}
+	if patch.Source != nil {
+		m.TrafficSource = *patch.Source
+		cols = append(cols, "traffic_source")
+	}
+	if patch.Include != nil {
+		m.IncludeInTrafficStats = *patch.Include
+		cols = append(cols, "include_in_traffic_stats")
+	}
+	if len(cols) == 0 {
+		return nil, v1.New(v1.CodeBadRequest, "至少需要提供 mode、source、include 之一")
+	}
+	if err := r.store.UpdateSpec(ctx, m, false, cols...); err != nil {
+		return nil, err
+	}
+	return r.ByID(ctx, id)
+}
+
+// UpdateSpeed 写服务器当前实时上下行网速（status 档，不抬 resourceVersion，不进审计）。
+func (r *Repo) UpdateSpeed(ctx context.Context, id, uploadSpeed, downloadSpeed int64, at time.Time) error {
+	if uploadSpeed < 0 {
+		uploadSpeed = 0
+	}
+	if downloadSpeed < 0 {
+		downloadSpeed = 0
+	}
+	t := at.UTC().Truncate(time.Microsecond)
+	m := &model.Server{
+		ID:                   id,
+		CurrentUploadSpeed:   uploadSpeed,
+		CurrentDownloadSpeed: downloadSpeed,
+		SpeedUpdatedAt:       &t,
+	}
+	return r.store.UpdateStatus(ctx, m, []string{"current_upload_speed", "current_download_speed", "speed_updated_at"})
+}
+
+// SystemTrafficUpdate 描述一次系统级物理网卡周期流量状态写入（status 档，不抬 resourceVersion）。
+type SystemTrafficUpdate struct {
+	RxCycle      int64
+	TxCycle      int64
+	LastSeenRx   int64
+	LastSeenTx   int64
+	BootTimeUnix int64
+	UpdatedAt    time.Time
+}
+
+// UpdateSystemTraffic 更新服务器的系统网卡周期累计与基线（status 档，不抬 resourceVersion）。
+func (r *Repo) UpdateSystemTraffic(ctx context.Context, id int64, u SystemTrafficUpdate) error {
+	t := u.UpdatedAt.UTC().Truncate(time.Microsecond)
+	m := &model.Server{
+		ID:                     id,
+		SystemRxCycle:          u.RxCycle,
+		SystemTxCycle:          u.TxCycle,
+		SystemLastSeenRx:       u.LastSeenRx,
+		SystemLastSeenTx:       u.LastSeenTx,
+		SystemBootTimeUnix:     u.BootTimeUnix,
+		SystemTrafficUpdatedAt: &t,
+	}
+	return r.store.UpdateStatus(ctx, m, []string{
+		"system_rx_cycle", "system_tx_cycle",
+		"system_last_seen_rx", "system_last_seen_tx",
+		"system_boot_time_unix", "system_traffic_updated_at",
+	})
 }
 
 // MarkPullSuccess 记一次只读轮询口采集成功：status 维持或变为 connected、更新 last_heartbeat 与 last_pull_at、清空 offline_since，
@@ -399,10 +520,18 @@ func (r *Repo) RevokeTokens(ctx context.Context, id int64, patch TokensPatch, at
 	return r.ByID(ctx, id)
 }
 
-// MarkOffline 把一台在线的服务器标为离线并记 offline_since；已经不是 connected 的不动，返回 false。
+// MarkOffline 把一台在线的服务器标为离线、记 offline_since 并清零实时上下行网速；已经不是 connected 的不动，返回 false。
 func (r *Repo) MarkOffline(ctx context.Context, id int64, at time.Time) (bool, error) {
-	m := &model.Server{ID: id, Status: StatusOffline, OfflineSince: &at}
-	err := r.store.UpdateStatus(ctx, m, []string{"status", "offline_since"}, store.Cond{Column: "status", Value: StatusConnected})
+	t := at.UTC().Truncate(time.Microsecond)
+	m := &model.Server{
+		ID:                   id,
+		Status:               StatusOffline,
+		OfflineSince:         &t,
+		CurrentUploadSpeed:   0,
+		CurrentDownloadSpeed: 0,
+		SpeedUpdatedAt:       &t,
+	}
+	err := r.store.UpdateStatus(ctx, m, []string{"status", "offline_since", "current_upload_speed", "current_download_speed", "speed_updated_at"}, store.Cond{Column: "status", Value: StatusConnected})
 	if e := v1.AsError(err); err != nil && (e.Code == v1.CodeConflict || e.Code == v1.CodeNotFound) {
 		return false, nil
 	}
@@ -423,30 +552,44 @@ func (r *Repo) MarkCore(ctx context.Context, id int64, running bool, version str
 	return r.store.UpdateStatus(ctx, m, cols)
 }
 
-// SweepOffline 把 status 为 connected 而最近心跳早于 before 的服务器标为离线，返回标了几台。
-// 逐台按「还是 connected 且心跳时间没变」的前置条件写：扫描与写入之间来了心跳的那台不会被误标。
+// SweepOffline 把 status 为 connected 而最近心跳早于 before 的服务器标为离线并清零实时网速，返回标了几台。
 func (r *Repo) SweepOffline(ctx context.Context, before, at time.Time) (int, error) {
+	ids, err := r.SweepOfflineIDs(ctx, before, at)
+	return len(ids), err
+}
+
+// SweepOfflineIDs 与 SweepOffline 相同，并返回本次被标为离线的服务器 ID 列表，便于业务层同步清零内存速率缓存。
+// 逐台按「还是 connected 且心跳时间没变」的前置条件写：扫描与写入之间来了心跳的那台不会被误标。
+func (r *Repo) SweepOfflineIDs(ctx context.Context, before, at time.Time) ([]int64, error) {
 	var stale []model.Server
 	err := r.db.NewSelect().Model(&stale).Column("id", "last_heartbeat").
 		Where("status = ?", StatusConnected).Where("deleted_at IS NULL").
 		Where("last_heartbeat IS NULL OR last_heartbeat < ?", before).Scan(ctx)
 	if err != nil {
-		return 0, v1.Wrap(v1.CodeDatabase, "查找心跳超时的服务器失败", err)
+		return nil, v1.Wrap(v1.CodeDatabase, "查找心跳超时的服务器失败", err)
 	}
-	n := 0
+	t := at.UTC().Truncate(time.Microsecond)
+	var ids []int64
 	for _, s := range stale {
-		m := &model.Server{ID: s.ID, Status: StatusOffline, OfflineSince: &at}
-		err := r.store.UpdateStatus(ctx, m, []string{"status", "offline_since"},
+		m := &model.Server{
+			ID:                   s.ID,
+			Status:               StatusOffline,
+			OfflineSince:         &t,
+			CurrentUploadSpeed:   0,
+			CurrentDownloadSpeed: 0,
+			SpeedUpdatedAt:       &t,
+		}
+		err := r.store.UpdateStatus(ctx, m, []string{"status", "offline_since", "current_upload_speed", "current_download_speed", "speed_updated_at"},
 			store.Cond{Column: "status", Value: StatusConnected}, store.Cond{Column: "last_heartbeat", Value: s.LastHeartbeat})
 		if e := v1.AsError(err); err != nil && (e.Code == v1.CodeConflict || e.Code == v1.CodeNotFound) {
 			continue
 		}
 		if err != nil {
-			return n, err
+			return ids, err
 		}
-		n++
+		ids = append(ids, s.ID)
 	}
-	return n, nil
+	return ids, nil
 }
 
 // SweepAutoFallback 检查无活跃 WS、具有轮询可达地址且心跳早于 before（或从未心跳）的 auto 服务器，

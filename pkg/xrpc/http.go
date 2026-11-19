@@ -12,9 +12,11 @@ const (
 	HTTPNodePathHandshakeFinish = "/handshake/finish"
 	HTTPNodePathRPC             = "/rpc"
 	HTTPNodePathPullTraffic     = "/api/child/traffic"
+	HTTPNodePathPullSpeed       = "/api/child/speed"
 
 	HTTPRPCMethodHeartbeat = "heartbeat"
 	HTTPRPCMethodTraffic   = "traffic"
+	HTTPRPCMethodSpeed     = "speed"
 )
 
 // HTTPHandshakeReq 是节点向主控 POST /api/remote/handshake 的请求体。
@@ -37,7 +39,7 @@ type HTTPHeartbeatPayload struct {
 // AgentHTTPRPC 是节点在加密信封内通过 POST /api/remote/rpc 发给主控的载荷：
 // 凭据始终只放在密文内部，严禁放进 HTTP Authorization 请求头。
 type AgentHTTPRPC struct {
-	Method           string                `json:"method"` // "heartbeat" 或 "traffic"
+	Method           string                `json:"method"` // "heartbeat"、"traffic" 或 "speed"
 	Token            string                `json:"token"`
 	AgentVersion     string                `json:"agent_version"`
 	ControlProtocol  int                   `json:"control_protocol"`
@@ -47,15 +49,17 @@ type AgentHTTPRPC struct {
 	MasterURL        string                `json:"master_url,omitempty"`
 	Heartbeat        *HTTPHeartbeatPayload `json:"heartbeat,omitempty"`
 	Traffic          *TrafficSnapshot      `json:"traffic,omitempty"`
+	Speed            *SpeedReport          `json:"speed,omitempty"`
 }
 
 // AgentHTTPRPCReply 是主控在加密信封内返回 POST /api/remote/rpc 的响应。
 type AgentHTTPRPCReply struct {
-	OK                bool       `json:"ok"`
-	Reason            string     `json:"reason,omitempty"`
-	Message           string     `json:"message,omitempty"`
-	HeartbeatInterval int        `json:"heartbeat_interval,omitempty"`
-	ServerTime        *time.Time `json:"server_time,omitempty"`
+	OK                bool         `json:"ok"`
+	Reason            string       `json:"reason,omitempty"`
+	Message           string       `json:"message,omitempty"`
+	HeartbeatInterval int          `json:"heartbeat_interval,omitempty"`
+	Config            *AgentConfig `json:"config,omitempty"`
+	ServerTime        *time.Time   `json:"server_time,omitempty"`
 }
 
 // NodeHandshakeInitResp 是节点管理口 / 轮询口 POST /handshake/init 的响应。

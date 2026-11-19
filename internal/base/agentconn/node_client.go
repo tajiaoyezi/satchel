@@ -180,7 +180,7 @@ func (c *nodeClient) PullTraffic(ctx context.Context, serverID int64, timeout ti
 	if len(candidates) == 0 {
 		return xrpc.TrafficSnapshot{}, "", false, ErrOffline
 	}
-	raw, ep, err := c.callEndpoints(ctx, serverID, rolePull, t.PullToken, candidates, xrpc.MethodTrafficSnapshot, nil, timeout)
+	raw, ep, err := c.callEndpointsPath(ctx, serverID, rolePull, t.PullToken, candidates, xrpc.HTTPNodePathRPC, xrpc.MethodTrafficSnapshot, nil, timeout)
 	if err != nil {
 		return xrpc.TrafficSnapshot{}, "", false, err
 	}
@@ -189,6 +189,34 @@ func (c *nodeClient) PullTraffic(ctx context.Context, serverID int64, timeout ti
 		return xrpc.TrafficSnapshot{}, "", false, fmt.Errorf("轮询口快照解不开：%w", err)
 	}
 	return snap, ep.host, ep.v6, nil
+}
+
+// PullSpeed 按轮询地址顺序从节点只读轮询口（pull_port，默认 23890）拉取 /api/child/speed（speed.get）。
+func (c *nodeClient) PullSpeed(ctx context.Context, serverID int64, timeout time.Duration) (xrpc.SpeedReport, string, bool, error) {
+	t, ok, err := c.m.targetInfo(ctx, serverID)
+	if err != nil {
+		return xrpc.SpeedReport{}, "", false, err
+	}
+	if !ok || t.PullToken == "" {
+		return xrpc.SpeedReport{}, "", false, ErrOffline
+	}
+	port := t.PullPort
+	if port <= 0 {
+		port = 23890
+	}
+	candidates := buildEndpoints([]string{t.PullAddress, t.IPAddress, t.Domain, t.PullAddressV6, t.IPAddressV6, t.DomainV6}, port)
+	if len(candidates) == 0 {
+		return xrpc.SpeedReport{}, "", false, ErrOffline
+	}
+	raw, ep, err := c.callEndpointsPath(ctx, serverID, rolePull, t.PullToken, candidates, xrpc.HTTPNodePathPullSpeed, xrpc.MethodSpeedGet, nil, timeout)
+	if err != nil {
+		return xrpc.SpeedReport{}, "", false, err
+	}
+	var rep xrpc.SpeedReport
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		return xrpc.SpeedReport{}, "", false, fmt.Errorf("轮询口网速解不开：%w", err)
+	}
+	return rep, ep.host, ep.v6, nil
 }
 
 func buildEndpoints(hosts []string, port int64) []nodeEndpoint {
@@ -220,12 +248,16 @@ func buildEndpoints(hosts []string, port int64) []nodeEndpoint {
 }
 
 func (c *nodeClient) callEndpoints(ctx context.Context, serverID int64, role, token string, candidates []nodeEndpoint, method string, params any, timeout time.Duration) (json.RawMessage, nodeEndpoint, error) {
+	return c.callEndpointsPath(ctx, serverID, role, token, candidates, xrpc.HTTPNodePathRPC, method, params, timeout)
+}
+
+func (c *nodeClient) callEndpointsPath(ctx context.Context, serverID int64, role, token string, candidates []nodeEndpoint, rpcPath, method string, params any, timeout time.Duration) (json.RawMessage, nodeEndpoint, error) {
 	if timeout <= 0 {
 		timeout = xrpc.DefaultTimeout
 	}
 	var lastErr error
 	for _, ep := range candidates {
-		raw, err := c.callOne(ctx, serverID, role, token, ep.baseURL, method, params, timeout)
+		raw, err := c.callOne(ctx, serverID, role, token, ep.baseURL, rpcPath, method, params, timeout)
 		if err == nil {
 			return raw, ep, nil
 		}
@@ -242,7 +274,7 @@ func (c *nodeClient) callEndpoints(ctx context.Context, serverID int64, role, to
 	return nil, nodeEndpoint{}, ErrOffline
 }
 
-func (c *nodeClient) callOne(ctx context.Context, serverID int64, role, token, baseURL, method string, params any, timeout time.Duration) (json.RawMessage, error) {
+func (c *nodeClient) callOne(ctx context.Context, serverID int64, role, token, baseURL, rpcPath, method string, params any, timeout time.Duration) (json.RawMessage, error) {
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -277,7 +309,7 @@ func (c *nodeClient) callOne(ctx context.Context, serverID int64, role, token, b
 		if err != nil {
 			return nil, err
 		}
-		respBytes, status, gotConn, err := c.doSignedHTTP(rctx, http.MethodPost, baseURL+xrpc.HTTPNodePathRPC, xrpc.HTTPNodePathRPC, token, ns.sessionID, env)
+		respBytes, status, gotConn, err := c.doSignedHTTP(rctx, http.MethodPost, baseURL+rpcPath, rpcPath, token, ns.sessionID, env)
 		if err != nil {
 			if !gotConn {
 				c.deleteSession(key)

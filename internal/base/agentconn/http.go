@@ -179,6 +179,7 @@ func (m *Manager) ServeRPC(w http.ResponseWriter, r *http.Request, ip string) {
 	m.RecordRuntime(node.ID, rt)
 
 	now := m.now()
+	cfg := m.agentConfig(ctx)
 	switch req.Method {
 	case xrpc.HTTPRPCMethodHeartbeat:
 		var boot time.Time
@@ -189,8 +190,7 @@ func (m *Manager) ServeRPC(w http.ResponseWriter, r *http.Request, ip string) {
 			writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: false, Reason: xrpc.AuthUnavailable, Message: "记录心跳失败，稍后重试"})
 			return
 		}
-		interval := int(m.heartbeatInterval(ctx) / time.Second)
-		writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: true, HeartbeatInterval: interval, ServerTime: &now})
+		writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: true, HeartbeatInterval: cfg.HeartbeatInterval, Config: &cfg, ServerTime: &now})
 		if req.MasterURL != "" {
 			go m.maybeSyncMasterURL(node.ID, node.Name, req.MasterURL)
 		}
@@ -206,7 +206,17 @@ func (m *Manager) ServeRPC(w http.ResponseWriter, r *http.Request, ip string) {
 				return
 			}
 		}
-		writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: true, ServerTime: &now})
+		writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: true, HeartbeatInterval: cfg.HeartbeatInterval, Config: &cfg, ServerTime: &now})
+	case xrpc.HTTPRPCMethodSpeed:
+		if req.Speed == nil {
+			writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: false, Reason: xrpc.CodeBadParams, Message: "缺少 speed 载荷"})
+			return
+		}
+		m.touchConflict(node.ID, ip)
+		if m.cfg.OnSpeed != nil {
+			m.cfg.OnSpeed(ctx, node.ID, *req.Speed)
+		}
+		writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: true, HeartbeatInterval: cfg.HeartbeatInterval, Config: &cfg, ServerTime: &now})
 	default:
 		writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: false, Reason: xrpc.CodeUnknownMethod, Message: "未知的 HTTP RPC 方法"})
 	}

@@ -43,6 +43,7 @@ import (
 	"github.com/satchel/satchel/internal/middleware/gate"
 	"github.com/satchel/satchel/internal/projection/agent"
 	"github.com/satchel/satchel/internal/projection/cli"
+	"github.com/satchel/satchel/internal/projection/dashboard"
 	"github.com/satchel/satchel/internal/projection/mcp"
 	"github.com/satchel/satchel/internal/projection/rest"
 	"github.com/satchel/satchel/internal/projection/scheduler"
@@ -75,30 +76,33 @@ var entryRoutes = []gate.Route{
 	{Pattern: web.PublicPrefix, Entry: gate.EntryMachine},
 	{Pattern: agent.Prefix, Entry: gate.EntryMachine},
 	{Pattern: mcp.Path, Entry: gate.EntryMCP},
+	{Pattern: dashboard.Path, Entry: gate.EntryPanel},
 	{Pattern: command.APIPrefix, Entry: gate.EntryPanel},
 	{Pattern: "/", Entry: gate.EntryPanel},
 }
 
 // app 是装配好的主控：执行链、HTTP 处理器、内置任务与要关的资源。gate、guard、identity 留着给端到端测试换时钟与验证服务。
 type app struct {
-	table     *command.Table
-	runner    command.Runner
-	handler   http.Handler
-	mounts    []string
-	db        *bun.DB
-	dataDir   string
-	logger    *slog.Logger
-	gate      *gate.Gate
-	guard     *svcsecurity.Service
-	identity  *auth.Service
-	sched     *scheduler.Scheduler
-	schedules *schedule.Service
-	jobs      *jobs.Service
-	backups   *svcbackup.Service
-	writeGate *db.WriteGate
-	databases *svcdatabase.Service
-	conns     *agentconn.Manager
-	servers   *svcservers.Service
+	table                *command.Table
+	runner               command.Runner
+	handler              http.Handler
+	mounts               []string
+	db                   *bun.DB
+	dataDir              string
+	logger               *slog.Logger
+	gate                 *gate.Gate
+	guard                *svcsecurity.Service
+	identity             *auth.Service
+	sched                *scheduler.Scheduler
+	schedules            *schedule.Service
+	jobs                 *jobs.Service
+	backups              *svcbackup.Service
+	writeGate            *db.WriteGate
+	databases            *svcdatabase.Service
+	conns                *agentconn.Manager
+	servers              *svcservers.Service
+	dash                 *dashboard.Hub
+	speedCollectInterval time.Duration
 
 	// stopMu 与 stopServe：发起恢复之后让 serve 优雅停止（serve 开始时设）。execPath：自升级或回退时，停止之后要 exec 的二进制。
 	stopMu      sync.Mutex
@@ -183,6 +187,14 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	masterPub := masterKey.Public().(ed25519.PublicKey)
 	serversSvc := svcservers.New(coreservers.New(bdb, st), settingsRepo, masterPub, logger)
 	serversSvc.SetMasterVersion(buildinfo.Version)
+	agentConfigOf := func(s *coresettings.State) xrpc.AgentConfig {
+		return xrpc.AgentConfig{
+			HeartbeatInterval:      int(s.HeartbeatInterval() / time.Second),
+			SpeedCollectInterval:   int(s.SpeedCollectInterval() / time.Second),
+			TrafficCollectInterval: int(s.TrafficCollectInterval() / time.Second),
+			AgentLogEnabled:        s.AgentLogEnabled(),
+		}
+	}
 	conns := agentconn.New(agentconn.Config{Identity: masterKey, Directory: serversSvc.Directory(), Version: buildinfo.Version,
 		MasterMachineID: agentconn.HostMachineID(),
 		CurrentMasterURL: func(ctx context.Context) string {
@@ -197,12 +209,25 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		OnTraffic: func(ctx context.Context, serverID int64, snap xrpc.TrafficSnapshot) error {
 			return serversSvc.IngestSnapshot(ctx, serverID, snap, time.Now())
 		},
+		OnSpeed: func(ctx context.Context, serverID int64, rep xrpc.SpeedReport) {
+			serversSvc.IngestSpeed(ctx, serverID, rep, time.Now())
+		},
+		OnOffline: func(serverID int64) {
+			serversSvc.ClearSpeed(serverID, time.Now())
+		},
 		HeartbeatInterval: func(ctx context.Context) time.Duration {
 			s, err := settingsRepo.Load(ctx)
 			if err != nil {
 				return 30 * time.Second
 			}
 			return s.HeartbeatInterval()
+		},
+		AgentConfig: func(ctx context.Context) xrpc.AgentConfig {
+			s, err := settingsRepo.Load(ctx)
+			if err != nil {
+				return xrpc.AgentConfig{HeartbeatInterval: 30, SpeedCollectInterval: 3, TrafficCollectInterval: 60}
+			}
+			return agentConfigOf(s)
 		}})
 	serversSvc.SetConns(conns)
 	// 内置任务的运行记录：上次主控停止时还在跑的记录先收尾，再装配任务（master-scheduler）。
@@ -213,6 +238,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	// 长任务：上次主控停止时还没结束的先标为失败（master-jobs）。参数摘要用横切层 audit 的同一套打码。
 	// 升级标记里的那个 job 不动：它由 exec 之后的收尾写结局（master-self-update）。
 	jobsSvc := jobs.New(corejobs.New(bdb, st), table, mwaudit.Digest, logger)
+	jobsSvc.SetServerLookup(serversSvc.LookupIDByName)
 	serversSvc.SetStartJob(func(ctx context.Context, serverID int64, inv *command.Invocation, run func(context.Context) (any, error), done func()) (any, error) {
 		return jobsSvc.StartForServer(ctx, serverID, inv, run, done)
 	})
@@ -343,12 +369,14 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 
 	// 网页（master-web）：/api/、/mcp、/public/ 之外的路径；别的方法交回 notFoundPath。
 	console := web.NewHandler(webFiles(), http.HandlerFunc(notFoundPath))
+	dash := dashboard.New(dashboard.Config{Snapshot: serversSvc.DashboardSnapshot, Logger: logger})
 
 	mux := http.NewServeMux()
 	mounts := []struct {
 		pattern string
 		handler http.Handler
 	}{
+		{dashboard.Path, dash},
 		{command.APIPrefix, rest.NewHandler(table, runner, identity)},
 		{mcp.Path, mcp.NewHandler(opts)},
 		{web.PublicPrefix, web.PublicHandler(filepath.Join(dataDir, db.PublicDir))},
@@ -367,7 +395,12 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		logger.Warn("环境变量 " + db.EnvForcePublicAccess + " 已打开：本进程跳过「关闭公网访问」这一道门（静默模式与封禁照常）；" +
 			"进来之后在主控本机执行 satchel settings gates set --set master_local_only=false --resource-version <N> --verify-user <管理员账号> 关掉，再去掉这个环境变量")
 	}
-	// 门这一组的设置：启动时加载一次，之后每次设置写成功就推给门、登录限流、令牌猜测的封禁与 Turnstile，不用重启。
+	// 门这一组与节点运行态设置：启动时加载一次，之后每次设置写成功就推给门、登录限流、令牌猜测的封禁、Turnstile、仪表盘 WS 与在线节点，不用重启。
+	var (
+		cfgMu        sync.Mutex
+		cfgInited    bool
+		lastAgentCfg xrpc.AgentConfig
+	)
 	apply := func(s *coresettings.State) {
 		g := s.Gates()
 		gates.Configure(gate.ConfigFrom(g))
@@ -377,6 +410,17 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 			Block: g.BruteForceBlock, SkipLocalIP: g.SkipLocalIP})
 		b := s.Branding()
 		console.SetBranding(web.Branding{SiteTitle: b.SiteTitle, BrandTitle: b.BrandTitle, LogoURL: b.LogoURL, LoginWallpaper: b.LoginWallpaper, DefaultTheme: b.DefaultTheme})
+		dash.SetRefreshInterval(s.DashboardRefreshInterval())
+		serversSvc.SetSpeedCollectInterval(s.SpeedCollectInterval())
+		nextCfg := agentConfigOf(s)
+		cfgMu.Lock()
+		shouldBroadcast := cfgInited && nextCfg != lastAgentCfg
+		lastAgentCfg = nextCfg
+		cfgInited = true
+		cfgMu.Unlock()
+		if shouldBroadcast {
+			go serversSvc.BroadcastAgentConfig(context.Background(), nextCfg)
+		}
 	}
 	current, err := settingsRepo.Load(context.Background())
 	if err != nil {
@@ -389,7 +433,8 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	// → SameOrigin（管住所有浏览器发来的写请求：REST、/mcp、会话入口）→ mux。
 	handler := gates.Wrap(rest.CORS(cfg.AllowedOrigins, authn.Middleware(identity, tokens, guard, rest.SameOrigin(gatedSessions(writeGate, mux)))))
 	a = &app{table: table, runner: runner, handler: handler, mounts: patterns, db: bdb, dataDir: dataDir, logger: logger,
-		gate: gates, guard: guard, identity: identity, sched: sched, schedules: schedules, jobs: jobsSvc, backups: backups, writeGate: writeGate, databases: databases, conns: conns, servers: serversSvc}
+		gate: gates, guard: guard, identity: identity, sched: sched, schedules: schedules, jobs: jobsSvc, backups: backups,
+		writeGate: writeGate, databases: databases, conns: conns, servers: serversSvc, dash: dash, speedCollectInterval: current.SpeedCollectInterval()}
 	return a, nil
 }
 
@@ -477,6 +522,7 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener, beforeDBClose .
 		}(ln)
 	}
 	a.sched.Start(ctx)
+	a.servers.StartSpeedCollector(ctx, a.speedCollectInterval)
 	a.logger.Info("主控已启动", "listen", tcp.Addr().String(), "socket", unix.Addr().String())
 	var serveErr error
 	select {
@@ -486,13 +532,15 @@ func (a *app) serve(ctx context.Context, tcp, unix net.Listener, beforeDBClose .
 	a.logger.Info("开始优雅停止", "timeout", shutdownTimeout)
 	stopCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	// 内置任务、长任务与 HTTP 同时停：不排在 HTTP 后面，免得 HTTP 用完时限后它们一点时间都没有；都在关库之前停下。
+	// 内置任务、长任务、轻量网速轮询、仪表盘 WS 与 HTTP 同时停：都在关库之前停下。
 	schedDone := make(chan struct{})
 	go func() {
 		var wg sync.WaitGroup
-		wg.Add(2)
+		wg.Add(4)
 		go func() { defer wg.Done(); a.sched.Stop(stopCtx) }()
 		go func() { defer wg.Done(); a.jobs.Stop(stopCtx) }()
+		go func() { defer wg.Done(); a.servers.StopSpeedCollector() }()
+		go func() { defer wg.Done(); a.dash.Close(stopCtx) }()
 		wg.Wait()
 		close(schedDone)
 	}()

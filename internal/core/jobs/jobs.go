@@ -153,18 +153,32 @@ func (r *Repo) Get(ctx context.Context, jobID string) (*Job, error) {
 	return jobOf(&row), nil
 }
 
-func filtered(q *bun.SelectQuery, status string) *bun.SelectQuery {
+// ListFilter 描述长任务列表的过滤条件。
+type ListFilter struct {
+	Status   string
+	ServerID *int64
+}
+
+func filtered(q *bun.SelectQuery, f ListFilter) *bun.SelectQuery {
 	q = q.Where("deleted_at IS NULL")
-	if status != "" {
-		q = q.Where("status = ?", status)
+	if f.Status != "" {
+		q = q.Where("status = ?", f.Status)
+	}
+	if f.ServerID != nil {
+		q = q.Where("server_id = ?", *f.ServerID)
 	}
 	return q
 }
 
 // List 按 id 倒序取一页：beforeID 大于 0 时只取 id 小于它的（keyset 翻页），最多 limit 条；status 为空不过滤。
 func (r *Repo) List(ctx context.Context, status string, limit int, beforeID int64) ([]*Job, error) {
+	return r.ListFiltered(ctx, ListFilter{Status: status}, limit, beforeID)
+}
+
+// ListFiltered 按组合过滤条件与 id 倒序取一页。
+func (r *Repo) ListFiltered(ctx context.Context, filter ListFilter, limit int, beforeID int64) ([]*Job, error) {
 	var rows []model.Job
-	q := filtered(r.db.NewSelect().Model(&rows), status).OrderExpr("id DESC").Limit(limit)
+	q := filtered(r.db.NewSelect().Model(&rows), filter).OrderExpr("id DESC").Limit(limit)
 	if beforeID > 0 {
 		q = q.Where("id < ?", beforeID)
 	}
@@ -180,7 +194,12 @@ func (r *Repo) List(ctx context.Context, status string, limit int, beforeID int6
 
 // Count 数过滤条件下的总数。
 func (r *Repo) Count(ctx context.Context, status string) (int, error) {
-	n, err := filtered(r.db.NewSelect().Model((*model.Job)(nil)), status).Count(ctx)
+	return r.CountFiltered(ctx, ListFilter{Status: status})
+}
+
+// CountFiltered 数给定组合过滤条件下的长任务总数。
+func (r *Repo) CountFiltered(ctx context.Context, filter ListFilter) (int, error) {
+	n, err := filtered(r.db.NewSelect().Model((*model.Job)(nil)), filter).Count(ctx)
 	if err != nil {
 		return 0, v1.Wrap(v1.CodeDatabase, "统计长任务失败", err)
 	}

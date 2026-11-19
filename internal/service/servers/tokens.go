@@ -106,16 +106,17 @@ func (s *Service) tokenRotate(ctx context.Context, inv *command.Invocation) (any
 		rpc.PullToken = fresh[2]
 	}
 
-	if s.conns == nil {
+	conns := s.getConns()
+	if conns == nil {
 		return nil, nodeError(prev.Spec.Name, xrpc.MethodTokenRotate, callTimeout, agentconn.ErrOffline)
 	}
 
 	var ctrl tokenController
-	if tc, ok := s.conns.(tokenController); ok {
+	if tc, ok := conns.(tokenController); ok {
 		ctrl = tc
 	}
 	var agentCtrl agentTokenController
-	if ac, ok := s.conns.(agentTokenController); ok {
+	if ac, ok := conns.(agentTokenController); ok {
 		agentCtrl = ac
 	}
 	if doTok && ctrl != nil {
@@ -136,7 +137,7 @@ func (s *Service) tokenRotate(ctx context.Context, inv *command.Invocation) (any
 		return nil, err
 	}
 
-	_, callErr := s.conns.Call(ctx, prev.Metadata.ID, xrpc.MethodTokenRotate, rpc, callTimeout)
+	_, callErr := conns.Call(ctx, prev.Metadata.ID, xrpc.MethodTokenRotate, rpc, callTimeout)
 	if callErr == nil {
 		if ctrl != nil {
 			if doTok {
@@ -204,7 +205,7 @@ func (s *Service) tokenRevoke(ctx context.Context, inv *command.Invocation) (any
 	if err != nil {
 		return nil, err
 	}
-	if tc, ok := s.conns.(tokenController); ok {
+	if tc, ok := s.getConns().(tokenController); ok {
 		tc.InvalidateServer(srv.Metadata.ID, doTok, roles...)
 	}
 	return updated, nil

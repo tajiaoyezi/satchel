@@ -321,3 +321,87 @@ func TestStartForServer(t *testing.T) {
 		}
 	})
 }
+
+func TestListFilterByServerName(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		st := store.New(bdb, schema.Default())
+		s1 := &model.Server{Name: "hk-1", Token: "tok-hk-1"}
+		s2 := &model.Server{Name: "hk-2", Token: "tok-hk-2"}
+		if err := st.Insert(ctx, s1); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Insert(ctx, s2); err != nil {
+			t.Fatal(err)
+		}
+		s := newService(bdb)
+		defer s.Stop(context.Background())
+		s.SetServerLookup(func(_ context.Context, name string) (int64, bool, error) {
+			switch name {
+			case "hk-1":
+				return s1.ID, true, nil
+			case "hk-2":
+				return s2.ID, true, nil
+			default:
+				return 0, false, nil
+			}
+		})
+
+		j1, err := s.StartForServer(admin(), s1.ID, inv(), func(context.Context) (any, error) { return map[string]string{"ok": "1"}, nil }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wait(t, s, j1.JobID)
+		j2, err := s.StartForServer(admin(), s1.ID, inv(), func(context.Context) (any, error) { return nil, v1.New(v1.CodeInternal, "boom") }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wait(t, s, j2.JobID)
+		j3, err := s.StartForServer(admin(), s2.ID, inv(), func(context.Context) (any, error) { return map[string]string{"ok": "2"}, nil }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wait(t, s, j3.JobID)
+		jGlobal, err := s.Start(admin(), inv(), func(context.Context) (any, error) { return map[string]string{"ok": "g"}, nil }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wait(t, s, jGlobal.JobID)
+
+		// 仅按服务器名过滤
+		out, err := call(t, admin(), s, "job list", nil, map[string]any{"server-name": "hk-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		page := out.(*command.PageResult)
+		if page.Total != 2 || len(page.Items) != 2 {
+			t.Fatalf("hk-1 应恰好 2 条 job，得到 total=%d len=%d", page.Total, len(page.Items))
+		}
+
+		// 与 --status 组合过滤
+		out, err = call(t, admin(), s, "job list", nil, map[string]any{"server-name": "hk-1", "status": core.StatusFailed})
+		if err != nil {
+			t.Fatal(err)
+		}
+		page = out.(*command.PageResult)
+		if page.Total != 1 || len(page.Items) != 1 || page.Items[0].(*core.Job).JobID != j2.JobID {
+			t.Fatalf("hk-1 + failed 应恰好命中 j2，得到 %+v", page)
+		}
+
+		// 不存在的服务器名返回空列表
+		out, err = call(t, admin(), s, "job list", nil, map[string]any{"server-name": "no-such"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		page = out.(*command.PageResult)
+		if page.Total != 0 || len(page.Items) != 0 {
+			t.Fatalf("未知服务器名应返回空列表，得到 total=%d len=%d", page.Total, len(page.Items))
+		}
+
+		// 普通用户禁止访问
+		userCtx := v1.WithIdentity(ctx, v1.Identity{Actor: "bob", ActorKind: v1.ActorUser, Role: v1.RoleUser})
+		if _, err := call(t, userCtx, s, "job list", nil, map[string]any{"server-name": "hk-1"}); v1.AsError(err).Code != v1.CodeForbidden {
+			t.Fatalf("普通用户应当被拒 forbidden，得到 %v", err)
+		}
+	})
+}
