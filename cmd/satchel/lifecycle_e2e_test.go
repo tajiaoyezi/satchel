@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"github.com/satchel/satchel/internal/base/db/dbtest"
 	svcservers "github.com/satchel/satchel/internal/service/servers"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
+	"github.com/satchel/satchel/pkg/release"
 	"github.com/satchel/satchel/pkg/xrpc"
 )
 
@@ -131,5 +134,159 @@ func TestNodeLifecycleAndMasterMigrateEndToEnd(t *testing.T) {
 			t.Fatalf("server uninstall 失败：%d %s %s", code, stderr, stdout)
 		}
 		h.waitStatus("hk-e2e", "offline")
+	})
+}
+
+// TestServerUpdateBatchArrayEndToEnd 端到端验证 REST JSON 字符串数组与 CLI 可重复 --servers：
+// 与 satchel-web v0.2.10 发送的 {"servers":["hk-1","a,b"],"channel":"stable","confirm":"2"} 契约严格对齐，
+// 确保带逗号服务器名不被拆分，不会错升未选节点，且拒绝旧版逗号拼接字符串。
+func TestServerUpdateBatchArrayEndToEnd(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		h := start(t, bdb)
+		base, pub := h.tcpURL, masterPub(t, h)
+		admin := setupAdmin(t, base)
+		fullTok := issueToken(t, admin, base, "full")
+
+		feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/cdn/satchel-agent/channels/stable/version.json":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"version":            "0.2.0",
+					"control_protocol":   xrpc.ControlProtocol,
+					"min_master_version": "0.1.0",
+				})
+			case "/api/repos/tajiaoyezi/satchel-agent/releases/latest":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"tag_name": "v0.2.0",
+					"body":     `release <!-- satchel-meta: {"control_protocol":1,"min_master_version":"0.1.0"} -->`,
+					"html_url": "https://example.invalid/releases/0.2.0",
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(feedSrv.Close)
+		h.app.servers.SetReleaseSources(release.Sources{
+			CDN:     feedSrv.URL + "/cdn",
+			Project: "satchel-agent",
+			Repo:    "tajiaoyezi/satchel-agent",
+			API:     feedSrv.URL + "/api",
+			Web:     feedSrv.URL + "/web",
+			Proxy:   feedSrv.URL + "/proxy",
+			Client:  feedSrv.Client(),
+		})
+		h.app.servers.SetUpdatePollTimings(10*time.Millisecond, 2*time.Second)
+
+		var mu sync.Mutex
+		versions := map[string]string{
+			"hk-1": "0.1.0",
+			"a,b":  "0.1.0",
+			"a":    "0.1.0",
+			"b":    "0.1.0",
+		}
+		updated := map[string]int{}
+		for _, sname := range []string{"hk-1", "a,b", "a", "b"} {
+			name := sname
+			ag := mustDial(t, h)
+			if !ag.authenticate(pub, h.addServer(name), xrpc.ControlProtocol).OK {
+				t.Fatalf("%s 应当认证成功", name)
+			}
+			ag.serveMethods(xrpc.Methods{
+				xrpc.MethodAgentInfo: func(context.Context, json.RawMessage) (any, error) {
+					mu.Lock()
+					ver := versions[name]
+					mu.Unlock()
+					return xrpc.AgentInfo{AgentVersion: ver, ControlProtocol: xrpc.ControlProtocol}, nil
+				},
+				xrpc.MethodAgentUpdate: func(_ context.Context, p json.RawMessage) (any, error) {
+					var in xrpc.AgentUpdateParams
+					_ = json.Unmarshal(p, &in)
+					mu.Lock()
+					prev := versions[name]
+					versions[name] = in.Version
+					updated[name]++
+					mu.Unlock()
+					return xrpc.AgentUpdateAck{Accepted: true, PreviousVersion: prev, TargetVersion: in.Version, Source: "cdn"}, nil
+				},
+			})
+		}
+
+		waitJob := func(jobID string) string {
+			t.Helper()
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				r := send(t, nil, "GET", base+"/api/v1/job/get/"+jobID, map[string]string{"Authorization": "Bearer " + fullTok}, "")
+				if r.status != 200 {
+					t.Fatalf("查 job %s 失败：%d %s", jobID, r.status, r.body)
+				}
+				if st := str(r.fields["status"]); st == "done" || st == "failed" {
+					if st != "done" {
+						t.Fatalf("job %s 应当 done，实际 %s：%s", jobID, st, r.body)
+					}
+					return str(r.fields["output"])
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			t.Fatalf("等待 job %s 完成超时", jobID)
+			return ""
+		}
+
+		// 1. 非法请求体均返回 400 bad_request：旧版逗号字符串、空数组、含空白项、--servers 与 --all 共存、两者皆缺。
+		authHdr := map[string]string{"Authorization": "Bearer " + fullTok}
+		for _, tc := range []struct {
+			desc, body string
+		}{
+			{"旧版字符串", `{"servers":"hk-1,a,b","channel":"stable","confirm":"2"}`},
+			{"空数组", `{"servers":[],"channel":"stable","confirm":"0"}`},
+			{"含空白项", `{"servers":["hk-1","  "],"channel":"stable","confirm":"2"}`},
+			{"servers与all同传", `{"servers":["hk-1"],"all":true,"channel":"stable","confirm":"1"}`},
+			{"空servers与all同传", `{"servers":[],"all":true,"channel":"stable","confirm":"1"}`},
+			{"两者皆缺", `{"channel":"stable","confirm":"1"}`},
+		} {
+			r := send(t, nil, "POST", base+"/api/v1/server/update/batch/0.2.0", authHdr, tc.body)
+			if r.status != 400 || r.code() != string(v1.CodeBadRequest) {
+				t.Fatalf("%s 应当 400 bad_request，得到 %d %s", tc.desc, r.status, r.body)
+			}
+		}
+
+		// 2. 与 satchel-web v0.2.10 完全一致的 REST 请求体：{"servers":["hk-1","a,b"],"channel":"stable","confirm":"2"}。
+		r := send(t, nil, "POST", base+"/api/v1/server/update/batch/0.2.0", authHdr, `{"servers":["hk-1","a,b"],"channel":"stable","confirm":"2"}`)
+		if r.status != 200 || str(r.fields["job_id"]) == "" {
+			t.Fatalf("REST 批量升级应当 200 并返回 job_id：%d %s", r.status, r.body)
+		}
+		out := waitJob(str(r.fields["job_id"]))
+		if !strings.Contains(out, `"succeeded":2`) || !strings.Contains(out, `"server":"hk-1"`) || !strings.Contains(out, `"server":"a,b"`) {
+			t.Fatalf("REST 批量升级结果不对：%s", out)
+		}
+		mu.Lock()
+		if updated["hk-1"] != 1 || updated["a,b"] != 1 || updated["a"] != 0 || updated["b"] != 0 {
+			t.Fatalf("REST 批量升级应当只升级 hk-1 与 a,b，实际：%v", updated)
+		}
+		// 复原 a,b 版本为 0.1.0，测试 CLI 传 --servers a,b --servers a（同时存在 b）。
+		versions["a,b"] = "0.1.0"
+		mu.Unlock()
+
+		// 3. CLI 可重复 --servers 不拆逗号：升级 a,b 与 a，绝不碰 b。
+		stdout, stderr, code := h.cli("server", "update", "batch", "0.2.0", "--servers", "a,b", "--servers", "a", "--confirm", "2", "--json")
+		if code != 0 {
+			t.Fatalf("CLI 批量升级失败：code=%d stderr=%s stdout=%s", code, stderr, stdout)
+		}
+		var cliJob struct {
+			Status string `json:"status"`
+			Output string `json:"output"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &cliJob); err != nil || cliJob.Status != "done" {
+			t.Fatalf("CLI 批量升级返回任务应当 done：%v %s", err, stdout)
+		}
+		var batchRes svcservers.BatchUpdateResult
+		if err := json.Unmarshal([]byte(cliJob.Output), &batchRes); err != nil || batchRes.Succeeded != 2 || len(batchRes.Results) != 2 ||
+			batchRes.Results[0].Server != "a,b" || batchRes.Results[1].Server != "a" {
+			t.Fatalf("CLI 批量升级结果应当精确包含 a,b 与 a：err=%v res=%+v raw=%s", err, batchRes, cliJob.Output)
+		}
+		mu.Lock()
+		if updated["a,b"] != 2 || updated["a"] != 1 || updated["b"] != 0 {
+			t.Fatalf("CLI 批量升级应当只升 a,b 与 a、绝不误升 b，实际：%v", updated)
+		}
+		mu.Unlock()
 	})
 }

@@ -583,9 +583,10 @@ func (s *Service) updateBatch(ctx context.Context, inv *command.Invocation) (any
 	if err != nil {
 		return nil, err
 	}
-	serversCSV := strings.TrimSpace(inv.String("servers", ""))
+	_, hasServers := inv.Flags["servers"]
+	serversFlag := inv.Strings("servers")
 	allFlag := inv.Bool("all")
-	if (serversCSV == "" && !allFlag) || (serversCSV != "" && allFlag) {
+	if (!hasServers && !allFlag) || (hasServers && allFlag) {
 		return nil, v1.New(v1.CodeBadRequest, "--servers 与 --all 必须且只能选一个")
 	}
 
@@ -599,11 +600,14 @@ func (s *Service) updateBatch(ctx context.Context, inv *command.Invocation) (any
 			return nil, v1.New(v1.CodeConflict, "当前没有已登记的服务器可批量升级")
 		}
 	} else {
+		if len(serversFlag) == 0 {
+			return nil, v1.New(v1.CodeBadRequest, "--servers 不能为空")
+		}
 		seen := map[string]bool{}
-		for _, part := range strings.Split(serversCSV, ",") {
+		for _, part := range serversFlag {
 			name := strings.TrimSpace(part)
 			if name == "" {
-				continue
+				return nil, v1.New(v1.CodeBadRequest, "--servers 中不能包含空白服务器名")
 			}
 			if seen[name] {
 				continue
@@ -614,9 +618,6 @@ func (s *Service) updateBatch(ctx context.Context, inv *command.Invocation) (any
 				return nil, err
 			}
 			rawServers = append(rawServers, srv)
-		}
-		if len(rawServers) == 0 {
-			return nil, v1.New(v1.CodeBadRequest, "--servers 不能为空")
 		}
 	}
 

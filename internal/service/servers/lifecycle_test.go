@@ -393,24 +393,42 @@ func TestLifecycleUpdateCheckApplyBatch(t *testing.T) {
 			t.Fatalf("重连仍报旧版应当归类 old_after_swap：%s", *jSwapOld.Output)
 		}
 
-		// 5. batch 权限与数量确认，以及遇 new_unconfirmed (batch_continue=false) 立即止损不发给 hk-2。
+		// 5. batch 权限、数组校验与数量确认，以及遇 new_unconfirmed (batch_continue=false) 立即止损不发给 hk-2。
 		onlyBatchCtx := adminWithDangers(v1.DangerBatch)
 		if _, err := b["server update batch"](onlyBatchCtx, &command.Invocation{
-			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": "hk-1,hk-2"}, Confirm: "2",
+			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": []string{"hk-1", "hk-2"}}, Confirm: "2",
 		}); v1.AsError(err).Code != v1.CodeForbidden {
 			t.Fatalf("仅有 DangerBatch 无 DangerRestart 应当返回 forbidden：%v", err)
 		}
 
 		if _, err := b["server update batch"](adminCtx, &command.Invocation{
-			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": "hk-1,hk-2"}, Confirm: "1",
+			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": []string{"hk-1", "hk-2"}}, Confirm: "1",
 		}); v1.AsError(err).Code != v1.CodeConfirmRequired {
 			t.Fatalf("confirm 不等于目标台数 2 应当返回 confirm_required：%v", err)
 		}
 
 		if _, err := b["server update batch"](adminCtx, &command.Invocation{
-			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": "hk-1,hk-2", "all": true}, Confirm: "2",
+			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": []string{"hk-1", "hk-2"}, "all": true}, Confirm: "2",
 		}); v1.AsError(err).Code != v1.CodeBadRequest {
 			t.Fatalf("--servers 与 --all 同时传应当 bad_request：%v", err)
+		}
+
+		if _, err := b["server update batch"](adminCtx, &command.Invocation{
+			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": []string{}, "all": true}, Confirm: "2",
+		}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Fatalf("空 --servers 与 --all 同时传应当 bad_request：%v", err)
+		}
+
+		if _, err := b["server update batch"](adminCtx, &command.Invocation{
+			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": []string{}}, Confirm: "0",
+		}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Fatalf("空 --servers 应当 bad_request：%v", err)
+		}
+
+		if _, err := b["server update batch"](adminCtx, &command.Invocation{
+			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": []string{"hk-1", "   "}}, Confirm: "2",
+		}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Fatalf("--servers 含空白项应当 bad_request：%v", err)
 		}
 
 		// hk-1 在 accept 后断开失联 -> new_unconfirmed, batch_continue=false -> 不向 hk-2 下发 agent.update。
@@ -426,7 +444,7 @@ func TestLifecycleUpdateCheckApplyBatch(t *testing.T) {
 		}
 		mu.Unlock()
 		batchRaw, err := b["server update batch"](adminCtx, &command.Invocation{
-			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": "hk-1,hk-2"}, Confirm: "2",
+			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": []string{"hk-1", "hk-2"}}, Confirm: "2",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -619,5 +637,117 @@ func TestLifecycleUninstallSwitchPortsAndProbeMasterURL(t *testing.T) {
 		if updatedMasterURL != "https://next.example.com" {
 			t.Fatalf("PushNodesMasterURL 未下发新地址：%q", updatedMasterURL)
 		}
+	})
+}
+
+func TestBatchUpdateCommaServerNames(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		st := store.New(bdb, schema.Default())
+		settingsRepo := coresettings.New(bdb, st, schema.Default())
+		if err := settingsRepo.EnsureSingleton(ctx); err != nil {
+			t.Fatal(err)
+		}
+		repo := core.New(bdb, st)
+		jobsRepo := corejobs.New(bdb, st)
+		jobsSvc := svcjobs.New(jobsRepo, command.Catalog(), func(_ *command.Command, _ *command.Invocation) string { return `{}` }, nil)
+		t.Cleanup(func() { jobsSvc.Stop(context.Background()) })
+		pub, _, _ := ed25519.GenerateKey(rand.Reader)
+		svc := New(repo, settingsRepo, pub, nil)
+		svc.SetMasterVersion("0.2.0")
+		svc.SetUpdatePollTimings(10*time.Millisecond, 2*time.Second)
+		svc.SetReleaseSources(newFakeReleaseServer(t, &fakeReleaseFeed{version: "0.2.0", controlProtocol: xrpc.ControlProtocol, minMaster: "0.1.0"}))
+		svc.SetStartJob(func(jctx context.Context, sid int64, inv *command.Invocation, run func(context.Context) (any, error), done func()) (any, error) {
+			return jobsSvc.StartForServer(jctx, sid, inv, run, done)
+		})
+
+		conns := newFakeLifecycleConns()
+		svc.SetConns(conns)
+
+		srvAB, err := repo.Create(ctx, "a,b", ModeWebsocket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srvA, err := repo.Create(ctx, "a", ModeWebsocket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srvB, err := repo.Create(ctx, "b", ModeWebsocket)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var mu sync.Mutex
+		versions := map[int64]string{
+			srvAB.Metadata.ID: "0.1.0",
+			srvA.Metadata.ID:  "0.1.0",
+			srvB.Metadata.ID:  "0.1.0",
+		}
+		updated := map[int64]int{}
+		registerNode := func(id int64) {
+			conns.handlers[id] = func(method string, params any) (json.RawMessage, error) {
+				switch method {
+				case xrpc.MethodAgentInfo:
+					mu.Lock()
+					ver := versions[id]
+					mu.Unlock()
+					raw, _ := json.Marshal(xrpc.AgentInfo{AgentVersion: ver, ControlProtocol: xrpc.ControlProtocol})
+					return raw, nil
+				case xrpc.MethodAgentUpdate:
+					p := params.(xrpc.AgentUpdateParams)
+					mu.Lock()
+					prev := versions[id]
+					versions[id] = p.Version
+					updated[id]++
+					mu.Unlock()
+					raw, _ := json.Marshal(xrpc.AgentUpdateAck{Accepted: true, PreviousVersion: prev, TargetVersion: p.Version, Source: "cdn"})
+					return raw, nil
+				default:
+					return nil, &xrpc.Error{Code: xrpc.CodeUnknownMethod, Message: "unknown"}
+				}
+			}
+		}
+		registerNode(srvAB.Metadata.ID)
+		registerNode(srvA.Metadata.ID)
+		registerNode(srvB.Metadata.ID)
+
+		b := svc.Bindings()
+		adminCtx := adminWithDangers(v1.DangerBatch, v1.DangerRestart)
+
+		// 1. 仅选带逗号的 "a,b"：confirm=1 不应拆成 a 与 b。
+		jobRaw, err := b["server update batch"](adminCtx, &command.Invocation{
+			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": []string{"a,b"}}, Confirm: "1",
+		})
+		if err != nil {
+			t.Fatalf("仅选 a,b 应当成功：%v", err)
+		}
+		job1 := waitJobDone(t, jobsRepo, jobRaw.(*corejobs.Job).JobID)
+		if job1.Status != corejobs.StatusDone || !strings.Contains(*job1.Output, `"server":"a,b"`) {
+			t.Fatalf("仅选 a,b 任务应当 done 且目标为 a,b：%s %s", job1.Status, *job1.Output)
+		}
+		mu.Lock()
+		if updated[srvAB.Metadata.ID] != 1 || updated[srvA.Metadata.ID] != 0 || updated[srvB.Metadata.ID] != 0 {
+			t.Fatalf("应当只升级 a,b，实际调用次数 ab=%d a=%d b=%d", updated[srvAB.Metadata.ID], updated[srvA.Metadata.ID], updated[srvB.Metadata.ID])
+		}
+		// 复原 a,b 为 0.1.0，继续测试同时选 ["a,b", "a"] 不得误升 b。
+		versions[srvAB.Metadata.ID] = "0.1.0"
+		mu.Unlock()
+
+		// 2. 同时选 "a,b" 与 "a"（confirm=2）：必须只升 a,b 与 a，绝不碰 b。
+		jobRaw2, err := b["server update batch"](adminCtx, &command.Invocation{
+			Path: []string{"server", "update", "batch"}, Args: []string{"0.2.0"}, Flags: map[string]any{"servers": []string{"a,b", "a"}}, Confirm: "2",
+		})
+		if err != nil {
+			t.Fatalf("同时选 a,b 与 a 应当成功：%v", err)
+		}
+		job2 := waitJobDone(t, jobsRepo, jobRaw2.(*corejobs.Job).JobID)
+		if job2.Status != corejobs.StatusDone || !strings.Contains(*job2.Output, `"succeeded":2`) {
+			t.Fatalf("同时选 a,b 与 a 应当成功 2 台：%s %s", job2.Status, *job2.Output)
+		}
+		mu.Lock()
+		if updated[srvAB.Metadata.ID] != 2 || updated[srvA.Metadata.ID] != 1 || updated[srvB.Metadata.ID] != 0 {
+			t.Fatalf("应当只升级 a,b 与 a、绝不升级 b，实际 ab=%d a=%d b=%d", updated[srvAB.Metadata.ID], updated[srvA.Metadata.ID], updated[srvB.Metadata.ID])
+		}
+		mu.Unlock()
 	})
 }

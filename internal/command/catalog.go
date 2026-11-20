@@ -114,7 +114,7 @@ func serverCommands() []*Command {
 			Class: ClassAction, Shape: ShapeJob, Danger: v1.DangerBatch, Confirm: &Confirm{Kind: ConfirmCount},
 			Args: []Arg{{Name: "version", Description: "目标版本号，必须等于所选渠道当前最新版本，如 0.2.0"}},
 			Flags: []Flag{
-				{Name: "servers", Type: TypeString, Description: "逗号分隔的目标服务器名列表（与 --all 二选一）"},
+				{Name: "servers", Type: TypeStrings, Description: "目标服务器名列表（每个值为完整服务器名，与 --all 二选一）"},
 				{Name: "all", Type: TypeBool, Description: "升级全部已登记的服务器（与 --servers 二选一）"},
 				{Name: "channel", Type: TypeString, Default: "stable", Description: "更新渠道：stable 或 prerelease"},
 			}},
