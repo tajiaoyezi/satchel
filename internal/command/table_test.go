@@ -34,7 +34,9 @@ func TestCatalog(t *testing.T) {
 		"token create": ClassAction, "token update": ClassAction, "token revoke": ClassAction,
 		"security ban": ClassAction, "security unban": ClassAction,
 		"settings set": ClassMasterSettings, "settings rollback": ClassMasterSettings, "settings master-url set": ClassMasterSettings, "settings master-url migrate": ClassMasterSettings,
-		"settings gates set": ClassMasterSettings, "settings turnstile test": ClassAction, "settings image upload": ClassAction,
+		"settings gates set": ClassMasterSettings, "settings turnstile test": ClassAction, "settings image upload": ClassAction, "settings batch-threshold set": ClassMasterSettings,
+		"plan": ClassConfig, "apply": ClassConfig, "plans list": ClassRead, "plans get": ClassRead,
+		"snapshot list": ClassRead, "snapshot get": ClassRead, "snapshot rollback": ClassConfig,
 		"server add": ClassConfig, "server install-command": ClassRead, "server list": ClassRead, "server get": ClassRead,
 		"server token show": ClassRead, "server token rotate": ClassAction, "server token revoke": ClassAction,
 		"server limit set": ClassAction, "server limit clear": ClassAction, "server kick": ClassAction,
@@ -43,6 +45,7 @@ func TestCatalog(t *testing.T) {
 		"server uninstall": ClassAction, "server switch-listen-port": ClassAction, "server probe-master-url": ClassRead,
 		"server system-info": ClassRead, "server nics": ClassRead, "server speed": ClassRead,
 		"server traffic-stats set": ClassConfig, "server logs list": ClassRead, "server logs files": ClassRead,
+		"server config status": ClassRead, "server config files": ClassRead, "server config read": ClassRead, "server config test": ClassRead,
 	}
 	if len(table.All()) != len(want) {
 		t.Fatalf("目录里应当恰好 %d 条命令，得到 %v", len(want), table.Names())
@@ -56,7 +59,7 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 的类别应当是 %s，得到 %s", name, class, c.Class)
 		}
 	}
-	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "server logs list", "server logs files"} {
+	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "plans list", "snapshot list", "server logs list", "server logs files", "server config files"} {
 		if c, _ := table.Lookup(name); !c.List {
 			t.Errorf("%s 应当是列表命令", name)
 		}
@@ -101,9 +104,15 @@ func TestCatalog(t *testing.T) {
 		t.Error("settings set 的 scope 应当是 operate")
 	}
 	for _, c := range table.All() {
-		if _, ok := c.FlagByName("force"); ok {
-			t.Errorf("%s 不该登记 --force（force 归权限类，随 M2 的 apply 做门）", c.Name())
+		if _, ok := c.FlagByName("force"); ok && c.Name() != "apply" {
+			t.Errorf("%s 不该登记 --force（仅 apply 允许）", c.Name())
 		}
+	}
+	if c, _ := table.Lookup("apply"); !c.DynamicDanger || !c.HasConfirm() {
+		t.Errorf("apply 应当标 DynamicDanger 并支持 --confirm：%+v", c)
+	}
+	if c, _ := table.Lookup("settings batch-threshold set"); c.Danger != v1.DangerPermission || c.Confirm == nil || c.Confirm.Kind != ConfirmObject || c.Confirm.Arg != "key" {
+		t.Errorf("settings batch-threshold set 应当是权限类、confirm 取 key：%+v", c)
 	}
 	if c, _ := table.Lookup("mcp init"); func() bool {
 		_, u := c.FlagByName(VerifyUserFlag)
@@ -194,6 +203,11 @@ func TestTableRules(t *testing.T) {
 		{"不认识的形状", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Shape: "stream"}}, "不认识"},
 		{"长任务撞名 no-wait", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Shape: ShapeJob, Flags: []Flag{{Name: NoWaitFlag, Type: TypeBool}}}}, "保留"},
 		{"本地命令也不许登记 force", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassLocal, Flags: []Flag{{Name: "force", Type: TypeBool}}}}, "force"},
+		{"动态危险类标在 read 上", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassRead, DynamicDanger: true}}, "动态危险类"},
+		{"动态危险类标在 local 上", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassLocal, DynamicDanger: true}}, "动态危险类"},
+		{"静态与动态危险类同时登记", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassConfig, Danger: v1.DangerDelete, Confirm: &Confirm{Kind: ConfirmCount}, DynamicDanger: true}}, "动态危险类"},
+		{"不要身份 + 动态危险类", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Anonymous: true, DynamicDanger: true}}, "动态危险类"},
+		{"非 apply 不许登记 force", []*Command{{Path: []string{"plan"}, Summary: "s", Class: ClassConfig, DynamicDanger: true, Flags: []Flag{{Name: "force", Type: TypeBool}}}}, "force"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -208,6 +222,14 @@ func TestTableRules(t *testing.T) {
 	}
 	if _, err := New(read("audit", "list"), read("audit", "show"), action("demo", "remove")); err != nil {
 		t.Fatalf("合法的表不该报错：%v", err)
+	}
+	// apply（config + DynamicDanger）允许登记 bool 型 --force，且 HasConfirm 为真。
+	applyCmd := &Command{Path: []string{"apply"}, Summary: "s", Class: ClassConfig, DynamicDanger: true, Flags: []Flag{{Name: "force", Type: TypeBool}}}
+	if _, err := New(applyCmd); err != nil {
+		t.Fatalf("合法 apply 应当通过：%v", err)
+	}
+	if !applyCmd.HasConfirm() {
+		t.Fatal("DynamicDanger 命令 HasConfirm 应当为真")
 	}
 	// 本地命令可以自己登记 --confirm、--verify-user、--verify-code（admin reset-password、mcp init）。
 	if _, err := New(&Command{Path: []string{"x"}, Summary: "s", Class: ClassLocal, Flags: []Flag{

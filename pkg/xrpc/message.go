@@ -116,6 +116,7 @@ const (
 	CodeUnknownMethod = "unknown_method" // 对方不认识这个方法
 	CodeBadParams     = "bad_params"     // 参数解不开或不合法
 	CodeNotFound      = "not_found"      // 目标对象或白名单文件不存在
+	CodeConflict      = "conflict"       // 状态或配置哈希冲突
 	CodeFailed        = "failed"         // 方法执行失败
 )
 

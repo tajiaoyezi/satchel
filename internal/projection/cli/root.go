@@ -42,6 +42,8 @@ type Options struct {
 	ServerSide bool
 	// Prompt 从终端读一个不回显的值（密码、验证码）；nil 时用真终端。没有终端时 MUST 返回 ErrNoTerminal，不等待。
 	Prompt func(label string) (string, error)
+	// Stdin 是 --file - 读取的标准输入来源；nil 时用 os.Stdin。
+	Stdin io.Reader
 	// JobPoll 是跟长任务时每次查 job get 的间隔；JobMaxWait 是最多等多久，0 表示等到结束（master-jobs：CLI 每秒一次、
 	// 一直等；MCP 每半秒一次、最多 60 秒）。
 	JobPoll    time.Duration
@@ -267,7 +269,7 @@ func TakesValueFlag(cmd *command.Command, name string) bool {
 	case "help", "h", command.NoWaitFlag:
 		return false
 	case "confirm":
-		return cmd == nil || cmd.Danger != ""
+		return cmd == nil || cmd.HasConfirm()
 	case command.VerifyCodeFlag, command.VerifyUserFlag:
 		return cmd == nil || cmd.HumanOnly
 	case "limit", "cursor":

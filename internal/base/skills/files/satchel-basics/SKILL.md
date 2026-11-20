@@ -50,6 +50,16 @@ description: "用 Satchel 之前先读：开局看总览与身份，怎么学命
 - MCP 上的 `satchel_run` 最多等 60 秒，到时返回当时的 job，再用 `job get` 跟。
 - 数据库迁移或主控升级期间，别的命令会返回 `unavailable`：照错误里的 `next` 等一会再试，或用 `satchel job list` 看进度。
 
+## 配置变更（plan / apply）与快照回滚
+
+- 配置类资源（`Server`、`Inbound`、`Outbound`、`RoutingRule` 等）的唯一写路径是两阶段预演与提交：
+  - 预演：`satchel plan --spec <JSON>`（单条变更对象或数组，不改库，返回逐对象前后 diff、节点渲染后的 `kernel.json` 哈希与 diff、所需危险类与 `confirm_hint`，默认 10 分钟有效）。本机 CLI 还支持 `satchel plan --file <路径>`（或 `--file -` 读标准输入）在本地读入文件后内联发送；MCP 与 REST 一律拒绝 `--file`，只能传 `--spec`。
+  - 提交：`satchel apply --plan <计划号>`。提交前自动重算实时 diff 并校验乐观并发版本号：diff 发生漂移报 `conflict` 要求重跑 `plan`；仅版本号变化时未带 `--force` 报 `version_conflict`（退出码 6），带 `--force` 仅跳过版本号校验且自动触发 `permission` 危险类与 `--confirm`。多节点部分失败时不回滚已成功节点，返回 `partial_failure`（退出码 8）并在 `state.results` 列出每台节点结局。
+  - 查历史计划：`satchel plans list`（可用 `--status pending` / `applied` / `expired` / `rejected` 过滤）与 `satchel plans get <id>`。
+- 每次 `apply` 写前都会为既有对象追加快照（共享 `apply_id`，绝不含服务器三把通信令牌）：
+  - 列出快照：`satchel snapshot list`（支持 `--kind`、`--object-id`、`--apply-id` 过滤）；查看正文：`satchel snapshot get <id>`（无 `secrets` 权限自动打码）。
+  - 回滚规划：`satchel snapshot rollback --id <快照号>` 或 `satchel snapshot rollback --apply-id <批次号>`。它生成一份新的待确认 `Plan` 再交由 `satchel apply --plan <新计划号>` 执行：绝不倒退 `resourceVersion`，也绝不复活已软删除对象（跳过项在 `skipped` 中点名原因）。
+
 ## 危险操作
 
 - 危险类命令要令牌打开了对应的危险类，并且每次都带 `--confirm`。填什么看 `satchel explain <命令>` 给的 confirm 口径：object 填对象名（例如 `update apply` 填版本号），count 填本次受影响的数量。
@@ -74,7 +84,7 @@ description: "用 Satchel 之前先读：开局看总览与身份，怎么学命
   - 本地命令（`version`、`db`、`serve`、`admin reset-password`），以及 `login`、`logout`、`mcp` 下的命令。看谁在连，改用 `satchel token list`。
   - 初始化向导 `setup` 下的命令、上传与下载类命令、人类专属命令。
   - `--help`：看说明改用 `satchel_explain`，`target` 填命令路径或 kind 名。
-  - `--server`、`--token`、`--data-dir`：MCP 的身份只来自这次连接。
+  - `--server`、`--token`、`--data-dir`、`--file`：MCP 的身份只来自这次连接，且主控不读服务端路径（`plan` 改传内联 `--spec`）。
 
 ## 远程用 CLI
 

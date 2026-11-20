@@ -240,8 +240,8 @@ func decodeBody(c *command.Command, r *http.Request, inv *command.Invocation) er
 		if name == command.NoWaitFlag && c.Shape == command.ShapeJob {
 			continue // REST 本来就不等：受理即返回 job，--no-wait 只对 CLI 与 MCP 有意义
 		}
-		if name == "confirm" && c.Danger != "" {
-			// 非字符串的 confirm 视为缺失（master-identity-and-authz「confirm 是字符串」），由 authz 报 confirm_required。
+		if name == "confirm" && c.HasConfirm() {
+			// 非字符串的 confirm 视为缺失（master-identity-and-authz「confirm 是字符串」），由 authz 或动态危险层报 confirm_required。
 			if s, ok := raw.(string); ok {
 				inv.Confirm = s
 			}

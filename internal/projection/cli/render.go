@@ -201,7 +201,11 @@ func renderExplain(w io.Writer, result any) error {
 		}
 		return tw.Flush()
 	case command.CommandInfo:
-		fmt.Fprintf(w, "%s：%s\n类别：%s\tscope：%s\t危险类：%s\t人类专属：%v\n", x.Name, x.Summary, x.Class, orDash(x.Scope), orDash(x.Danger), x.HumanOnly)
+		danger := x.Danger
+		if danger == "" && x.DynamicDanger {
+			danger = "动态"
+		}
+		fmt.Fprintf(w, "%s：%s\n类别：%s\tscope：%s\t危险类：%s\t人类专属：%v\n", x.Name, x.Summary, x.Class, orDash(x.Scope), orDash(danger), x.HumanOnly)
 		if x.REST != nil {
 			fmt.Fprintf(w, "REST：%s %s\n", x.REST.Method, x.REST.Path)
 		}

@@ -42,6 +42,10 @@ var defaults = map[string]any{
 	"master_recovery_startup_grace_minutes": int64(10),                                      // handler/system_settings.go:152
 	"external_https":                        false,                                          // handler/system_settings.go:311-313
 	"probe_cdn_regions_endpoint":            "https://lf3-ips.zstaticcdn.com/nodes_data.js", // handler/probe_cdn_proxy.go:39（公开的 IP 归属数据源，不是 mmwx 自己的域名）
+	// Satchel 新增：批量类危险操作阈值与滚动窗口长度（分钟）
+	"batch_single_threshold": int64(5),
+	"batch_window_threshold": int64(20),
+	"batch_window_minutes":   int64(15),
 
 	// 日常运维·品牌与外观（handler/branding.go:73-79；handler/system_settings.go:1369）。
 	"branding_site_title":  "",

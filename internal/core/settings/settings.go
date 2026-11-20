@@ -225,3 +225,42 @@ func DefaultOf(name string) (any, bool) {
 	v, ok := defaults[name]
 	return v, ok
 }
+
+// BatchThresholds 是批量类危险操作的三个阈值（单次上限、滚动窗累计上限、滚动窗分钟数）。
+type BatchThresholds struct {
+	Single        int
+	Window        int
+	WindowMinutes int
+}
+
+// DefaultBatchThresholds 返回系统默认的批量类危险阈值（5 / 20 / 15 分钟）。
+func DefaultBatchThresholds() BatchThresholds {
+	return BatchThresholds{Single: 5, Window: 20, WindowMinutes: 15}
+}
+
+// BatchThresholdsFromState 从设置快照中提取批量类阈值；缺失或非正数时退回默认值。
+func BatchThresholdsFromState(st *State) BatchThresholds {
+	out := DefaultBatchThresholds()
+	if st == nil {
+		return out
+	}
+	if v, ok := st.Values["batch_single_threshold"].(int64); ok && v > 0 {
+		out.Single = int(v)
+	}
+	if v, ok := st.Values["batch_window_threshold"].(int64); ok && v > 0 {
+		out.Window = int(v)
+	}
+	if v, ok := st.Values["batch_window_minutes"].(int64); ok && v > 0 {
+		out.WindowMinutes = int(v)
+	}
+	return out
+}
+
+// LoadBatchThresholds 从库加载当前生效的批量类危险阈值。
+func (r *Repo) LoadBatchThresholds(ctx context.Context) (BatchThresholds, error) {
+	st, err := r.Load(ctx)
+	if err != nil {
+		return BatchThresholds{}, err
+	}
+	return BatchThresholdsFromState(st), nil
+}

@@ -29,17 +29,24 @@ import (
 	"github.com/satchel/satchel/internal/base/store"
 	"github.com/satchel/satchel/internal/command"
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
+	corebatch "github.com/satchel/satchel/internal/core/batch"
+	coreinbounds "github.com/satchel/satchel/internal/core/inbounds"
 	corejobs "github.com/satchel/satchel/internal/core/jobs"
+	coreoutbounds "github.com/satchel/satchel/internal/core/outbounds"
+	coreplans "github.com/satchel/satchel/internal/core/plans"
+	corerouting "github.com/satchel/satchel/internal/core/routingrules"
 	coresecurity "github.com/satchel/satchel/internal/core/security"
 	coreservers "github.com/satchel/satchel/internal/core/servers"
 	"github.com/satchel/satchel/internal/core/sessions"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
+	coresnapshots "github.com/satchel/satchel/internal/core/snapshots"
 	"github.com/satchel/satchel/internal/core/taskruns"
 	coretokens "github.com/satchel/satchel/internal/core/tokens"
 	"github.com/satchel/satchel/internal/core/users"
 	mwaudit "github.com/satchel/satchel/internal/middleware/audit"
 	"github.com/satchel/satchel/internal/middleware/authn"
 	"github.com/satchel/satchel/internal/middleware/authz"
+	mwbatch "github.com/satchel/satchel/internal/middleware/batch"
 	"github.com/satchel/satchel/internal/middleware/gate"
 	"github.com/satchel/satchel/internal/projection/agent"
 	"github.com/satchel/satchel/internal/projection/cli"
@@ -48,6 +55,7 @@ import (
 	"github.com/satchel/satchel/internal/projection/rest"
 	"github.com/satchel/satchel/internal/projection/scheduler"
 	"github.com/satchel/satchel/internal/projection/web"
+	svcapply "github.com/satchel/satchel/internal/service/apply"
 	svcaudit "github.com/satchel/satchel/internal/service/audit"
 	"github.com/satchel/satchel/internal/service/auth"
 	svcbackup "github.com/satchel/satchel/internal/service/backup"
@@ -185,8 +193,23 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		return nil, err
 	}
 	masterPub := masterKey.Public().(ed25519.PublicKey)
-	serversSvc := svcservers.New(coreservers.New(bdb, st), settingsRepo, masterPub, logger)
+	serversRepo := coreservers.New(bdb, st)
+	batchRepo := corebatch.New(bdb, st)
+	serversSvc := svcservers.New(serversRepo, settingsRepo, masterPub, logger)
 	serversSvc.SetMasterVersion(buildinfo.Version)
+	applySvc := svcapply.New(svcapply.Deps{
+		DB:           bdb,
+		Servers:      serversRepo,
+		Inbounds:     coreinbounds.New(bdb, st),
+		Outbounds:    coreoutbounds.New(bdb, st),
+		RoutingRules: corerouting.New(bdb, st),
+		Plans:        coreplans.New(bdb, st),
+		Snapshots:    coresnapshots.New(bdb, st),
+		Batch:        batchRepo,
+		Settings:     settingsRepo,
+		Nodes:        serversSvc,
+	})
+	serversSvc.SetConfigRenderer(applySvc.RenderServerConfig)
 	agentConfigOf := func(s *coresettings.State) xrpc.AgentConfig {
 		return xrpc.AgentConfig{
 			HeartbeatInterval:      int(s.HeartbeatInterval() / time.Second),
@@ -354,12 +377,25 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	for name, h := range serversSvc.Bindings() {
 		bindings[name] = h
 	}
+	for name, h := range applySvc.Bindings() {
+		bindings[name] = h
+	}
 	if err := table.CheckBindings(bindings); err != nil {
 		return nil, v1.Wrap(v1.CodeInternal, "命令表与处理函数的绑定不一致", err)
 	}
-	// 执行链：留痕在最外层，权限在里面，最里面按绑定分发；身份在 HTTP 层由 authn 放进 ctx。
-	// 最外层是迁移期间的拦截（被拒的不写审计），再里面是留痕、权限、按绑定分发。
-	runner := gatedRunner(writeGate, table, mwaudit.WrapGated(audits, table, logger, writeGate, authz.Wrap(table, identity.Verifier(), command.Dispatch(bindings))))
+	// 执行链：最外层是迁移/升级写入暂停拦截（被拒的不写审计），再里面是留痕、权限、批量滚动窗口计数、按绑定分发。
+	// apply 自身在事务内合并判定 delete/permission/batch 并记账，故不放入单对象中间件计数表。
+	batchCounted := map[string]mwbatch.CountFunc{
+		"server add":               mwbatch.ConstOne,
+		"server limit set":         mwbatch.ConstOne,
+		"server limit clear":       mwbatch.ConstOne,
+		"server kick":              mwbatch.ConstOne,
+		"server traffic-stats set": mwbatch.ConstOne,
+	}
+	runner := gatedRunner(writeGate, table,
+		mwaudit.WrapGated(audits, table, logger, writeGate,
+			authz.Wrap(table, identity.Verifier(),
+				mwbatch.Wrap(batchRepo, settingsRepo, table, batchCounted, nil, command.Dispatch(bindings)))))
 
 	// CLI 的选项在主控进程里也要一份：MCP 的 satchel_run 用它解析命令数组、用进程内的执行链执行。
 	opts := cli.DefaultOptions()

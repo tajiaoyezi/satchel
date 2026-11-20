@@ -61,6 +61,8 @@ func Wrap(t *command.Table, verifier HumanVerifier, next command.Runner) command
 			return nil, v1.Newf(v1.CodeForbidden, "%s 需要 %s 权限，当前身份没有", cmd.Name(), scope).
 				WithState("required_scope", string(scope)).WithState("scopes", id.Scopes)
 		}
+		// 静态危险类在此统一核对权限与 confirm；标了 DynamicDanger 的命令（如 apply）所需危险类与 confirm 口径
+		// 取决于实时 Plan 与批量滚动窗口，由业务层逐项核对（身份与 operate scope 仍在上方强制完成）。
 		if cmd.Danger != "" {
 			if !id.HasDanger(cmd.Danger) {
 				return nil, v1.Newf(v1.CodeForbidden, "%s 属于危险操作的%s，当前身份没有开这一类", cmd.Name(), dangerLabels[cmd.Danger]).

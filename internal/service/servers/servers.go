@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/satchel/satchel/internal/base/agentconn"
+	"github.com/satchel/satchel/internal/base/singbox"
 	"github.com/satchel/satchel/internal/command"
 	core "github.com/satchel/satchel/internal/core/servers"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
@@ -47,8 +48,11 @@ type Service struct {
 	conns          Conns // 建好连接管理之后由 SetConns 设上
 	trafficState
 	telemetryState
-	lifecycleMu sync.Mutex
-	updating    map[int64]bool
+	lifecycleMu  sync.Mutex
+	updating     map[int64]bool
+	configMu     sync.Mutex
+	configLocks  map[int64]*sync.Mutex
+	renderConfig func(ctx context.Context, serverID int64) (*singbox.Rendered, error)
 }
 
 // New 建服务；masterKey 是主控通信身份的公钥（安装命令里要带它）；logger 为空时不记日志。
@@ -71,7 +75,8 @@ func New(repo *core.Repo, settings *coresettings.Repo, masterKey ed25519.PublicK
 			sysTraffic:           map[int64]*sysTrafficMem{},
 			speedPersistInterval: defaultSpeedPersistInterval,
 		},
-		updating: map[int64]bool{},
+		updating:    map[int64]bool{},
+		configLocks: map[int64]*sync.Mutex{},
 	}
 }
 
@@ -103,6 +108,10 @@ func (s *Service) Bindings() command.Bindings {
 		"server traffic-stats set":  s.trafficStatsSet,
 		"server logs list":          s.logsList,
 		"server logs files":         s.logsFiles,
+		"server config status":      s.configStatus,
+		"server config files":       s.configFiles,
+		"server config read":        s.configRead,
+		"server config test":        s.configTest,
 	}
 }
 

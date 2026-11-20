@@ -27,6 +27,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `account totp disable` | `satchel-access` |
 | `account totp setup` | `satchel-access` |
 | `admin reset-password` | `satchel-troubleshoot` |
+| `apply` | `satchel-basics`、`satchel-servers` |
 | `audit list` | `satchel-troubleshoot` |
 | `backup create` | `satchel-backup`、`satchel-basics`、`satchel-upgrade` |
 | `backup download` | `satchel-backup` |
@@ -50,6 +51,9 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `mcp status` | `satchel-access` |
 | `mcp stdio` | `satchel-access` |
 | `overview` | `satchel-basics` |
+| `plan` | `satchel-basics`、`satchel-servers` |
+| `plans get` | `satchel-basics` |
+| `plans list` | `satchel-basics` |
 | `schedule list` | `satchel-troubleshoot` |
 | `schedule runs list` | `satchel-troubleshoot` |
 | `security ban` | `satchel-access` |
@@ -58,6 +62,10 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `security unban` | `satchel-access`、`satchel-troubleshoot` |
 | `serve` | `satchel-backup`、`satchel-database`、`satchel-troubleshoot` |
 | `server add` | `satchel-servers` |
+| `server config files` | `satchel-servers` |
+| `server config read` | `satchel-servers` |
+| `server config status` | `satchel-servers` |
+| `server config test` | `satchel-servers` |
 | `server connections` | `satchel-servers` |
 | `server get` | `satchel-servers` |
 | `server install-command` | `satchel-servers` |
@@ -82,6 +90,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `server update apply` | `satchel-servers` |
 | `server update batch` | `satchel-servers` |
 | `server update check` | `satchel-servers` |
+| `settings batch-threshold set` | `satchel-settings` |
 | `settings gates set` | `satchel-settings`、`satchel-troubleshoot` |
 | `settings image upload` | `satchel-settings` |
 | `settings master-url migrate` | `satchel-settings` |
@@ -95,6 +104,9 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `setup init` | `satchel-backup` |
 | `setup restore` | `satchel-backup` |
 | `setup status` | `satchel-backup` |
+| `snapshot get` | `satchel-basics` |
+| `snapshot list` | `satchel-basics` |
+| `snapshot rollback` | `satchel-basics` |
 | `token create` | `satchel-access` |
 | `token list` | `satchel-access`、`satchel-basics` |
 | `token revoke` | `satchel-access`、`satchel-basics` |

@@ -13,6 +13,7 @@
 | `account totp confirm` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/totp/confirm` |
 | `account totp disable` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/totp/disable` |
 | `account totp setup` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/totp/setup` |
+| `apply` | config | operate | 动态 | 动态 | 否 | 否 | 否 | `POST /api/v1/apply` |
 | `audit list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/audit` |
 | `backup create` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/backup/create` |
 | `backup download` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/backup/download/{name}` |
@@ -29,6 +30,9 @@
 | `logs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/logs` |
 | `mcp status` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/mcp/status` |
 | `overview` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/overview` |
+| `plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/plan` |
+| `plans get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/plans/get/{id}` |
+| `plans list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/plans` |
 | `schedule list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/schedule` |
 | `schedule runs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/schedule/runs` |
 | `security ban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/ban/{ip}` |
@@ -36,6 +40,10 @@
 | `security events list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/security/events` |
 | `security unban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/unban/{ip}` |
 | `server add` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/add/{name}` |
+| `server config files` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server/config/files/{name}` |
+| `server config read` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/config/read/{name}` |
+| `server config status` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/config/status/{name}` |
+| `server config test` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/config/test/{name}` |
 | `server connections` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server/connections/{name}` |
 | `server get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/get/{name}` |
 | `server install-command` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/install-command/{name}` |
@@ -60,6 +68,7 @@
 | `server update apply` | action | operate | restart | object (name) | 否 | 否 | 否 | `POST /api/v1/server/update/apply/{name}/{version}` |
 | `server update batch` | action | operate | batch | count | 否 | 否 | 否 | `POST /api/v1/server/update/batch/{version}` |
 | `server update check` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/update/check/{name}` |
+| `settings batch-threshold set` | master_settings | operate | permission | object (key) | 否 | 否 | 否 | `POST /api/v1/settings/batch-threshold/set/{key}/{value}` |
 | `settings gates set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/gates/set` |
 | `settings image upload` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/image/upload` |
 | `settings master-url migrate` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/master-url/migrate` |
@@ -73,6 +82,9 @@
 | `setup init` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/init` |
 | `setup restore` | action | operate | — | — | 否 | 是 | 否 | `POST /api/v1/setup/restore` |
 | `setup status` | read | read | — | — | 否 | 是 | 否 | `GET /api/v1/setup/status` |
+| `snapshot get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/snapshot/get/{id}` |
+| `snapshot list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/snapshot` |
+| `snapshot rollback` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/snapshot/rollback` |
 | `token create` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/create` |
 | `token list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/token` |
 | `token revoke` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/revoke/{id}` |

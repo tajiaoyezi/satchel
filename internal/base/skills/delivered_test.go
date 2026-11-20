@@ -51,6 +51,7 @@ func TestServersSkillMentions(t *testing.T) {
 			"satchel server uninstall", "satchel server switch-listen-port", "satchel server probe-master-url",
 			"satchel server system-info", "satchel server nics", "satchel server speed",
 			"satchel server traffic-stats set", "satchel server logs list", "satchel server logs files",
+			"satchel server config status", "satchel server config files", "satchel server config read", "satchel server config test",
 			"agent_log_enabled"} {
 			if !strings.Contains(s.Content, want) {
 				t.Errorf("satchel-servers 里应当有 %s", want)
@@ -68,7 +69,8 @@ func TestBasicsGeneralRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"satchel overview", "satchel explain", "satchel_explain", "--confirm", "human_required",
-		"--verify-user", "forbidden", "satchel job get", "satchel token list", "satchel_run"} {
+		"--verify-user", "forbidden", "satchel job get", "satchel token list", "satchel_run",
+		"satchel plan", "satchel apply", "satchel snapshot rollback"} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("satchel-basics 里应当有 %s", want)
 		}
@@ -99,8 +101,8 @@ func TestCurrentCommandsCovered(t *testing.T) {
 			visible++
 		}
 	}
-	if visible != 83 || !used["overview"] || !used["token create"] || !used["serve"] {
-		t.Fatalf("应当覆盖 83 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
+	if visible != 95 || !used["overview"] || !used["token create"] || !used["serve"] {
+		t.Fatalf("应当覆盖 95 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
 	}
 	extra := command.MustNew(append(command.Catalog().All(), &command.Command{Path: []string{"demo", "ping"}, Summary: "测试", Class: command.ClassRead})...)
 	if missing := Coverage(extra, refs); strings.Join(missing, ",") != "demo ping" {

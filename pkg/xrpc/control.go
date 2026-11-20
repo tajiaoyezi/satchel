@@ -26,12 +26,18 @@ const (
 	MethodAgentLogs         = "agent.logs"              // AgentLogsParams → AgentLogsResult
 	MethodAgentLogFiles     = "agent.logs.files"        // 无参数 → AgentLogFilesResult
 	MethodAgentConfigUpdate = "agent.config_update"     // AgentConfigUpdate → AgentConfigUpdateAck
+	MethodConfigStatus      = "config.status"           // 无参数 → ConfigStatusResult
+	MethodConfigTest        = "config.test"             // ConfigTestParams → ConfigTestResult
+	MethodConfigApply       = "config.apply"            // ConfigApplyParams → ConfigApplyResult
+	MethodConfigFiles       = "config.files"            // ConfigFilesParams → ConfigFilesResult
+	MethodConfigRead        = "config.read"             // ConfigReadParams → ConfigReadResult
 )
 
-// 节点只读日志拉取的上限，确保远低于单帧 ReadLimit（4 MiB）。
+// 节点只读日志与只读配置拉取的上限，确保远低于单帧 ReadLimit（4 MiB）。
 const (
 	AgentLogsMaxReplyBytes = 512 << 10
 	AgentLogsMaxScanLines  = 5000
+	ConfigReadMaxBytes     = 512 << 10
 )
 
 // 节点远程升级确认失败时的磁盘三态口径（第 09 章）。

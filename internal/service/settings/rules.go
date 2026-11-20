@@ -81,6 +81,10 @@ var rules = map[string]func(v any) error{
 	"user_routed_outbound_daily_limit": atLeast(0),
 	// handler/system_settings.go:751-768（超过 30 个截断，这里拒绝）。
 	"probe_disguise_ping_targets": maxItems(30),
+	// Satchel 新增：批量类危险操作阈值与滚动时间窗。
+	"batch_single_threshold": between(1, 1000),
+	"batch_window_threshold": between(1, 10000),
+	"batch_window_minutes":   between(1, 1440),
 }
 
 func oneOf(allowed ...string) func(any) error {

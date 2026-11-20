@@ -82,7 +82,7 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 	}
 	var confirm string
 	var page command.Page
-	if c.Danger != "" {
+	if c.HasConfirm() {
 		leaf.Flags().StringVar(&confirm, "confirm", "", "危险操作的确认字符串："+confirmHint(c))
 	}
 	var verifyCode, verifyUser string
@@ -151,9 +151,15 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 				}
 			}
 		}
-		// 上传与下载：本地文件在发请求之前打开或检查，--file / --output 本身不发给主控。
+		// 普通命令（如 plan --file）以及上传/下载：本地文件在发请求之前打开或检查，路径本身不发给主控。
 		var output string
 		switch c.Shape {
+		case "":
+			if !opts.ServerSide && c.Class != command.ClassLocal {
+				if err := inlineFileFlags(c, inv, opts); err != nil {
+					return err
+				}
+			}
 		case command.ShapeUpload:
 			f, err := openUpload(inv)
 			if err != nil {
@@ -187,6 +193,9 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 }
 
 func confirmHint(c *command.Command) string {
+	if c.DynamicDanger {
+		return "按 plan 提示填对象名或本次受影响数量"
+	}
 	if c.Confirm != nil && c.Confirm.Kind == command.ConfirmObject {
 		return "填 " + c.Confirm.Arg + " 的值"
 	}

@@ -11,7 +11,7 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 
 - 加一台：`satchel server add <名字>`（可选参数 `--mode <模式>`、`--domain`、`--domain-v6`、`--listen-port`、`--pull-address`、`--pull-address-v6`、`--pull-port`）。它属于配置类，令牌要有日常运维权限（`operate`）；名字不能和已有的重复（重复时是 `name_taken`）。
 - `--mode` 支持 `auto`、`websocket`、`http`、`pull`（省略时默认是 `auto`：WebSocket 优先 → 加密 HTTP 上报 → 轮询兜底）；建机时一次生成 `token`（节点上行认证）、`agent_token`（主控管理节点口，默认 `23889`）与 `pull_token`（主控只读轮询口，默认 `23890`）三把互不相同的 43 字符凭据。`pull` 模式必须至少提供一个可达地址。
-- 服务器建了以后其它规格字段暂时改不了，也删不了（要等配置类的 plan/apply）：不要为了试一试随手建，名字想好再建。
+- 服务器建好后的完整规格编辑（含连接模式、地址端口、内核全局配置 `core_log_level`/`core_dns`/`core_stats_enabled`、排序等）、软删除与恢复，以及管理 `Inbound`/`Outbound`/`RoutingRule`，统一经 `satchel plan` 与 `satchel apply` 两阶段配置事务执行（见 `satchel-basics`）；修改连接模式或地址端口会触发 `permission` 危险类，若需在线无中断热切管理/轮询端口请优先使用 `satchel server switch-listen-port`。
 - 结果是这台服务器的完整对象，`status.status` 是 `pending`；里面的三把凭据一律是打码的，原文只经安装命令或 `server token show` 取。
 
 ## 取安装命令
@@ -72,6 +72,15 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
   - 列出节点日志文件：`satchel server logs files <名字>`（读类列表，列出节点日志目录内 `satchel-agent` 与内嵌内核 `core` 的当前和轮转文件，活跃文件排在最前）。
   - 分页查看日志行：`satchel server logs list <名字> --service agent --level warn`（读类列表；`--service` 可选 `agent`、`core` 或 `nginx`，`--level` 可选 `debug`、`info`、`warn`、`error`，`--grep` 区分大小写且在审计摘要里打码，`--file` 可查看 `server logs files` 列出的 `agent` 或 `core` 轮转文件，含路径穿越的文件名返回 `not_found`）。
   - 远程日志遵循主控同样的只读策略，不提供手动删除或清空日志文件命令；需要查看节点详细调试日志时，可先用 `satchel settings set --set agent_log_enabled=true --resource-version <N>` 热开启（全连接模式均实时生效、无需重启节点），排查结束后再关闭。
+
+## 节点只读配置检查与无侵入校验
+
+节点配置文件一律只读，不提供绕过 `satchel plan` / `satchel apply` 的裸写接口：
+
+- 查看同步状态：`satchel server config status <名字>`（读类；经通道采集节点当前 `kernel.json` 规范 SHA-256 哈希、文件大小、入站列表与内核运行态，并对比主控 `applied_hash` 与期望渲染哈希给出 `in_sync` 判定）。
+- 列出白名单配置文件：`satchel server config files <名字>`（读类列表；可选 `--scope all` / `kernel` / `nginx`，仅列 `kernel.json` 与 nginx 白名单配置目录下的 `.conf`/`nginx.conf`，自动排除 `config.yaml`、`limiter-state.json` 与证书私钥）。
+- 只读查看文件内容：`satchel server config read <名字> --path <路径>`（读类，单次上限 512 KiB；无 `secrets` 权限自动将私钥、密码、UUID、PSK、short_id 等敏感值打码为 `***`；读取非白名单或敏感路径返回 `not_found`）。
+- 远程无侵入校验配置：`satchel server config test <名字>`（读类；用主控当前渲染的规范 `kernel.json` 在节点执行不绑定端口、不断开运行中连接的完整 `sing-box` 校验，返回 `ok`、`error`、`inbounds` 与 `hash`）。
 
 ## 注意
 

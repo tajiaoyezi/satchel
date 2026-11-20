@@ -322,6 +322,57 @@ func TestValueFlagArgumentsNotMisclassifiedInMCP(t *testing.T) {
 	}
 }
 
+func TestMCPPlanFileRejectedAndDynamicDangerConfirm(t *testing.T) {
+	tbl, err := command.New(
+		&command.Command{
+			Path: []string{"plan"}, Summary: "s", Class: command.ClassConfig,
+			Flags: []command.Flag{
+				{Name: "spec", Type: command.TypeString},
+				{Name: "file", Type: command.TypeFile},
+			},
+		},
+		&command.Command{
+			Path: []string{"apply"}, Summary: "s", Class: command.ClassConfig, DynamicDanger: true,
+			Flags: []command.Flag{
+				{Name: "plan", Type: command.TypeInt},
+				{Name: "force", Type: command.TypeBool},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *command.Invocation
+	opts := cli.Options{
+		Table:      tbl,
+		ServerSide: true,
+		Remote: func(string) command.Runner {
+			return runnerFunc(func(_ context.Context, inv *command.Invocation) (any, error) {
+				got = inv
+				return map[string]any{"ok": true, "confirm": inv.Confirm}, nil
+			})
+		},
+	}
+	s := connect(t, opts, admin())
+
+	// MCP 拒绝 --file 路径参数，放行内联 --spec。
+	text, isErr := s.run([]string{"plan", "--file", "/etc/passwd"}, "")
+	if e := decodeErr(t, text); !isErr || e.Code != v1.CodeBadRequest {
+		t.Fatalf("MCP 应拒收 plan --file：isErr=%v text=%s", isErr, text)
+	}
+	text, isErr = s.run([]string{"plan", "--spec", `{"op":"create"}`}, "")
+	if isErr || got == nil || got.String("spec", "") != `{"op":"create"}` {
+		t.Fatalf("MCP 内联 --spec 应当放行：isErr=%v text=%s got=%+v", isErr, text, got)
+	}
+
+	// MCP DynamicDanger apply 通过 confirm 字段传给执行链。
+	got = nil
+	text, isErr = s.run([]string{"apply", "--plan", "9", "--force"}, "hk-1")
+	if isErr || got == nil || got.Confirm != "hk-1" || !got.Bool("force") {
+		t.Fatalf("MCP apply confirm 传递失败：isErr=%v text=%s got=%+v", isErr, text, got)
+	}
+}
+
 type runnerFunc func(context.Context, *command.Invocation) (any, error)
 
 func (f runnerFunc) Run(ctx context.Context, inv *command.Invocation) (any, error) {

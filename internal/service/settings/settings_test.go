@@ -163,8 +163,8 @@ func TestShow(t *testing.T) {
 		if _, ok := status["heartbeat_interval"]; ok {
 			t.Error("status 里不该有 heartbeat_interval")
 		}
-		if len(spec) != 100 || len(status) != 40 {
-			t.Errorf("spec 应当 100 个字段、status 40 个，得到 %d / %d", len(spec), len(status))
+		if len(spec) != 100 || len(status) != 43 {
+			t.Errorf("spec 应当 100 个字段、status 43 个，得到 %d / %d", len(spec), len(status))
 		}
 		if string(status["telegram_bot_token"]) != `""` || string(spec["probe_external_token_sha256"]) != `""` {
 			t.Errorf("空的打码字段输出空串：%s %s", status["telegram_bot_token"], spec["probe_external_token_sha256"])
@@ -580,6 +580,61 @@ func TestUpdateCDNSet(t *testing.T) {
 		}
 		if got := f.show(); !(!got.Status.UpdateCdnEnabled && got.Metadata.ResourceVersion == 2) {
 			t.Fatalf("show：%+v", got.Status.UpdateCdnEnabled)
+		}
+	})
+}
+
+func TestBatchThresholdSet(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		f := setup(t, bdb)
+		// 默认值通过 settings show 的 status 暴露，且 LoadBatchThresholds 一致。
+		initObj := f.show()
+		if initObj.Status.BatchSingleThreshold != 5 || initObj.Status.BatchWindowThreshold != 20 || initObj.Status.BatchWindowMinutes != 15 {
+			t.Fatalf("批量阈值默认值不对：%+v", initObj.Status)
+		}
+		// 普通 settings set 拒绝写三个批量阈值字段。
+		for _, k := range []string{"batch_single_threshold", "batch_window_threshold", "batch_window_minutes"} {
+			if _, err := f.run(f.admin, "settings set", nil, map[string]any{"set": map[string]any{k: "10"}, "resource-version": 1}); v1.AsError(err).Code != v1.CodeFieldNotApplyable {
+				t.Fatalf("settings set 应拒绝 %s，得到 %v", k, err)
+			}
+		}
+		// 管理员合法修改三个键，递增版本号、不生成日常运维快照。
+		res, err := f.run(f.admin, "settings batch-threshold set", []string{"batch_single_threshold", "10"}, map[string]any{"resource-version": 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obj := typed(t, res); obj.Metadata.ResourceVersion != 2 || obj.Status.BatchSingleThreshold != 10 || f.snapshots() != 0 {
+			t.Fatalf("改 batch_single_threshold：%+v 快照=%d", obj.Status.BatchSingleThreshold, f.snapshots())
+		}
+		res, err = f.run(f.admin, "settings batch-threshold set", []string{"batch_window_threshold", "50"}, map[string]any{"resource-version": 2})
+		if err != nil || typed(t, res).Status.BatchWindowThreshold != 50 {
+			t.Fatalf("改 batch_window_threshold：%v %+v", err, res)
+		}
+		res, err = f.run(f.admin, "settings batch-threshold set", []string{"batch_window_minutes", "30"}, map[string]any{"resource-version": 3})
+		if err != nil || typed(t, res).Status.BatchWindowMinutes != 30 {
+			t.Fatalf("改 batch_window_minutes：%v %+v", err, res)
+		}
+		// 越界值、非法键、非整数、过期版本、普通用户均拒绝。
+		if _, err := f.run(f.admin, "settings batch-threshold set", []string{"batch_single_threshold", "0"}, map[string]any{"resource-version": 4}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("越界 0 应报 bad_request：%v", err)
+		}
+		if _, err := f.run(f.admin, "settings batch-threshold set", []string{"batch_single_threshold", "1001"}, map[string]any{"resource-version": 4}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("越界 1001 应报 bad_request：%v", err)
+		}
+		if _, err := f.run(f.admin, "settings batch-threshold set", []string{"batch_window_minutes", "1441"}, map[string]any{"resource-version": 4}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("越界 1441 应报 bad_request：%v", err)
+		}
+		if _, err := f.run(f.admin, "settings batch-threshold set", []string{"heartbeat_interval", "10"}, map[string]any{"resource-version": 4}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("非阈值键应报 bad_request：%v", err)
+		}
+		if _, err := f.run(f.admin, "settings batch-threshold set", []string{"batch_single_threshold", "abc"}, map[string]any{"resource-version": 4}); v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("非整数应报 bad_request：%v", err)
+		}
+		if _, err := f.run(f.admin, "settings batch-threshold set", []string{"batch_single_threshold", "8"}, map[string]any{"resource-version": 3}); v1.AsError(err).Code != v1.CodeVersionConflict {
+			t.Errorf("过期版本应报 version_conflict：%v", err)
+		}
+		if _, err := f.run(f.user, "settings batch-threshold set", []string{"batch_single_threshold", "8"}, map[string]any{"resource-version": 4}); v1.AsError(err).Code != v1.CodeForbidden {
+			t.Errorf("普通用户应报 forbidden：%v", err)
 		}
 	})
 }

@@ -26,12 +26,16 @@ var GroupSummaries = map[string]string{
 	"backup":                 "整库备份与恢复（只对管理员开放；下载与恢复要当场验证）",
 	"database":               "主控用的数据库：查看、试连 PostgreSQL、从 SQLite 在线迁移（只对管理员开放；迁移要当场验证）",
 	"update":                 "主控自升级：检查更新、升到所选渠道的最新版（只对管理员开放；升级属主控自身类危险操作）",
-	"settings update-cdn":    "更新 CDN 的开关（主控自身类危险操作）",
-	"settings image":         "logo、登录壁纸这类图片字段用的图片：上传之后用 settings set 把地址写进字段",
-	"server":                 "服务器（节点）：加服务器、取安装命令、管理凭据、看在线状态，经通道临时限速、踢线、看连接与流量，以及远程升级/卸载/切端口/探地址（只对管理员开放）",
-	"server token":           "服务器通信凭据：查看原文（需 secrets）、平滑轮换与立即吊销（需 permission）",
-	"server limit":           "主控临时限速：设与撤（只动「主控临时」那一份来源）",
-	"server update":          "节点 satchel-agent 版本检查、单台自更新与批量串行自更新",
+	"settings update-cdn":      "更新 CDN 的开关（主控自身类危险操作）",
+	"settings batch-threshold": "批量类危险门控阈值（需 permission 危险类与 --confirm）",
+	"settings image":           "logo、登录壁纸这类图片字段用的图片：上传之后用 settings set 把地址写进字段",
+	"plans":                    "配置变更预演计划：列出与查看历史计划（只对管理员开放）",
+	"snapshot":                 "配置类对象快照：查看历史快照与按单条或批次生成回滚计划（只对管理员开放）",
+	"server":                   "服务器（节点）：加服务器、取安装命令、管理凭据、看在线状态，经通道临时限速、踢线、看连接与流量，以及远程升级/卸载/切端口/探地址/只读配置检查（只对管理员开放）",
+	"server token":             "服务器通信凭据：查看原文（需 secrets）、平滑轮换与立即吊销（需 permission）",
+	"server limit":             "主控临时限速：设与撤（只动「主控临时」那一份来源）",
+	"server update":            "节点 satchel-agent 版本检查、单台自更新与批量串行自更新",
+	"server config":            "节点只读配置检查与无侵入校验（配置文件只读，改动须经 plan / apply）",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -51,8 +55,45 @@ func catalogCommands() []*Command {
 	all = append(all, backupCommands()...)
 	all = append(all, databaseCommands()...)
 	all = append(all, updateCommands()...)
+	all = append(all, configTxCommands()...)
 	all = append(all, serverCommands()...)
 	return all
+}
+
+// configTxCommands 是 m2-12 的配置类唯一写路径与快照回滚命令（node-config-tx）。
+func configTxCommands() []*Command {
+	return []*Command{
+		{Path: []string{"plan"}, Summary: "预演配置类资源变更（Server/Inbound/Outbound/RoutingRule），返回逐对象与节点配置 diff、所需危险类与确认提示", Class: ClassConfig,
+			Flags: []Flag{
+				{Name: "spec", Type: TypeString, Description: "内联 JSON 字符串（单条变更对象或变更对象数组；与 --file 二选一）"},
+				{Name: "file", Type: TypeFile, Description: "CLI 本地 JSON 文件路径或 -（读 stdin 并内联发给主控；REST/MCP 拒绝）"},
+			}},
+		{Path: []string{"apply"}, Summary: "确认并事务提交一份预演计划（写前快照、递增版本并串行推送节点原子生效；危险类与 --confirm 动态判定）",
+			Class: ClassConfig, DynamicDanger: true,
+			Flags: []Flag{
+				{Name: "plan", Type: TypeInt, Description: "要提交的计划编号（plan 或 snapshot rollback 返回的 plan_id）"},
+				{Name: "force", Type: TypeBool, Description: "跳过乐观锁 resourceVersion 校验（仍拒绝 diff 漂移；触发 permission 危险类与 --confirm）"},
+			}},
+		{Path: []string{"plans", "list"}, Summary: "按 id 倒序分页列出配置变更预演计划（只对管理员开放）", Class: ClassRead, List: true,
+			Flags:   []Flag{{Name: "status", Type: TypeString, Description: "按状态过滤：pending、applied、expired 或 rejected"}},
+			Columns: []string{"id", "status", "affected_count", "apply_id", "expires_at", "created_at"}},
+		{Path: []string{"plans", "get"}, Summary: "查看单份配置变更预演计划详情与 diff（无 secrets 权限时敏感键自动打码）", Class: ClassRead,
+			Args: []Arg{{Name: "id", Description: "计划编号（plans list 里的 id）"}}},
+		{Path: []string{"snapshot", "list"}, Summary: "按 id 倒序分页列出配置类对象写前快照元数据（不含正文，只对管理员开放）", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "kind", Type: TypeString, Description: "按资源类型过滤，如 Server、Inbound、Outbound、RoutingRule"},
+				{Name: "object-id", Type: TypeInt, Description: "按对象 ID 过滤"},
+				{Name: "apply-id", Type: TypeString, Description: "按 apply 批次编号过滤"},
+			},
+			Columns: []string{"id", "object_kind", "object_id", "object_version", "source", "apply_id", "created_at"}},
+		{Path: []string{"snapshot", "get"}, Summary: "查看单条配置快照内容（无 secrets 权限时敏感字段自动打码）", Class: ClassRead,
+			Args: []Arg{{Name: "id", Description: "快照编号（snapshot list 里的 id）"}}},
+		{Path: []string{"snapshot", "rollback"}, Summary: "按单条快照或 apply_id 批次生成一份新的待确认回滚计划（不倒退版本、不复活已软删除对象）", Class: ClassConfig,
+			Flags: []Flag{
+				{Name: "id", Type: TypeInt, Description: "单条快照 ID（与 --apply-id 二选一）"},
+				{Name: "apply-id", Type: TypeString, Description: "整批 apply_id（与 --id 二选一）"},
+			}},
+	}
 }
 
 // serverCommands 是 m2-02 的服务器命令（node-pairing、node-channel）。server add 是配置类，plan/apply 实现之前直接建对象，
@@ -157,6 +198,17 @@ func serverCommands() []*Command {
 		{Path: []string{"server", "logs", "files"}, Summary: "远程只读分页列出节点日志目录里的 agent 与内核日志文件", Class: ClassRead, List: true,
 			Args:    []Arg{name},
 			Columns: []string{"name", "size", "modified", "active"}},
+		{Path: []string{"server", "config", "status"}, Summary: "远程查询节点当前 kernel.json 哈希、内核运行态及与主控期望配置的同步状态", Class: ClassRead,
+			Args: []Arg{name}},
+		{Path: []string{"server", "config", "files"}, Summary: "远程只读分页列出节点白名单配置目录文件（仅 kernel.json 与 nginx .conf，排除 config.yaml 与私钥）", Class: ClassRead, List: true,
+			Args:    []Arg{name},
+			Flags:   []Flag{{Name: "scope", Type: TypeString, Default: "all", Description: "目录范围：all（默认）、kernel 或 nginx"}},
+			Columns: []string{"scope", "path", "size", "modified"}},
+		{Path: []string{"server", "config", "read"}, Summary: "远程只读查看节点白名单配置文件内容（上限 512 KiB；无 secrets 权限自动打码敏感字段）", Class: ClassRead,
+			Args:  []Arg{name},
+			Flags: []Flag{{Name: "path", Type: TypeString, Description: "要读取的白名单文件完整路径（见 server config files 输出）"}}},
+		{Path: []string{"server", "config", "test"}, Summary: "用主控当前渲染的规范 kernel.json 在节点上做无侵入 sing-box 校验（不中断运行中连接）", Class: ClassRead,
+			Args: []Arg{name}},
 	}
 }
 
@@ -345,6 +397,13 @@ func settingsCommands() []*Command {
 		{Path: []string{"settings", "image", "upload"}, Summary: "把一张图片放进 public/uploads/，返回它的地址（PNG、JPEG、GIF、WebP 或 ICO，最大 5 MiB；不改设置；只对管理员开放）",
 			Class: ClassAction, Shape: ShapeUpload,
 			Flags: []Flag{{Name: UploadFlag, Type: TypeFile, Description: "本地图片的路径"}}},
+		{Path: []string{"settings", "batch-threshold", "set"}, Summary: "修改批量类危险门控阈值（batch_single_threshold / batch_window_threshold / batch_window_minutes；需 permission 危险类与 --confirm）",
+			Class: ClassMasterSettings, Danger: v1.DangerPermission, Confirm: &Confirm{Kind: ConfirmObject, Arg: "key"},
+			Args: []Arg{
+				{Name: "key", Description: "设置项名：batch_single_threshold、batch_window_threshold 或 batch_window_minutes"},
+				{Name: "value", Description: "新的正整数阈值"},
+			},
+			Flags: []Flag{version}},
 	}
 }
 

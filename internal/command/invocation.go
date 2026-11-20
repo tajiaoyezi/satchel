@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	v1 "github.com/satchel/satchel/pkg/api/v1"
@@ -112,6 +113,25 @@ func Dispatch(b Bindings) Runner {
 		}
 		return h(ctx, inv)
 	})
+}
+
+type planRecorderKey struct{}
+
+// WithPlanRecorder 在上下文中挂载一个线程安全的 plan_id 回传槽：由 middleware/audit 入口挂载，
+// 业务层（plan / apply / snapshot rollback）通过 RecordPlanID 写入，免除 service 对 middleware 的反向依赖。
+func WithPlanRecorder(ctx context.Context) (context.Context, *atomic.Int64) {
+	slot := &atomic.Int64{}
+	return context.WithValue(ctx, planRecorderKey{}, slot), slot
+}
+
+// RecordPlanID 把本次命令关联的 plan_id 写入上下文槽；上下文未挂槽或 id <= 0 时忽略。
+func RecordPlanID(ctx context.Context, id int64) {
+	if id <= 0 {
+		return
+	}
+	if slot, ok := ctx.Value(planRecorderKey{}).(*atomic.Int64); ok && slot != nil {
+		slot.Store(id)
+	}
 }
 
 // 列表分页（master-rest-api「列表分页」）。

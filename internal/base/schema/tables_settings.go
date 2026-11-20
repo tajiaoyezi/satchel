@@ -45,6 +45,10 @@ func settingsKeys() []Column {
 		col("master_recovery_startup_grace_minutes", TypeInt).cls(ClassMasterSelf),
 		col("external_https", TypeBool).cls(ClassMasterSelf),
 		col("probe_cdn_regions_endpoint", TypeText).cls(ClassMasterSelf),
+		// Satchel 新增：批量类危险操作滚动窗口阈值（非日常运维档，仅经 settings batch-threshold set 写入）
+		col("batch_single_threshold", TypeInt).cls(ClassMasterSelf),
+		col("batch_window_threshold", TypeInt).cls(ClassMasterSelf),
+		col("batch_window_minutes", TypeInt).cls(ClassMasterSelf),
 
 		// 日常运维·品牌与外观（第 10 章：站点标题、logo、登录壁纸、默认主题）
 		col("branding_site_title", TypeText),

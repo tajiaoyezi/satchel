@@ -37,6 +37,7 @@ func WrapGated(rec Recorder, t *command.Table, logger *slog.Logger, gate *db.Wri
 		logger = slog.Default()
 	}
 	return command.RunnerFunc(func(ctx context.Context, inv *command.Invocation) (any, error) {
+		ctx, planSlot := command.WithPlanRecorder(ctx)
 		result, err := runRecovered(ctx, inv, next, logger)
 		id := v1.IdentityFrom(ctx)
 		cmd, known := t.Lookup(inv.Name())
@@ -53,6 +54,9 @@ func WrapGated(rec Recorder, t *command.Table, logger *slog.Logger, gate *db.Wri
 			At: time.Now().UTC(), Actor: id.Actor, ActorKind: id.ActorKind, TokenID: id.TokenID,
 			Command: inv.Name(), ArgsDigest: Digest(cmd, inv), Result: "ok",
 		}
+		if pid := planSlot.Load(); pid > 0 {
+			entry.PlanID = &pid
+		}
 		if err != nil {
 			entry.Result = string(v1.AsError(err).Code)
 		}
@@ -61,7 +65,7 @@ func WrapGated(rec Recorder, t *command.Table, logger *slog.Logger, gate *db.Wri
 		if gate.Suspended() && !db.Entered(ctx) {
 			logger.Info("写入暂停期间（迁移数据库或升级主控）审计只记日志",
 				"at", entry.At, "actor", entry.Actor, "actor_kind", entry.ActorKind, "token_id", derefID(entry.TokenID),
-				"command", entry.Command, "args_digest", entry.ArgsDigest, "result", entry.Result)
+				"command", entry.Command, "args_digest", entry.ArgsDigest, "plan_id", derefID(entry.PlanID), "result", entry.Result)
 			return result, err
 		}
 		// 命令已经跑完，记录不能因为客户端取消了请求而丢：写入用不带取消的 ctx。

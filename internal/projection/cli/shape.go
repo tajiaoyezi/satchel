@@ -14,6 +14,59 @@ import (
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
+// inlineFileMaxBytes 是普通命令 --file 本地读入并内联发给主控的体积上限（4 MiB）。
+const inlineFileMaxBytes = 4 << 20
+
+// inlineFileFlags 处理普通命令（非上传/非下载）的 file 类型 flag（如 plan --file <路径或->）：
+// 在 CLI 本地读入文件内容并内联放入 --spec 字段，原 file flag 绝不传给主控；与 --spec 同传报 usage。
+func inlineFileFlags(c *command.Command, inv *command.Invocation, opts Options) error {
+	for _, f := range c.Flags {
+		if f.Type != command.TypeFile {
+			continue
+		}
+		rawPath, provided := inv.Flags[f.Name]
+		if !provided {
+			continue
+		}
+		delete(inv.Flags, f.Name)
+		path, _ := rawPath.(string)
+		if path == "" {
+			return usageError("要用 --%s 指定本地文件或 -（从标准输入读取）", f.Name)
+		}
+		target := f.Name
+		if _, hasSpec := c.FlagByName("spec"); hasSpec {
+			target = "spec"
+		}
+		if _, dup := inv.Flags[target]; dup {
+			return usageError("--%s 与 --%s 不能同时使用", f.Name, target)
+		}
+		var r io.Reader
+		if path == "-" {
+			if opts.Stdin != nil {
+				r = opts.Stdin
+			} else {
+				r = os.Stdin
+			}
+		} else {
+			file, err := os.Open(path)
+			if err != nil {
+				return usageError("打不开 --%s 指定的文件 %s：%v", f.Name, path, err)
+			}
+			defer file.Close()
+			r = file
+		}
+		data, err := io.ReadAll(io.LimitReader(r, inlineFileMaxBytes+1))
+		if err != nil {
+			return usageError("读取 --%s 失败：%v", f.Name, err)
+		}
+		if len(data) > inlineFileMaxBytes {
+			return usageError("--%s 内容超过 %d 字节上限", f.Name, inlineFileMaxBytes)
+		}
+		inv.Flags[target] = string(data)
+	}
+	return nil
+}
+
 // openUpload 打开上传类命令的本地文件（--file），把它作为请求体放进 inv.Body，并从 Flags 里拿掉 --file（路径不发给主控）。
 // 调用方负责关闭返回的文件。
 func openUpload(inv *command.Invocation) (*os.File, error) {

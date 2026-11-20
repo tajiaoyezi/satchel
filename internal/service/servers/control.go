@@ -89,6 +89,8 @@ func nodeError(name, method string, timeout time.Duration, err error) error {
 		return v1.Newf(v1.CodeBadRequest, "服务器 %q 拒绝了 %s：%s", name, method, xe.Message)
 	case errors.As(err, &xe) && xe.Code == xrpc.CodeNotFound:
 		return v1.Newf(v1.CodeNotFound, "%s", xe.Message)
+	case errors.As(err, &xe) && xe.Code == xrpc.CodeConflict:
+		return v1.Newf(v1.CodeConflict, "服务器 %q 配置状态冲突：%s", name, xe.Message)
 	case errors.As(err, &xe):
 		return v1.Newf(v1.CodeInternal, "服务器 %q 执行 %s 失败：%s", name, method, xe.Message)
 	default:
@@ -289,6 +291,8 @@ func (s *Service) restartKernel(ctx context.Context, inv *command.Invocation) (a
 	if err != nil {
 		return nil, err
 	}
+	unlock := s.LockServerConfig(srv.Metadata.ID)
+	defer unlock()
 	var res xrpc.KernelRestarted
 	if err := s.call(ctx, srv, xrpc.MethodKernelRestart, nil, &res, restartTimeout); err != nil {
 		return nil, err

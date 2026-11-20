@@ -94,6 +94,11 @@ description: "看与改系统设置时用：日常运维档的设置、logo 与�
 - 输出里 `success` 是核对通过没有，`error_codes` 是 Cloudflare 给的原因，`hostname` 是签发 token 的站点。
 - 两个 key 没都填是 `conflict`；连不上 Cloudflare 是 `unavailable`。它只核对，不改设置。
 
+## 批量类危险门控阈值
+
+- `batch_single_threshold`（默认 `5`，范围 `1..1000`）、`batch_window_threshold`（默认 `20`，范围 `1..10000`）与 `batch_window_minutes`（默认 `15`，范围 `1..1440`）展示在 `satchel settings show` 的 `status` 中，控制配置类 `apply` 与写操作的单次/滚动时间窗批量门控上限，普通 `settings set` 与 `settings rollback` 拒写这三个字段。
+- 修改用：`satchel settings batch-threshold set <key> <value> --resource-version <N> --confirm <key>`（仅管理员可用，需 `permission` 危险类权限；递增 `resourceVersion`，不进日常运维档写前快照）。
+
 ## 注意
 
 - 更新 CDN 的开关是主控自身类危险，见 `satchel-upgrade`。

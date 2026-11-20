@@ -18,6 +18,7 @@ func TestSystemSettingsKeysInCatalog(t *testing.T) {
 	want := map[string]string{
 		"master_url": "human", "subscription_url": "human", "tgbot_token": "human", "turnstile_secret_key": "human", "tgbot_admin_ids": "human",
 		"update_cdn_enabled": "master_self", "tgbot_url": "master_self",
+		"batch_single_threshold": "master_self", "batch_window_threshold": "master_self", "batch_window_minutes": "master_self",
 		"require_encryption":            "readonly",
 		"master_https_recovery_pending": "status", "primary_admin_username": "status", "master_force_public_http": "status",
 	}
@@ -29,9 +30,9 @@ func TestSystemSettingsKeysInCatalog(t *testing.T) {
 			t.Errorf("%s 应当按 %s 拒收，得到 %q", f, class, got)
 		}
 	}
-	// 列 42 + 日常运维 key 58 = 100；列 4 + 其余 key 36 = 40。
-	if len(info.SpecFields) != 100 || len(info.StatusFields) != 40 {
-		t.Errorf("SystemSettings 应当有 100 个 spec 字段、40 个 status 字段，得到 %d / %d", len(info.SpecFields), len(info.StatusFields))
+	// 列 42 + 日常运维 key 58 = 100；列 4 + 其余 key 39 = 43。
+	if len(info.SpecFields) != 100 || len(info.StatusFields) != 43 {
+		t.Errorf("SystemSettings 应当有 100 个 spec 字段、43 个 status 字段，得到 %d / %d", len(info.SpecFields), len(info.StatusFields))
 	}
 
 	// 四个非 spec 档各拒一次：人类专属、主控自身类、只读、运行态。

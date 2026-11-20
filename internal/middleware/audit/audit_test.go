@@ -73,6 +73,17 @@ func TestRecordsAfterRun(t *testing.T) {
 	if len(rec.entries) != 2 {
 		t.Fatalf("anonymous / explain / version 不该记，得到 %d 条", len(rec.entries))
 	}
+	// 业务层通过 command.RecordPlanID 回传 plan_id，审计记录写入 PlanID。
+	planRunner := Wrap(rec, table(t), nil, command.RunnerFunc(func(ctx context.Context, _ *command.Invocation) (any, error) {
+		command.RecordPlanID(ctx, 42)
+		return map[string]any{"plan_id": 42}, nil
+	}))
+	if _, err := planRunner.Run(admin, &command.Invocation{Path: []string{"whoami"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.entries[len(rec.entries)-1].PlanID; got == nil || *got != 42 {
+		t.Fatalf("期望 PlanID=42，得到 %+v", got)
+	}
 }
 
 func TestDigestMasksAndTruncates(t *testing.T) {

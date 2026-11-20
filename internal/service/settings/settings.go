@@ -50,9 +50,10 @@ func (s *Service) Bindings() command.Bindings {
 		"settings rollback":           s.rollback,
 		"settings master-url set":     s.masterURLSet,
 		"settings master-url migrate": s.masterURLMigrate,
-		"settings gates set":          s.gatesSet,
-		"settings update-cdn set":     s.updateCDNSet,
-		"settings image upload":       s.imageUpload,
+		"settings gates set":           s.gatesSet,
+		"settings update-cdn set":      s.updateCDNSet,
+		"settings batch-threshold set": s.batchThresholdSet,
+		"settings image upload":        s.imageUpload,
 	}
 }
 
@@ -98,6 +99,20 @@ var gateFields = map[string]bool{
 
 // humanWriters 是七组别的组已有的专门写命令（还没有写命令的组不在这里）：门的写命令拒绝它们时指个路。
 var humanWriters = map[string]string{"master_url": "settings master-url set", "subscription_url": "settings master-url set"}
+
+// batchThresholdFields 是批量类危险门控的三个阈值字段，仅允许经 settings batch-threshold set 写入。
+var batchThresholdFields = map[string]bool{
+	"batch_single_threshold": true,
+	"batch_window_threshold": true,
+	"batch_window_minutes":   true,
+}
+
+func batchThresholdOnly(f core.Field, what string) error {
+	if batchThresholdFields[f.Name] {
+		return nil
+	}
+	return v1.Newf(v1.CodeFieldNotApplyable, "字段 %s 不是批量类危险阈值设置项，不能经 %s 写入", f.Name, what)
+}
 
 // gatesOnly 只放行门这一组的字段。
 func gatesOnly(f core.Field, what string) error {
@@ -446,6 +461,36 @@ func (s *Service) updateCDNSet(ctx context.Context, inv *command.Invocation) (an
 		return nil, v1.Newf(v1.CodeBadRequest, "开关只收 true 或 false，得到 %q", inv.Arg(0))
 	}
 	prepared, err := s.prepare(map[string]any{"update_cdn_enabled": enabled}, selfOnly, inv.Name())
+	if err != nil {
+		return nil, err
+	}
+	st, err := s.repo.Write(ctx, core.WriteRequest{Values: prepared, ExpectedVersion: expected})
+	if err != nil {
+		return nil, err
+	}
+	s.written(st)
+	return s.output(ctx, st)
+}
+
+// batchThresholdSet 修改批量类危险门控阈值（batch_single_threshold / batch_window_threshold / batch_window_minutes）：
+// 仅管理员可执行、需 permission 危险类与 --confirm <key>（由 authz 校验），不进日常运维档写前快照。
+func (s *Service) batchThresholdSet(ctx context.Context, inv *command.Invocation) (any, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	expected, err := versionArgs(inv)
+	if err != nil {
+		return nil, err
+	}
+	key := inv.Arg(0)
+	if !batchThresholdFields[key] {
+		return nil, v1.Newf(v1.CodeBadRequest, "不支持的批量阈值键 %q，只能是 batch_single_threshold、batch_window_threshold 或 batch_window_minutes", key)
+	}
+	val, err := strconv.ParseInt(inv.Arg(1), 10, 64)
+	if err != nil {
+		return nil, v1.Newf(v1.CodeBadRequest, "阈值 %q 必须是整数", inv.Arg(1))
+	}
+	prepared, err := s.prepare(map[string]any{key: val}, batchThresholdOnly, inv.Name())
 	if err != nil {
 		return nil, err
 	}

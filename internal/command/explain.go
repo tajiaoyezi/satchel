@@ -23,8 +23,9 @@ type CommandInfo struct {
 	Summary   string     `json:"summary"`
 	Class     Class      `json:"class"`
 	Scope     string     `json:"scope"`
-	Danger    string     `json:"danger"`
-	Confirm   *Confirm   `json:"confirm,omitempty"`
+	Danger        string     `json:"danger"`
+	DynamicDanger bool       `json:"dynamic_danger,omitempty"`
+	Confirm       *Confirm   `json:"confirm,omitempty"`
 	HumanOnly bool       `json:"human_only"`
 	Anonymous bool       `json:"anonymous"`
 	List      bool       `json:"list"`
@@ -122,7 +123,7 @@ func overview(t *Table) Overview {
 // Describe 是一条命令的说明，docs/commands.md 的生成器也用它。
 func Describe(c *Command) CommandInfo {
 	info := CommandInfo{
-		Name: c.Name(), Summary: c.Summary, Class: c.Class, Danger: string(c.Danger), Confirm: c.Confirm,
+		Name: c.Name(), Summary: c.Summary, Class: c.Class, Danger: string(c.Danger), DynamicDanger: c.DynamicDanger, Confirm: c.Confirm,
 		HumanOnly: c.HumanOnly, Anonymous: c.Anonymous, List: c.List, Offline: c.Offline, Args: []ArgInfo{}, Flags: []FlagInfo{}, Reserved: []string{}, Shape: c.Shape,
 	}
 	if scope, ok := c.Scope(); ok {
@@ -141,7 +142,7 @@ func Describe(c *Command) CommandInfo {
 	if c.List {
 		info.Reserved = append(info.Reserved, "limit", "cursor")
 	}
-	if c.Danger != "" {
+	if c.HasConfirm() {
 		info.Reserved = append(info.Reserved, "confirm")
 	}
 	if c.Shape == ShapeJob {

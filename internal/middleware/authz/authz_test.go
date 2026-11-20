@@ -130,3 +130,22 @@ func TestLocalAndUnknownRejected(t *testing.T) {
 		t.Fatalf("表外命令 not_found：%+v", e)
 	}
 }
+
+func TestDynamicDangerDelegatesToHandlerAfterScope(t *testing.T) {
+	tbl, err := command.New(
+		&command.Command{Path: []string{"apply"}, Summary: "s", Class: command.ClassConfig, DynamicDanger: true,
+			Flags: []command.Flag{{Name: "plan", Type: command.TypeInt}, {Name: "force", Type: command.TypeBool}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &calls{}
+	r := Wrap(tbl, nil, c.runner())
+	if e := run(t, r, token([]v1.Scope{v1.ScopeRead}, nil), []string{"apply"}, nil, ""); e == nil || e.Code != v1.CodeForbidden {
+		t.Fatalf("缺 operate scope 仍应被 authz 拒绝：%+v", e)
+	}
+	// 有 operate scope 且无静态危险类：authz 放行给业务层按 Plan 动态判定。
+	if e := run(t, r, token([]v1.Scope{v1.ScopeRead, v1.ScopeOperate}, nil), []string{"apply"}, nil, ""); e != nil || c.n != 1 {
+		t.Fatalf("有 operate scope 应当放行给业务层：err=%+v calls=%d", e, c.n)
+	}
+}

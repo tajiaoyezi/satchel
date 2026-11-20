@@ -262,10 +262,13 @@ type Command struct {
 	Args    []Arg
 	Flags   []Flag
 	Class   Class
-	// Danger 为空表示不是危险操作。
+	// Danger 为空表示不是静态危险操作。
 	Danger v1.Danger
 	// Confirm 只在 Danger 非空时登记。
 	Confirm *Confirm
+	// DynamicDanger 表示所需危险类与 confirm 口径由业务层在运行时动态判定（如 apply 按 Plan 内容与滚动窗口判定）。
+	// 标了 DynamicDanger 的命令不能同时设静态 Danger、Anonymous、ClassLocal 或 ClassRead，投影层自动暴露保留 flag --confirm。
+	DynamicDanger bool
 	// HumanOnly 是第 05 章七组人类专属操作：任何令牌都拒绝，本机管理员与用户要当场验证
 	// （请求里自动带保留 flag verify-password / verify-code / verify-user，见 VerifyFlags）。
 	HumanOnly bool
@@ -287,6 +290,9 @@ type Command struct {
 
 // Name 是命令路径各段用空格连起来的名字，也是 Bindings 与审计记录里的 command。
 func (c *Command) Name() string { return strings.Join(c.Path, " ") }
+
+// HasConfirm 报告这条命令是否需要投影层自动暴露保留 flag --confirm（静态危险类或动态危险类）。
+func (c *Command) HasConfirm() bool { return c.Danger != "" || c.DynamicDanger }
 
 // Scope 返回命令所需的权限范围；local 命令返回 false。
 func (c *Command) Scope() (v1.Scope, bool) { return c.Class.Scope() }
@@ -418,11 +424,25 @@ func (c *Command) validate() error {
 			return fmt.Errorf("命令 %q 的 flag %s 与投影层保留的 flag 撞名", name, f.Name)
 		}
 		if f.Name == "force" {
-			return fmt.Errorf("命令 %q 不能登记 --force：force 覆盖版本校验归危险操作的权限类，要 confirm 并进审计（第 05 章、第 07 章），这道门随 M2 的 apply 一起做", name)
+			// 仅 config 类别、标了 DynamicDanger 且路径为 apply 的命令允许登记 bool 型 --force（跳过乐观锁版本号检查、需权限危险类并进审计）。
+			if !(name == "apply" && c.Class == ClassConfig && c.DynamicDanger && f.Type == TypeBool) {
+				return fmt.Errorf("命令 %q 不能登记 --force：force 覆盖版本校验归危险操作的权限类，要 confirm 并进审计（第 05 章、第 07 章），仅允许 apply 命令登记", name)
+			}
 		}
 	}
 	if c.Danger != "" && !validDanger(c.Danger) {
 		return fmt.Errorf("命令 %q 的危险类 %q 不认识", name, c.Danger)
+	}
+	if c.DynamicDanger {
+		if c.Class == ClassLocal || c.Class == ClassRead {
+			return fmt.Errorf("命令 %q 标了动态危险类，类别不能是 read 或 local", name)
+		}
+		if c.Danger != "" {
+			return fmt.Errorf("命令 %q 不能同时登记静态危险类与动态危险类", name)
+		}
+		if c.Anonymous {
+			return fmt.Errorf("命令 %q 标了不要身份，不能同时是动态危险类", name)
+		}
 	}
 	for _, f := range c.Flags {
 		if (f.Type == TypePassword || f.Type == TypeObject) && !writeClasses[c.Class] {
@@ -445,7 +465,7 @@ func (c *Command) validate() error {
 		}
 	}
 	if c.Class == ClassLocal {
-		if c.Danger != "" || c.HumanOnly || c.REST != nil || c.List || c.Offline {
+		if c.Danger != "" || c.DynamicDanger || c.HumanOnly || c.REST != nil || c.List || c.Offline {
 			return fmt.Errorf("命令 %q 是本地命令，不能登记危险类、人类专属、列表、离线或 REST 映射", name)
 		}
 	}
@@ -612,7 +632,7 @@ func CLIFlags(c *Command) []Flag {
 			out = append(out, Flag{Name: f.Name, Type: f.Type})
 		}
 	}
-	if c.Danger != "" {
+	if c.HasConfirm() {
 		out = append(out, Flag{Name: "confirm", Type: TypeString})
 	}
 	if c.HumanOnly {
