@@ -100,6 +100,62 @@ func (r *Repo) ByIDTx(ctx context.Context, tx bun.Tx, id int64, includeDeleted b
 	return r.byID(ctx, tx, id, includeDeleted)
 }
 
+// ByServerTag 按 (server_id, tag) 读取未软删除入站。
+func (r *Repo) ByServerTag(ctx context.Context, serverID int64, tag string) (*Inbound, error) {
+	m := new(model.Inbound)
+	err := r.db.NewSelect().Model(m).
+		Where("server_id = ? AND tag = ?", serverID, tag).
+		Where("deleted_at IS NULL").
+		Limit(1).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, v1.Wrap(v1.CodeDatabase, "读取入站失败", err)
+	}
+	return toObject(m), nil
+}
+
+// ListFilter 是分页列出入站的过滤条件。
+type ListFilter struct {
+	ServerID       int64
+	Protocol       string
+	IncludeDeleted bool
+}
+
+// List 按 server_id ASC, sort_order ASC, id ASC 分页列出入站。
+func (r *Repo) List(ctx context.Context, f ListFilter, limit, offset int) ([]*Inbound, int, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var rows []model.Inbound
+	q := r.db.NewSelect().Model(&rows)
+	if f.ServerID > 0 {
+		q = q.Where("server_id = ?", f.ServerID)
+	}
+	if p := strings.ToLower(strings.TrimSpace(f.Protocol)); p != "" {
+		q = q.Where("LOWER(protocol) = ?", p)
+	}
+	if !f.IncludeDeleted {
+		q = q.Where("deleted_at IS NULL")
+	}
+	total, err := q.Count(ctx)
+	if err != nil {
+		return nil, 0, v1.Wrap(v1.CodeDatabase, "统计入站数量失败", err)
+	}
+	if err := q.OrderExpr("server_id ASC, sort_order ASC, id ASC").Limit(limit).Offset(offset).Scan(ctx); err != nil {
+		return nil, 0, v1.Wrap(v1.CodeDatabase, "列出入站失败", err)
+	}
+	out := make([]*Inbound, len(rows))
+	for i := range rows {
+		out[i] = toObject(&rows[i])
+	}
+	return out, total, nil
+}
+
 // ByServerTagIncludeDeleted 按 (server_id, tag) 读取入站（含软删除行，用于校验自然键占坑）。
 func (r *Repo) ByServerTagIncludeDeleted(ctx context.Context, serverID int64, tag string) (*Inbound, error) {
 	m := new(model.Inbound)

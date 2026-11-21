@@ -58,6 +58,26 @@ func (s *Service) CallConfigApply(ctx context.Context, serverID int64, params xr
 	return &res, nil
 }
 
+// CallOutboundProbe 向目标节点下发 outbound.probe 实时出站探活请求。
+func (s *Service) CallOutboundProbe(ctx context.Context, serverID int64, params xrpc.OutboundProbeParams) (*xrpc.OutboundProbeResult, error) {
+	srv, err := s.repo.ByID(ctx, serverID)
+	if err != nil {
+		return nil, v1.Newf(v1.CodeNotFound, "没有叫 id=%d 的服务器", serverID)
+	}
+	timeout := time.Duration(params.TimeoutMS)*time.Millisecond + 5*time.Second
+	if timeout < callTimeout {
+		timeout = callTimeout
+	}
+	if timeout > 40*time.Second {
+		timeout = 40 * time.Second
+	}
+	var res xrpc.OutboundProbeResult
+	if err := s.call(ctx, srv, xrpc.MethodOutboundProbe, params, &res, timeout); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 // ConfigStatusView 是 server config status 的输出。
 type ConfigStatusView struct {
 	Server             string     `json:"server"`

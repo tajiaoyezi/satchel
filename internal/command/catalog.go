@@ -4,28 +4,28 @@ import v1 "github.com/satchel/satchel/pkg/api/v1"
 
 // GroupSummaries 是分组节点在帮助里的一句话说明；分组只做分组，本身不是命令。
 var GroupSummaries = map[string]string{
-	"db":                     "数据库：执行迁移、查看迁移状态、清除迁移锁",
-	"audit":                  "审计记录：谁在何时经主控做了什么",
-	"setup":                  "初始化向导：第一次打开主控时建第一个管理员",
-	"account":                "自己的账号：状态、密码、两步验证",
-	"account totp":           "两步验证（TOTP）：启用、确认、禁用",
-	"account recovery-codes": "两步验证的恢复码",
-	"admin":                  "主控本机的应急操作",
-	"settings":               "系统设置：一个单例对象，整单一个 resourceVersion（主控设置类）",
-	"settings snapshots":     "系统设置的写前快照",
-	"settings master-url":    "主控地址与订阅域名（七组人类专属：改的时候当场验证）",
-	"settings gates":         "门：关闭公网访问、静默模式、登录限流与封禁的参数、Turnstile、反代登记（七组人类专属：改的时候当场验证）",
-	"security":               "安全：安全事件与 IP 封禁（封禁与解封要当场验证）",
-	"token":                  "API 令牌：签发、列出、改权限、吊销（签发、改权限、吊销要当场验证）",
-	"mcp":                    "MCP 接入：stdio 垫片、把 AI runtime 接上主控、看谁在连",
-	"logs":                   "主控的系统日志（只对管理员开放）",
-	"logs files":             "数据目录 logs/ 下的日志文件",
-	"schedule":               "内置定时任务与它们的运行记录（只对管理员开放）",
-	"schedule runs":          "内置定时任务每次运行的记录",
-	"job":                    "长任务：受理后在主控里接着跑的命令，按 job id 查结果（只对管理员开放）",
-	"backup":                 "整库备份与恢复（只对管理员开放；下载与恢复要当场验证）",
-	"database":               "主控用的数据库：查看、试连 PostgreSQL、从 SQLite 在线迁移（只对管理员开放；迁移要当场验证）",
-	"update":                 "主控自升级：检查更新、升到所选渠道的最新版（只对管理员开放；升级属主控自身类危险操作）",
+	"db":                       "数据库：执行迁移、查看迁移状态、清除迁移锁",
+	"audit":                    "审计记录：谁在何时经主控做了什么",
+	"setup":                    "初始化向导：第一次打开主控时建第一个管理员",
+	"account":                  "自己的账号：状态、密码、两步验证",
+	"account totp":             "两步验证（TOTP）：启用、确认、禁用",
+	"account recovery-codes":   "两步验证的恢复码",
+	"admin":                    "主控本机的应急操作",
+	"settings":                 "系统设置：一个单例对象，整单一个 resourceVersion（主控设置类）",
+	"settings snapshots":       "系统设置的写前快照",
+	"settings master-url":      "主控地址与订阅域名（七组人类专属：改的时候当场验证）",
+	"settings gates":           "门：关闭公网访问、静默模式、登录限流与封禁的参数、Turnstile、反代登记（七组人类专属：改的时候当场验证）",
+	"security":                 "安全：安全事件与 IP 封禁（封禁与解封要当场验证）",
+	"token":                    "API 令牌：签发、列出、改权限、吊销（签发、改权限、吊销要当场验证）",
+	"mcp":                      "MCP 接入：stdio 垫片、把 AI runtime 接上主控、看谁在连",
+	"logs":                     "主控的系统日志（只对管理员开放）",
+	"logs files":               "数据目录 logs/ 下的日志文件",
+	"schedule":                 "内置定时任务与它们的运行记录（只对管理员开放）",
+	"schedule runs":            "内置定时任务每次运行的记录",
+	"job":                      "长任务：受理后在主控里接着跑的命令，按 job id 查结果（只对管理员开放）",
+	"backup":                   "整库备份与恢复（只对管理员开放；下载与恢复要当场验证）",
+	"database":                 "主控用的数据库：查看、试连 PostgreSQL、从 SQLite 在线迁移（只对管理员开放；迁移要当场验证）",
+	"update":                   "主控自升级：检查更新、升到所选渠道的最新版（只对管理员开放；升级属主控自身类危险操作）",
 	"settings update-cdn":      "更新 CDN 的开关（主控自身类危险操作）",
 	"settings batch-threshold": "批量类危险门控阈值（需 permission 危险类与 --confirm）",
 	"settings image":           "logo、登录壁纸这类图片字段用的图片：上传之后用 settings set 把地址写进字段",
@@ -36,6 +36,13 @@ var GroupSummaries = map[string]string{
 	"server limit":             "主控临时限速：设与撤（只动「主控临时」那一份来源）",
 	"server update":            "节点 satchel-agent 版本检查、单台自更新与批量串行自更新",
 	"server config":            "节点只读配置检查与无侵入校验（配置文件只读，改动须经 plan / apply）",
+	"inbound":                  "代理入站：查询、协议矩阵、配置示例、密钥生成、无状态向导与多机批量规划（只对管理员开放）",
+	"inbound batch":            "多机批量入站规划与批次记录查询（所有写操作一律经 plan / apply）",
+	"outbound":                 "代理出站：查询、节点实时探活、中转/落地规划与多机批量规划（只对管理员开放）",
+	"outbound landing":         "中转/落地出站与绑定路由规则一体化规划（经 plan / apply 原子提交）",
+	"outbound batch":           "多机批量出站规划与批次记录查询（所有写操作一律经 plan / apply）",
+	"routing":                  "代理路由：查询与遮蔽分析、内置 sing-box@v1.14.4 快捷预设与自定义预设管理（只对管理员开放）",
+	"routing preset":           "内置与用户自定义路由规则快捷预设（零废弃 geoip/geosite）",
 }
 
 // Catalog 是本仓库登记的全部命令。按功能域分文件时把各自的切片拼进来；顺序无关，Table 会排序。
@@ -56,8 +63,146 @@ func catalogCommands() []*Command {
 	all = append(all, databaseCommands()...)
 	all = append(all, updateCommands()...)
 	all = append(all, configTxCommands()...)
+	all = append(all, proxyCommands()...)
 	all = append(all, serverCommands()...)
 	return all
+}
+
+// proxyCommands 是 m2-13 的代理资源（Inbound / Outbound / RoutingRule）查询、向导、密钥生成、探测、预设与多机批量规划命令（node-proxy-resources）。
+func proxyCommands() []*Command {
+	idArg := func(desc string) []Arg { return []Arg{{Name: "id", Description: desc}} }
+	inboundBuildFlags := []Flag{
+		{Name: "tag", Type: TypeString, Description: "入站 tag（留空按 <protocol>-<port> 自动生成）"},
+		{Name: "protocol", Type: TypeString, Description: "入站协议（见 inbound protocols）"},
+		{Name: "port", Type: TypeInt, Description: "监听端口（1..65535）"},
+		{Name: "listen", Type: TypeString, Description: "监听地址（留空由服务器 IPv6 设置决定）"},
+		{Name: "transport", Type: TypeString, Description: "传输层：tcp、ws、grpc、http、httpupgrade 或 quic"},
+		{Name: "security", Type: TypeString, Description: "安全层：none、tls 或 reality"},
+		{Name: "sni", Type: TypeString, Description: "TLS / Reality server_name（SNI）"},
+		{Name: "handshake", Type: TypeString, Description: "Reality / ShadowTLS 握手目标（host 或 host:port，默认 443）"},
+		{Name: "path", Type: TypeString, Description: "WebSocket / HTTP / HTTPUpgrade 路径"},
+		{Name: "service-name", Type: TypeString, Description: "gRPC service_name"},
+		{Name: "cipher", Type: TypeString, Description: "Shadowsocks 加密算法（默认 2022-blake3-aes-128-gcm）"},
+		{Name: "flow", Type: TypeString, Description: "VLESS 流控（tcp + tls/reality 默认 xtls-rprx-vision）"},
+		{Name: "cert-path", Type: TypeString, Description: "TLS 证书路径（certificate_path）"},
+		{Name: "key-path", Type: TypeString, Description: "TLS 私钥路径（key_path）"},
+		{Name: "user-name", Type: TypeString, Description: "默认凭据用户名（默认 default）"},
+		{Name: "password", Type: TypeString, Secret: true, Description: "自定义密码或 PSK（留空自动生成随机强密码）"},
+		{Name: "uuid", Type: TypeString, Secret: true, Description: "自定义 UUID（留空自动生成 UUIDv4）"},
+		{Name: "sort-order", Type: TypeInt, Description: "入站渲染排序值（默认 0）"},
+	}
+	buildFlagsWithServer := append([]Flag{
+		{Name: "server-name", Type: TypeString, Description: "目标服务器名或 ID（必填）"},
+	}, inboundBuildFlags...)
+	batchInboundFlags := append([]Flag{
+		{Name: "servers", Type: TypeStrings, Description: "目标服务器名或 ID（可重复或逗号分隔；与 --all 二选一）"},
+		{Name: "all", Type: TypeBool, Description: "对当前全部服务器批量规划（与 --servers 二选一）"},
+		{Name: "spec", Type: TypeString, Secret: true, Description: "可选：直接提供 Inbound spec 模板 JSON（不传则使用向导参数逐机生成独立密钥）"},
+	}, inboundBuildFlags...)
+
+	return []*Command{
+		// 入站（8 条）
+		{Path: []string{"inbound", "list"}, Summary: "分页列出入站配置（按服务器与排序升序；无 secrets 权限打码 tls/settings）", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "server-name", Type: TypeString, Description: "按服务器名或 ID 过滤"},
+				{Name: "protocol", Type: TypeString, Description: "按协议名过滤"},
+				{Name: "include-deleted", Type: TypeBool, Description: "包含已软删除的入站"},
+			},
+			Columns: []string{"id", "server_id", "tag", "protocol", "port", "enabled"}},
+		{Path: []string{"inbound", "get"}, Summary: "查看单条入站配置（含实时派生的 Reality 公钥；无 secrets 权限打码 tls/settings）", Class: ClassRead,
+			Args: idArg("入站 ID（inbound list 里的 id）")},
+		{Path: []string{"inbound", "protocols"}, Summary: "查看 sing-box@v1.14.4 原生入站协议矩阵、传输/安全组合规则与并行协议线说明", Class: ClassRead},
+		{Path: []string{"inbound", "examples"}, Summary: "查看纯 Go 内嵌的 sing-box 入站配置示例库（可按协议/传输/安全筛选）", Class: ClassRead,
+			Flags: []Flag{
+				{Name: "protocol", Type: TypeString, Description: "按协议筛选"},
+				{Name: "transport", Type: TypeString, Description: "按传输层筛选"},
+				{Name: "security", Type: TypeString, Description: "按安全层筛选"},
+			}},
+		{Path: []string{"inbound", "keygen"}, Summary: "使用加密随机源生成 UUID、Reality X25519 密钥对、short_id、强密码、SS2022 PSK 与 WireGuard 密钥对", Class: ClassRead,
+			Flags: []Flag{
+				{Name: "type", Type: TypeString, Default: "all", Description: "生成类型：all（默认）、uuid、x25519、short-id、password、ss2022 或 wireguard"},
+				{Name: "cipher", Type: TypeString, Default: "2022-blake3-aes-128-gcm", Description: "SS2022 密钥算法"},
+			}},
+		{Path: []string{"inbound", "build"}, Summary: "无状态入站向导：校验协议组合、自动生成密钥并输出可直接提交 plan 的 InboundSpec", Class: ClassRead,
+			Flags: buildFlagsWithServer},
+		{Path: []string{"inbound", "batch", "list"}, Summary: "按 id 倒序分页列出多机批量入站批次记录（batch_inbounds）", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "batch-id", Type: TypeString, Description: "按批次编号过滤"},
+				{Name: "server-name", Type: TypeString, Description: "按服务器名或 ID 过滤"},
+			},
+			Columns: []string{"id", "batch_id", "server_id", "tag", "protocol", "port", "created_at"}},
+		{Path: []string{"inbound", "batch", "plan"}, Summary: "为多台服务器批量规划入站并生成一份待确认 Plan（提交经 apply 原子落库与记录批次）", Class: ClassConfig,
+			Flags: batchInboundFlags},
+
+		// 出站（6 条）
+		{Path: []string{"outbound", "list"}, Summary: "分页列出出站配置与最近一次探测状态（无 secrets 权限打码 settings）", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "server-name", Type: TypeString, Description: "按服务器名或 ID 过滤"},
+				{Name: "balancer-group", Type: TypeString, Description: "按负载均衡组名过滤"},
+				{Name: "include-deleted", Type: TypeBool, Description: "包含已软删除的出站"},
+			},
+			Columns: []string{"id", "server_id", "tag", "protocol", "balancer_group", "is_warp"}},
+		{Path: []string{"outbound", "get"}, Summary: "查看单条出站配置与探测状态（无 secrets 权限打码 settings）", Class: ClassRead,
+			Args: idArg("出站 ID（outbound list 里的 id）")},
+		{Path: []string{"outbound", "probe"}, Summary: "经在线节点运行中 sing-box 内核的指定出站实测 HTTP 可达性与延迟，并回写探测状态（不抬升版本）", Class: ClassAction,
+			Args: idArg("出站 ID（outbound list 里的 id）"),
+			Flags: []Flag{
+				{Name: "url", Type: TypeString, Description: "探测目标 http(s) URL（默认复用出站 probe.url 或 gstatic generate_204）"},
+				{Name: "timeout", Type: TypeDuration, Default: "10s", Description: "单次探测超时（1s..30s，默认 10s）"},
+			}},
+		{Path: []string{"outbound", "landing", "plan"}, Summary: "为源服务器规划落地出站与对应绑定路由规则并生成待确认 Plan（支持引用另一台服务器入站自动派生与 --detour）", Class: ClassConfig,
+			Flags: []Flag{
+				{Name: "server-name", Type: TypeString, Description: "源服务器名或 ID（必填）"},
+				{Name: "outbound-tag", Type: TypeString, Description: "新建落地出站的 tag（必填）"},
+				{Name: "inbound-tag", Type: TypeString, Description: "仅对该入站落地（省略时生成整机 catch_all 兜底路由）"},
+				{Name: "target-server", Type: TypeString, Description: "落地目标服务器名或 ID（与 --target-inbound 配合自动派生客户端出站）"},
+				{Name: "target-inbound", Type: TypeString, Description: "落地目标服务器上的入站 tag"},
+				{Name: "protocol", Type: TypeString, Description: "手工指定落地出站协议（与 --target-server 二选一）"},
+				{Name: "settings", Type: TypeString, Secret: true, Description: "手工指定落地出站 settings JSON 对象"},
+				{Name: "detour", Type: TypeString, Description: "可选：前置链式跳转出站 tag"},
+				{Name: "balancer-group", Type: TypeString, Description: "可选：加入的负载均衡组名"},
+				{Name: "sort-order", Type: TypeInt, Default: "100", Description: "路由规则排序值（默认 100）"},
+			}},
+		{Path: []string{"outbound", "batch", "list"}, Summary: "按 id 倒序分页列出多机批量出站批次记录（batch_outbounds）", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "batch-id", Type: TypeString, Description: "按批次编号过滤"},
+				{Name: "server-name", Type: TypeString, Description: "按服务器名或 ID 过滤"},
+			},
+			Columns: []string{"id", "batch_id", "server_id", "tag", "protocol", "created_at"}},
+		{Path: []string{"outbound", "batch", "plan"}, Summary: "为多台服务器批量规划出站并生成一份待确认 Plan（提交经 apply 原子落库与记录批次）", Class: ClassConfig,
+			Flags: []Flag{
+				{Name: "servers", Type: TypeStrings, Description: "目标服务器名或 ID（可重复或逗号分隔；与 --all 二选一）"},
+				{Name: "all", Type: TypeBool, Description: "对当前全部服务器批量规划（与 --servers 二选一）"},
+				{Name: "tag", Type: TypeString, Description: "出站 tag（必填）"},
+				{Name: "protocol", Type: TypeString, Description: "出站协议（必填）"},
+				{Name: "settings", Type: TypeString, Secret: true, Description: "出站 settings JSON 对象"},
+				{Name: "balancer-group", Type: TypeString, Description: "可选：负载均衡组名"},
+				{Name: "probe", Type: TypeString, Description: "可选：出站组探测配置 JSON（如 strategy/url/interval/tolerance）"},
+			}},
+
+		// 路由与预设（6 条）
+		{Path: []string{"routing", "list"}, Summary: "按排序分页列出路由规则，并标出入站全兜底与被前序规则遮蔽的告警提示", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "server-name", Type: TypeString, Description: "按服务器名或 ID 过滤"},
+				{Name: "include-deleted", Type: TypeBool, Description: "包含已软删除的路由规则"},
+			},
+			Columns: []string{"id", "server_id", "sort_order", "outbound_tag", "enabled", "catch_all"}},
+		{Path: []string{"routing", "get"}, Summary: "查看单条路由规则及遮蔽分析", Class: ClassRead,
+			Args: idArg("路由规则 ID（routing list 里的 id）")},
+		{Path: []string{"routing", "preset", "builtin"}, Summary: "列出内置 sing-box@v1.14.4 快捷路由预设及配套 rule_set 定义（零废弃 geoip/geosite）", Class: ClassRead},
+		{Path: []string{"routing", "preset", "list"}, Summary: "分页列出已保存的用户自定义路由快捷预设（routing_rule_presets）", Class: ClassRead, List: true,
+			Flags:   []Flag{{Name: "owner", Type: TypeString, Description: "按归属账号过滤"}},
+			Columns: []string{"id", "username", "name", "updated_at"}},
+		{Path: []string{"routing", "preset", "save"}, Summary: "保存一条命名路由规则快捷预设（校验合法 JSON 并拒收废弃 geoip/geosite/user 键）", Class: ClassAction,
+			Flags: []Flag{
+				{Name: "name", Type: TypeString, Description: "预设名称（1..128 字符，必填）"},
+				{Name: "rule", Type: TypeString, Description: "sing-box 路由 match JSON 对象（必填）"},
+				{Name: "owner", Type: TypeString, Description: "可选：归属账号（本机管理员留空自动回落主管理员）"},
+			}},
+		{Path: []string{"routing", "preset", "delete"}, Summary: "删除一条已保存的自定义路由快捷预设（删除类危险操作，需 --confirm <id>）", Class: ClassAction,
+			Danger: v1.DangerDelete, Confirm: &Confirm{Kind: ConfirmObject, Arg: "id"},
+			Args: idArg("预设 ID（routing preset list 里的 id）")},
+	}
 }
 
 // configTxCommands 是 m2-12 的配置类唯一写路径与快照回滚命令（node-config-tx）。

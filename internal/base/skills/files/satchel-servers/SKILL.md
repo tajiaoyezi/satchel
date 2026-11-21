@@ -11,7 +11,7 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 
 - 加一台：`satchel server add <名字>`（可选参数 `--mode <模式>`、`--domain`、`--domain-v6`、`--listen-port`、`--pull-address`、`--pull-address-v6`、`--pull-port`）。它属于配置类，令牌要有日常运维权限（`operate`）；名字不能和已有的重复（重复时是 `name_taken`）。
 - `--mode` 支持 `auto`、`websocket`、`http`、`pull`（省略时默认是 `auto`：WebSocket 优先 → 加密 HTTP 上报 → 轮询兜底）；建机时一次生成 `token`（节点上行认证）、`agent_token`（主控管理节点口，默认 `23889`）与 `pull_token`（主控只读轮询口，默认 `23890`）三把互不相同的 43 字符凭据。`pull` 模式必须至少提供一个可达地址。
-- 服务器建好后的完整规格编辑（含连接模式、地址端口、内核全局配置 `core_log_level`/`core_dns`/`core_stats_enabled`、排序等）、软删除与恢复，以及管理 `Inbound`/`Outbound`/`RoutingRule`，统一经 `satchel plan` 与 `satchel apply` 两阶段配置事务执行（见 `satchel-basics`）；修改连接模式或地址端口会触发 `permission` 危险类，若需在线无中断热切管理/轮询端口请优先使用 `satchel server switch-listen-port`。
+- 服务器建好后的完整规格编辑（含连接模式、地址端口、内核全局配置 `core_log_level`/`core_dns`/`core_stats_enabled`、排序等）、软删除与恢复，以及管理 `Inbound`/`Outbound`/`RoutingRule`，统一经 `satchel plan` 与 `satchel apply` 两阶段配置事务执行（见 `satchel-basics`）；代理入站向导、密钥生成、出站探活、中转落地、路由预设与多机批量规划见 `satchel-proxy`；修改连接模式或地址端口会触发 `permission` 危险类，若需在线无中断热切管理/轮询端口请优先使用 `satchel server switch-listen-port`。
 - 结果是这台服务器的完整对象，`status.status` 是 `pending`；里面的三把凭据一律是打码的，原文只经安装命令或 `server token show` 取。
 
 ## 取安装命令

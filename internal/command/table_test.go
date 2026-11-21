@@ -46,6 +46,12 @@ func TestCatalog(t *testing.T) {
 		"server system-info": ClassRead, "server nics": ClassRead, "server speed": ClassRead,
 		"server traffic-stats set": ClassConfig, "server logs list": ClassRead, "server logs files": ClassRead,
 		"server config status": ClassRead, "server config files": ClassRead, "server config read": ClassRead, "server config test": ClassRead,
+		"inbound list": ClassRead, "inbound get": ClassRead, "inbound protocols": ClassRead, "inbound examples": ClassRead,
+		"inbound keygen": ClassRead, "inbound build": ClassRead, "inbound batch list": ClassRead, "inbound batch plan": ClassConfig,
+		"outbound list": ClassRead, "outbound get": ClassRead, "outbound probe": ClassAction, "outbound landing plan": ClassConfig,
+		"outbound batch list": ClassRead, "outbound batch plan": ClassConfig,
+		"routing list": ClassRead, "routing get": ClassRead, "routing preset builtin": ClassRead,
+		"routing preset list": ClassRead, "routing preset save": ClassAction, "routing preset delete": ClassAction,
 	}
 	if len(table.All()) != len(want) {
 		t.Fatalf("目录里应当恰好 %d 条命令，得到 %v", len(want), table.Names())
@@ -59,7 +65,7 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 的类别应当是 %s，得到 %s", name, class, c.Class)
 		}
 	}
-	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "plans list", "snapshot list", "server logs list", "server logs files", "server config files"} {
+	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "plans list", "snapshot list", "server logs list", "server logs files", "server config files", "inbound list", "inbound batch list", "outbound list", "outbound batch list", "routing list", "routing preset list"} {
 		if c, _ := table.Lookup(name); !c.List {
 			t.Errorf("%s 应当是列表命令", name)
 		}
@@ -113,6 +119,9 @@ func TestCatalog(t *testing.T) {
 	}
 	if c, _ := table.Lookup("settings batch-threshold set"); c.Danger != v1.DangerPermission || c.Confirm == nil || c.Confirm.Kind != ConfirmObject || c.Confirm.Arg != "key" {
 		t.Errorf("settings batch-threshold set 应当是权限类、confirm 取 key：%+v", c)
+	}
+	if c, _ := table.Lookup("routing preset delete"); c.Danger != v1.DangerDelete || c.Confirm == nil || c.Confirm.Kind != ConfirmObject || c.Confirm.Arg != "id" {
+		t.Errorf("routing preset delete 应当是删除类、confirm 取 id：%+v", c)
 	}
 	if c, _ := table.Lookup("mcp init"); func() bool {
 		_, u := c.FlagByName(VerifyUserFlag)

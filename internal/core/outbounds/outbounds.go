@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/uptrace/bun"
 
@@ -90,6 +91,63 @@ func (r *Repo) ByIDIncludeDeleted(ctx context.Context, id int64) (*Outbound, err
 // ByIDTx 在事务中按 id 读取出站。
 func (r *Repo) ByIDTx(ctx context.Context, tx bun.Tx, id int64, includeDeleted bool) (*Outbound, error) {
 	return r.byID(ctx, tx, id, includeDeleted)
+}
+
+// ListFilter 是分页列出出站的过滤条件。
+type ListFilter struct {
+	ServerID       int64
+	BalancerGroup  string
+	IncludeDeleted bool
+}
+
+// List 按 server_id ASC, id ASC 分页列出出站。
+func (r *Repo) List(ctx context.Context, f ListFilter, limit, offset int) ([]*Outbound, int, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var rows []model.Outbound
+	q := r.db.NewSelect().Model(&rows)
+	if f.ServerID > 0 {
+		q = q.Where("server_id = ?", f.ServerID)
+	}
+	if grp := strings.TrimSpace(f.BalancerGroup); grp != "" {
+		q = q.Where("balancer_group = ?", grp)
+	}
+	if !f.IncludeDeleted {
+		q = q.Where("deleted_at IS NULL")
+	}
+	total, err := q.Count(ctx)
+	if err != nil {
+		return nil, 0, v1.Wrap(v1.CodeDatabase, "统计出站数量失败", err)
+	}
+	if err := q.OrderExpr("server_id ASC, id ASC").Limit(limit).Offset(offset).Scan(ctx); err != nil {
+		return nil, 0, v1.Wrap(v1.CodeDatabase, "列出出站失败", err)
+	}
+	out := make([]*Outbound, len(rows))
+	for i := range rows {
+		out[i] = toObject(&rows[i])
+	}
+	return out, total, nil
+}
+
+// UpdateProbeStatus 更新出站最近一次探测运行态三列（status 写，不抬升 resource_version）。
+func (r *Repo) UpdateProbeStatus(ctx context.Context, id int64, ok bool, latencyMs *int64, probedAt time.Time) error {
+	res, err := r.db.NewUpdate().Model((*model.Outbound)(nil)).
+		Set("last_probe_ok = ?", ok).
+		Set("last_probe_latency_ms = ?", latencyMs).
+		Set("last_probed_at = ?", probedAt.UTC()).
+		Where("id = ? AND deleted_at IS NULL", id).
+		Exec(ctx)
+	if err != nil {
+		return v1.Wrap(v1.CodeDatabase, "更新出站探测状态失败", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ByServerTagIncludeDeleted 按 (server_id, tag) 读取出站（含软删除行）。

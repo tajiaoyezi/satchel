@@ -31,6 +31,7 @@ const (
 	MethodConfigApply       = "config.apply"            // ConfigApplyParams → ConfigApplyResult
 	MethodConfigFiles       = "config.files"            // ConfigFilesParams → ConfigFilesResult
 	MethodConfigRead        = "config.read"             // ConfigReadParams → ConfigReadResult
+	MethodOutboundProbe     = "outbound.probe"          // OutboundProbeParams → OutboundProbeResult
 )
 
 // 节点只读日志与只读配置拉取的上限，确保远低于单帧 ReadLimit（4 MiB）。

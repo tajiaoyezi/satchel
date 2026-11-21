@@ -11,6 +11,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `satchel-backup` | 备份与恢复主控时用：生成、列出、上传备份；下载与恢复要请人做；新装的主控用初始化向导建管理员或从备份恢复。 |
 | `satchel-basics` | 用 Satchel 之前先读：开局看总览与身份，怎么学命令、看输出与错误，危险操作与只有人能做的操作怎么处理，MCP 上怎么调用。 |
 | `satchel-database` | 看或更换主控的数据库时用：看当前的数据库、试连 PostgreSQL、从 SQLite 在线迁移。 |
+| `satchel-proxy` | 管理 sing-box 代理入站（Inbound）、出站（Outbound）、路由规则（RoutingRule）、密钥生成、无状态建站向导、出站实时探活、中转落地规划、路由预设与多机批量规划时用：所有配置变更一律走 plan / apply。 |
 | `satchel-servers` | 加服务器（节点）、取安装命令、看节点是否在线，以及给节点上的凭据临时限速、踢线、看连接与流量、重启节点内核时用：安装命令要 https 主控地址，token 原文要请人取。 |
 | `satchel-settings` | 看与改系统设置时用：日常运维档的设置、logo 与登录壁纸的图片上传、写前快照与回滚；主控地址与门这两组要请人改。 |
 | `satchel-troubleshoot` | 主控出问题时用：看日志、内置定时任务的运行记录、长任务、审计与安全事件，主控起不来或被挡在门外时请人在主控本机处理。 |
@@ -27,7 +28,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `account totp disable` | `satchel-access` |
 | `account totp setup` | `satchel-access` |
 | `admin reset-password` | `satchel-troubleshoot` |
-| `apply` | `satchel-basics`、`satchel-servers` |
+| `apply` | `satchel-basics`、`satchel-proxy`、`satchel-servers` |
 | `audit list` | `satchel-troubleshoot` |
 | `backup create` | `satchel-backup`、`satchel-basics`、`satchel-upgrade` |
 | `backup download` | `satchel-backup` |
@@ -41,6 +42,14 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `db status` | `satchel-troubleshoot` |
 | `db unlock` | `satchel-troubleshoot` |
 | `explain` | `satchel-basics`、`satchel-settings` |
+| `inbound batch list` | `satchel-proxy` |
+| `inbound batch plan` | `satchel-proxy` |
+| `inbound build` | `satchel-proxy` |
+| `inbound examples` | `satchel-proxy` |
+| `inbound get` | `satchel-proxy` |
+| `inbound keygen` | `satchel-proxy` |
+| `inbound list` | `satchel-proxy` |
+| `inbound protocols` | `satchel-proxy` |
 | `job get` | `satchel-backup`、`satchel-basics`、`satchel-database`、`satchel-troubleshoot`、`satchel-upgrade` |
 | `job list` | `satchel-basics`、`satchel-troubleshoot` |
 | `login` | `satchel-access`、`satchel-backup`、`satchel-basics`、`satchel-database`、`satchel-servers`、`satchel-settings`、`satchel-troubleshoot` |
@@ -50,10 +59,22 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `mcp init` | `satchel-access`、`satchel-basics` |
 | `mcp status` | `satchel-access` |
 | `mcp stdio` | `satchel-access` |
+| `outbound batch list` | `satchel-proxy` |
+| `outbound batch plan` | `satchel-proxy` |
+| `outbound get` | `satchel-proxy` |
+| `outbound landing plan` | `satchel-proxy` |
+| `outbound list` | `satchel-proxy` |
+| `outbound probe` | `satchel-proxy` |
 | `overview` | `satchel-basics` |
-| `plan` | `satchel-basics`、`satchel-servers` |
+| `plan` | `satchel-basics`、`satchel-proxy`、`satchel-servers` |
 | `plans get` | `satchel-basics` |
 | `plans list` | `satchel-basics` |
+| `routing get` | `satchel-proxy` |
+| `routing list` | `satchel-proxy` |
+| `routing preset builtin` | `satchel-proxy` |
+| `routing preset delete` | `satchel-proxy` |
+| `routing preset list` | `satchel-proxy` |
+| `routing preset save` | `satchel-proxy` |
 | `schedule list` | `satchel-troubleshoot` |
 | `schedule runs list` | `satchel-troubleshoot` |
 | `security ban` | `satchel-access` |

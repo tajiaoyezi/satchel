@@ -62,14 +62,27 @@ func (s *Service) planCmd(ctx context.Context, inv *command.Invocation) (any, er
 	if err != nil {
 		return nil, err
 	}
-	view, err := s.createPlanFromOps(ctx, ops, nil)
+	view, err := s.createPlanFromOps(ctx, ops, nil, nil)
 	if err != nil {
 		return nil, err
 	}
 	return view, nil
 }
 
-func (s *Service) createPlanFromOps(ctx context.Context, ops []Operation, skipped []SkippedObject) (*PlanView, error) {
+// CreatePlanFromJSON 供同层编排服务经接口复用 plan 校验与持久化（不跨 service/* import），并记录 audit_logs.plan_id。
+func (s *Service) CreatePlanFromJSON(ctx context.Context, specJSON, batchKind, batchID string) (any, error) {
+	ops, err := parseOperations(specJSON)
+	if err != nil {
+		return nil, err
+	}
+	var meta *BatchMeta
+	if strings.TrimSpace(batchKind) != "" && strings.TrimSpace(batchID) != "" {
+		meta = &BatchMeta{Kind: strings.TrimSpace(batchKind), BatchID: strings.TrimSpace(batchID)}
+	}
+	return s.createPlanFromOps(ctx, ops, nil, meta)
+}
+
+func (s *Service) createPlanFromOps(ctx context.Context, ops []Operation, skipped []SkippedObject, meta *BatchMeta) (*PlanView, error) {
 	ev, err := s.evaluateOps(ctx, ops, true)
 	if err != nil {
 		return nil, err
@@ -89,6 +102,7 @@ func (s *Service) createPlanFromOps(ctx context.Context, ops []Operation, skippe
 		Servers:         ev.Servers,
 		RequiredDangers: dangers,
 		ConfirmHint:     confirmHint,
+		BatchMeta:       meta,
 	}
 	objectsJSON, err := json.Marshal(plannedObjs)
 	if err != nil {
@@ -1102,8 +1116,13 @@ func buildPlanView(p *coreplans.Plan, diff PlanDiffData, bw *BatchWindowInfo, sk
 	if dangers == nil {
 		dangers = []v1.Danger{}
 	}
+	batchID := ""
+	if diff.BatchMeta != nil {
+		batchID = diff.BatchMeta.BatchID
+	}
 	return &PlanView{
 		PlanID:          p.Metadata.ID,
+		BatchID:         batchID,
 		Status:          coreplans.EffectiveStatus(p, now),
 		AffectedCount:   p.Spec.AffectedCount,
 		ApplyID:         p.Status.ApplyID,

@@ -91,6 +91,23 @@ func (r *Repo) Count(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// FirstActiveAdmin 返回 id 最小且启用中的未软删除管理员账号（供本机管理员在需要 users 外键的附属表中回落归属）。
+func (r *Repo) FirstActiveAdmin(ctx context.Context) (*Account, error) {
+	var row model.User
+	err := r.db.NewSelect().Model(&row).
+		Where("role = ? AND is_active = ? AND deleted_at IS NULL", string(v1.RoleAdmin), true).
+		OrderExpr("id ASC").
+		Limit(1).
+		Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, v1.Wrap(v1.CodeDatabase, "查找管理员账号失败", err)
+	}
+	return r.GetByUsername(ctx, row.Username)
+}
+
 // initLockKey 是 PostgreSQL 上串行化 InitAdmin 的 advisory lock 键（固定常量）。
 const initLockKey = 0x5a7c4e1
 

@@ -13,6 +13,8 @@ import (
 
 	"github.com/satchel/satchel/internal/base/singbox"
 	"github.com/satchel/satchel/internal/command"
+	corebatchin "github.com/satchel/satchel/internal/core/batchinbounds"
+	corebatchout "github.com/satchel/satchel/internal/core/batchoutbounds"
 	coreinbounds "github.com/satchel/satchel/internal/core/inbounds"
 	coreoutbounds "github.com/satchel/satchel/internal/core/outbounds"
 	coreplans "github.com/satchel/satchel/internal/core/plans"
@@ -59,6 +61,12 @@ func (s *Service) applyCmd(ctx context.Context, inv *command.Invocation) (any, e
 	var plannedObjs []PlannedObject
 	if err := json.Unmarshal(p.Spec.Objects, &plannedObjs); err != nil || len(plannedObjs) == 0 {
 		return nil, v1.New(v1.CodeInternal, "计划内容损坏，无法解析变更对象列表")
+	}
+	var savedDiff PlanDiffData
+	_ = json.Unmarshal(p.Spec.Diff, &savedDiff)
+	batchID := ""
+	if savedDiff.BatchMeta != nil {
+		batchID = savedDiff.BatchMeta.BatchID
 	}
 	ops := make([]Operation, len(plannedObjs))
 	for i, po := range plannedObjs {
@@ -166,7 +174,52 @@ func (s *Service) applyCmd(ctx context.Context, inv *command.Invocation) (any, e
 			}
 			appliedSummaries = append(appliedSummaries, sum)
 		}
-		// 3. 持久化记录本次批量操作计数（重启不清零）。
+		// 3. 持久化记录本次批量操作计数（重启不清零）及多机批次追踪记录。
+		if savedDiff.BatchMeta != nil && savedDiff.BatchMeta.BatchID != "" {
+			switch savedDiff.BatchMeta.Kind {
+			case coreinbounds.KindName:
+				if s.deps.BatchInbounds != nil {
+					entries := make([]corebatchin.Entry, 0, len(ev.Items))
+					for _, it := range ev.Items {
+						if it.Op.Op == "create" && it.Op.Kind == coreinbounds.KindName && it.InboundSpec != nil {
+							entries = append(entries, corebatchin.Entry{
+								BatchID:   savedDiff.BatchMeta.BatchID,
+								Tag:       it.InboundSpec.Tag,
+								ServerID:  it.InboundSpec.ServerID,
+								Protocol:  it.InboundSpec.Protocol,
+								Port:      it.InboundSpec.Port,
+								CreatedAt: now,
+							})
+						}
+					}
+					if len(entries) > 0 {
+						if err := s.deps.BatchInbounds.InsertTx(ctx, tx, entries); err != nil {
+							return err
+						}
+					}
+				}
+			case coreoutbounds.KindName:
+				if s.deps.BatchOutbounds != nil {
+					entries := make([]corebatchout.Entry, 0, len(ev.Items))
+					for _, it := range ev.Items {
+						if it.Op.Op == "create" && it.Op.Kind == coreoutbounds.KindName && it.OutboundSpec != nil {
+							entries = append(entries, corebatchout.Entry{
+								BatchID:   savedDiff.BatchMeta.BatchID,
+								Tag:       it.OutboundSpec.Tag,
+								ServerID:  it.OutboundSpec.ServerID,
+								Protocol:  it.OutboundSpec.Protocol,
+								CreatedAt: now,
+							})
+						}
+					}
+					if len(entries) > 0 {
+						if err := s.deps.BatchOutbounds.InsertTx(ctx, tx, entries); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
 		if s.deps.Batch != nil {
 			if err := s.deps.Batch.RecordTx(ctx, tx, id, ev.AffectedCount, "apply", now); err != nil {
 				return err
@@ -278,17 +331,22 @@ func (s *Service) applyCmd(ctx context.Context, inv *command.Invocation) (any, e
 	}
 
 	if failedCount > 0 {
-		return nil, v1.Newf(v1.CodePartialFailure, "配置已写入主控库（apply_id=%s），但 %d/%d 台节点未成功落地", applyID, failedCount, len(ev.AffectedServers)).
+		errOut := v1.Newf(v1.CodePartialFailure, "配置已写入主控库（apply_id=%s），但 %d/%d 台节点未成功落地", applyID, failedCount, len(ev.AffectedServers)).
 			WithState("plan_id", planID).
 			WithState("apply_id", applyID).
 			WithState("objects", appliedSummaries).
 			WithState("results", serverResults).
 			WithNext("查看 state.results 排查离线或回滚节点，修复后重新 satchel plan && satchel apply 收敛")
+		if batchID != "" {
+			errOut = errOut.WithState("batch_id", batchID)
+		}
+		return nil, errOut
 	}
 
 	return &ApplyResult{
 		PlanID:        planID,
 		ApplyID:       applyID,
+		BatchID:       batchID,
 		AffectedCount: ev.AffectedCount,
 		Objects:       appliedSummaries,
 		Servers:       serverResults,
@@ -588,7 +646,7 @@ func (s *Service) snapshotRollback(ctx context.Context, inv *command.Invocation)
 			WithState("skipped", skipped).
 			WithNext("查看 state.skipped 了解跳过原因；如需恢复已删除对象请显式执行 restore 计划")
 	}
-	return s.createPlanFromOps(ctx, ops, skipped)
+	return s.createPlanFromOps(ctx, ops, skipped, nil)
 }
 
 func (s *Service) currentObjectState(ctx context.Context, kind string, id int64) (version int64, deleted bool, exists bool, err error) {

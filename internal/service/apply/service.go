@@ -20,6 +20,8 @@ import (
 	"github.com/satchel/satchel/internal/base/singbox"
 	"github.com/satchel/satchel/internal/command"
 	corebatch "github.com/satchel/satchel/internal/core/batch"
+	corebatchin "github.com/satchel/satchel/internal/core/batchinbounds"
+	corebatchout "github.com/satchel/satchel/internal/core/batchoutbounds"
 	coreinbounds "github.com/satchel/satchel/internal/core/inbounds"
 	coreoutbounds "github.com/satchel/satchel/internal/core/outbounds"
 	coreplans "github.com/satchel/satchel/internal/core/plans"
@@ -39,18 +41,20 @@ type NodeClient interface {
 
 // Deps 聚合 apply 编排服务所需的仓储与回调。
 type Deps struct {
-	DB           *bun.DB
-	Servers      *coreservers.Repo
-	Inbounds     *coreinbounds.Repo
-	Outbounds    *coreoutbounds.Repo
-	RoutingRules *corerouting.Repo
-	Plans        *coreplans.Repo
-	Snapshots    *coresnapshots.Repo
-	Batch        *corebatch.Repo
-	Settings     *coresettings.Repo
-	Nodes        NodeClient
-	Now          func() time.Time
-	PlanTTL      time.Duration
+	DB             *bun.DB
+	Servers        *coreservers.Repo
+	Inbounds       *coreinbounds.Repo
+	Outbounds      *coreoutbounds.Repo
+	RoutingRules   *corerouting.Repo
+	Plans          *coreplans.Repo
+	Snapshots      *coresnapshots.Repo
+	Batch          *corebatch.Repo
+	BatchInbounds  *corebatchin.Repo
+	BatchOutbounds *corebatchout.Repo
+	Settings       *coresettings.Repo
+	Nodes          NodeClient
+	Now            func() time.Time
+	PlanTTL        time.Duration
 }
 
 // Service 是配置类 plan / apply 与快照回滚服务。
@@ -179,12 +183,19 @@ type ServerConfigDiff struct {
 	AfterConfig         string   `json:"after_config,omitempty"`
 }
 
+// BatchMeta 记录多机批量入站/出站规划附带的批次追踪元数据（存于 Plan.diff 内，零迁移）。
+type BatchMeta struct {
+	Kind    string `json:"kind"` // "Inbound" | "Outbound"
+	BatchID string `json:"batch_id"`
+}
+
 // PlanDiffData 是持久化在 Plan.diff 中的结构化差异与危险提示。
 type PlanDiffData struct {
 	Objects         []PlannedObject    `json:"objects"`
 	Servers         []ServerConfigDiff `json:"servers"`
 	RequiredDangers []v1.Danger        `json:"required_dangers"`
 	ConfirmHint     string             `json:"confirm_hint,omitempty"`
+	BatchMeta       *BatchMeta         `json:"batch_meta,omitempty"`
 }
 
 // BatchWindowInfo 展示当前调用者的批量类滚动窗口使用情况。
@@ -207,6 +218,7 @@ type SkippedObject struct {
 // PlanView 是 plan / plans get / snapshot rollback 的统一响应结构。
 type PlanView struct {
 	PlanID          int64              `json:"plan_id"`
+	BatchID         string             `json:"batch_id,omitempty"`
 	Status          string             `json:"status"`
 	AffectedCount   int64              `json:"affected_count"`
 	ApplyID         *string            `json:"apply_id,omitempty"`
@@ -258,6 +270,7 @@ type AppliedObjectSummary struct {
 type ApplyResult struct {
 	PlanID        int64                  `json:"plan_id"`
 	ApplyID       string                 `json:"apply_id"`
+	BatchID       string                 `json:"batch_id,omitempty"`
 	AffectedCount int64                  `json:"affected_count"`
 	Objects       []AppliedObjectSummary `json:"objects"`
 	Servers       []ServerApplyResult    `json:"servers"`

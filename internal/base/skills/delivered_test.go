@@ -27,10 +27,38 @@ func TestSkillsDelivered(t *testing.T) {
 	for _, s := range skills {
 		names = append(names, s.Name)
 	}
-	want := "satchel-access,satchel-backup,satchel-basics,satchel-database,satchel-servers,satchel-settings,satchel-troubleshoot,satchel-upgrade"
+	want := "satchel-access,satchel-backup,satchel-basics,satchel-database,satchel-proxy,satchel-servers,satchel-settings,satchel-troubleshoot,satchel-upgrade"
 	if strings.Join(names, ",") != want {
-		t.Fatalf("应当恰好是 M1 的七份加 satchel-servers：%v", names)
+		t.Fatalf("应当恰好是 M1 的七份加 satchel-servers 与 satchel-proxy：%v", names)
 	}
+}
+
+func TestProxySkillMentions(t *testing.T) {
+	skills, _, err := Load(Files())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range skills {
+		if s.Name != "satchel-proxy" {
+			continue
+		}
+		for _, want := range []string{
+			"satchel inbound list", "satchel inbound get", "satchel inbound protocols",
+			"satchel inbound examples", "satchel inbound keygen", "satchel inbound build",
+			"satchel inbound batch list", "satchel inbound batch plan",
+			"satchel outbound list", "satchel outbound get", "satchel outbound probe",
+			"satchel outbound landing plan", "satchel outbound batch list", "satchel outbound batch plan",
+			"satchel routing list", "satchel routing get", "satchel routing preset builtin",
+			"satchel routing preset list", "satchel routing preset save", "satchel routing preset delete",
+			"reality_public_key", "shadowed_by", "resourceVersion", "plan", "apply",
+		} {
+			if !strings.Contains(s.Content, want) {
+				t.Errorf("satchel-proxy 里应当有 %s", want)
+			}
+		}
+		return
+	}
+	t.Fatal("没有 satchel-proxy")
 }
 
 // master-skills「satchel-servers 讲到四条命令与主控地址」「satchel-servers 讲到连接管控与流量的五条命令」与「satchel-servers 讲到重启内核」。
@@ -101,8 +129,8 @@ func TestCurrentCommandsCovered(t *testing.T) {
 			visible++
 		}
 	}
-	if visible != 95 || !used["overview"] || !used["token create"] || !used["serve"] {
-		t.Fatalf("应当覆盖 95 条非隐藏命令，含 overview、token create、serve：%d %v", visible, used)
+	if visible != 115 || !used["overview"] || !used["token create"] || !used["serve"] || !used["inbound build"] || !used["outbound probe"] || !used["routing preset save"] {
+		t.Fatalf("应当覆盖 115 条非隐藏命令，含 overview、token create、serve 与代理资源命令：%d %v", visible, used)
 	}
 	extra := command.MustNew(append(command.Catalog().All(), &command.Command{Path: []string{"demo", "ping"}, Summary: "测试", Class: command.ClassRead})...)
 	if missing := Coverage(extra, refs); strings.Join(missing, ",") != "demo ping" {

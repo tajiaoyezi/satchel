@@ -30,10 +30,13 @@ import (
 	"github.com/satchel/satchel/internal/command"
 	coreaudit "github.com/satchel/satchel/internal/core/audit"
 	corebatch "github.com/satchel/satchel/internal/core/batch"
+	corebatchin "github.com/satchel/satchel/internal/core/batchinbounds"
+	corebatchout "github.com/satchel/satchel/internal/core/batchoutbounds"
 	coreinbounds "github.com/satchel/satchel/internal/core/inbounds"
 	corejobs "github.com/satchel/satchel/internal/core/jobs"
 	coreoutbounds "github.com/satchel/satchel/internal/core/outbounds"
 	coreplans "github.com/satchel/satchel/internal/core/plans"
+	corepresets "github.com/satchel/satchel/internal/core/routingpresets"
 	corerouting "github.com/satchel/satchel/internal/core/routingrules"
 	coresecurity "github.com/satchel/satchel/internal/core/security"
 	coreservers "github.com/satchel/satchel/internal/core/servers"
@@ -63,6 +66,7 @@ import (
 	"github.com/satchel/satchel/internal/service/jobs"
 	svclogs "github.com/satchel/satchel/internal/service/logs"
 	svcoverview "github.com/satchel/satchel/internal/service/overview"
+	svcproxy "github.com/satchel/satchel/internal/service/proxy"
 	"github.com/satchel/satchel/internal/service/schedule"
 	svcsecurity "github.com/satchel/satchel/internal/service/security"
 	svcservers "github.com/satchel/satchel/internal/service/servers"
@@ -194,20 +198,41 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	}
 	masterPub := masterKey.Public().(ed25519.PublicKey)
 	serversRepo := coreservers.New(bdb, st)
+	inboundsRepo := coreinbounds.New(bdb, st)
+	outboundsRepo := coreoutbounds.New(bdb, st)
+	routingRepo := corerouting.New(bdb, st)
 	batchRepo := corebatch.New(bdb, st)
+	batchInRepo := corebatchin.New(bdb, st)
+	batchOutRepo := corebatchout.New(bdb, st)
+	presetRepo := corepresets.New(bdb, st)
 	serversSvc := svcservers.New(serversRepo, settingsRepo, masterPub, logger)
 	serversSvc.SetMasterVersion(buildinfo.Version)
 	applySvc := svcapply.New(svcapply.Deps{
-		DB:           bdb,
-		Servers:      serversRepo,
-		Inbounds:     coreinbounds.New(bdb, st),
-		Outbounds:    coreoutbounds.New(bdb, st),
-		RoutingRules: corerouting.New(bdb, st),
-		Plans:        coreplans.New(bdb, st),
-		Snapshots:    coresnapshots.New(bdb, st),
-		Batch:        batchRepo,
-		Settings:     settingsRepo,
-		Nodes:        serversSvc,
+		DB:             bdb,
+		Servers:        serversRepo,
+		Inbounds:       inboundsRepo,
+		Outbounds:      outboundsRepo,
+		RoutingRules:   routingRepo,
+		Plans:          coreplans.New(bdb, st),
+		Snapshots:      coresnapshots.New(bdb, st),
+		Batch:          batchRepo,
+		BatchInbounds:  batchInRepo,
+		BatchOutbounds: batchOutRepo,
+		Settings:       settingsRepo,
+		Nodes:          serversSvc,
+	})
+	proxySvc := svcproxy.New(svcproxy.Deps{
+		Servers:        serversRepo,
+		Inbounds:       inboundsRepo,
+		Outbounds:      outboundsRepo,
+		RoutingRules:   routingRepo,
+		BatchInbounds:  batchInRepo,
+		BatchOutbounds: batchOutRepo,
+		RoutingPresets: presetRepo,
+		Users:          accounts,
+		Settings:       settingsRepo,
+		Planner:        applySvc,
+		Nodes:          serversSvc,
 	})
 	serversSvc.SetConfigRenderer(applySvc.RenderServerConfig)
 	agentConfigOf := func(s *coresettings.State) xrpc.AgentConfig {
@@ -378,6 +403,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		bindings[name] = h
 	}
 	for name, h := range applySvc.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range proxySvc.Bindings() {
 		bindings[name] = h
 	}
 	if err := table.CheckBindings(bindings); err != nil {

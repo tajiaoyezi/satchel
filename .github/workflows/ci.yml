@@ -223,7 +223,7 @@ jobs:
             echo "以下文件未经 gofmt：" && echo "$files"
             exit 1
           fi
-          GOWORK=off go vet -tags with_quic ./...
+          GOWORK=off go vet -tags with_quic,with_utls ./...
 
       - name: 运行 M2 正式验收
         working-directory: satchel

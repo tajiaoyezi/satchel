@@ -34,6 +34,9 @@ var sensitiveKeys = map[string]bool{
 	"turnstile_secret_key": true,
 	"credentials":          true,
 	"auth":                 true,
+	"auth_str":             true,
+	"userkey":              true,
+	"decryption":           true,
 }
 
 // IsSensitiveKey 判断字段键名是否属于敏感键。
@@ -131,7 +134,7 @@ func RedactJSON(raw []byte, pretty bool) []byte {
 
 var (
 	bearerLineRe = regexp.MustCompile(`(?i)(authorization["']?\s*[:=]\s*["']?bearer\s+)([^\s"';]+)`)
-	kvSecretRe   = regexp.MustCompile(`(?i)("?(?:private_key|password|uuid|short_id|pre_shared_key|psk|secret|token|agent_token|pull_token)"?\s*[:=]\s*"?)([^"\s,;}\]]+)`)
+	kvSecretRe   = regexp.MustCompile(`(?i)("?(?:private_key|password|uuid|short_id|pre_shared_key|psk|secret|token|agent_token|pull_token|auth_str|userkey|decryption)"?\s*[:=]\s*"?)([^"\s,;}\]]+)`)
 )
 
 // RedactText 对纯文本或非 JSON 配置文件内容做保守敏感值脱敏（用于无 secrets scope 读 nginx 或 JSONC 文件）。

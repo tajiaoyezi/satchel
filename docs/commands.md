@@ -24,15 +24,35 @@
 | `database show` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/database/show` |
 | `database test` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/database/test` |
 | `explain` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/explain/{target}` |
+| `inbound batch list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/inbound/batch` |
+| `inbound batch plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/inbound/batch/plan` |
+| `inbound build` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/inbound/build` |
+| `inbound examples` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/inbound/examples` |
+| `inbound get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/inbound/get/{id}` |
+| `inbound keygen` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/inbound/keygen` |
+| `inbound list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/inbound` |
+| `inbound protocols` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/inbound/protocols` |
 | `job get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/job/get/{job}` |
 | `job list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/job` |
 | `logs files list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/logs/files` |
 | `logs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/logs` |
 | `mcp status` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/mcp/status` |
+| `outbound batch list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/outbound/batch` |
+| `outbound batch plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/outbound/batch/plan` |
+| `outbound get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/outbound/get/{id}` |
+| `outbound landing plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/outbound/landing/plan` |
+| `outbound list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/outbound` |
+| `outbound probe` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/outbound/probe/{id}` |
 | `overview` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/overview` |
 | `plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/plan` |
 | `plans get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/plans/get/{id}` |
 | `plans list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/plans` |
+| `routing get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/routing/get/{id}` |
+| `routing list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/routing` |
+| `routing preset builtin` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/routing/preset/builtin` |
+| `routing preset delete` | action | operate | delete | object (id) | 否 | 否 | 否 | `POST /api/v1/routing/preset/delete/{id}` |
+| `routing preset list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/routing/preset` |
+| `routing preset save` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/routing/preset/save` |
 | `schedule list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/schedule` |
 | `schedule runs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/schedule/runs` |
 | `security ban` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/security/ban/{ip}` |

@@ -3,6 +3,7 @@ package outbounds
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/uptrace/bun"
 
@@ -57,6 +58,24 @@ func TestOutboundsCRUDAndGuards(t *testing.T) {
 			return err
 		}); v1.AsError(err).Code != v1.CodeBadRequest {
 			t.Fatalf("跨服务器修改应报 bad_request，得到 %v", err)
+		}
+
+		// UpdateProbeStatus 只改 status，不抬升 resourceVersion。
+		lat := int64(37)
+		now := time.Now().UTC().Truncate(time.Second)
+		if err := r.UpdateProbeStatus(ctx, created.Metadata.ID, true, &lat, now); err != nil {
+			t.Fatal(err)
+		}
+		got, err := r.ByID(ctx, created.Metadata.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Metadata.ResourceVersion != 2 || !got.Status.LastProbeOk || got.Status.LastProbeLatencyMs == nil || *got.Status.LastProbeLatencyMs != 37 || got.Status.LastProbedAt == nil {
+			t.Fatalf("探测运行态更新异常：ver=%d status=%+v", got.Metadata.ResourceVersion, got.Status)
+		}
+		items, total, err := r.List(ctx, ListFilter{ServerID: s1.ID, BalancerGroup: "hk"}, 10, 0)
+		if err != nil || total != 1 || len(items) != 1 || items[0].Metadata.ID != created.Metadata.ID {
+			t.Fatalf("List 过滤失败：total=%d items=%+v err=%v", total, items, err)
 		}
 	})
 }
