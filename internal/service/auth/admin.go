@@ -49,7 +49,12 @@ func (s *Service) ResetAdminPassword(ctx context.Context, username, newPassword 
 	if err := s.users.SetPasswordHash(ctx, a.ID, hash); err != nil {
 		return 0, err
 	}
-	return s.sessions.DeleteByUser(ctx, username, "")
+	n, err := s.sessions.DeleteByUser(ctx, username, "")
+	if err != nil {
+		return 0, err
+	}
+	s.notifySessionRevoked("", username, "")
+	return n, nil
 }
 
 // LookupAdmin 对已打开的数据库执行管理员查找。

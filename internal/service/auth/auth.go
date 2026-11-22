@@ -41,6 +41,8 @@ type Service struct {
 	setupRestoreHandler command.Handler
 	// setupGuard 是 setup init 之前的检查（service/backup 提供，装配根注入）。
 	setupGuard func() error
+	// onSessionRevoked 在会话登出或按账号批量作废时通知实时连接层立即断开对应连接（由装配根注入）。
+	onSessionRevoked func(sessionHash, username, keepHash string)
 
 	mu          sync.Mutex
 	pending     map[string]pendingEntry

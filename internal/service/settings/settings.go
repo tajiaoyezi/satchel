@@ -44,12 +44,12 @@ func New(repo *core.Repo) *Service {
 // Bindings 是本服务提供的命令处理函数，按命令名给 cmd/satchel 绑定。
 func (s *Service) Bindings() command.Bindings {
 	return command.Bindings{
-		"settings show":               s.show,
-		"settings set":                s.set,
-		"settings snapshots list":     s.snapshotsList,
-		"settings rollback":           s.rollback,
-		"settings master-url set":     s.masterURLSet,
-		"settings master-url migrate": s.masterURLMigrate,
+		"settings show":                s.show,
+		"settings set":                 s.set,
+		"settings snapshots list":      s.snapshotsList,
+		"settings rollback":            s.rollback,
+		"settings master-url set":      s.masterURLSet,
+		"settings master-url migrate":  s.masterURLMigrate,
 		"settings gates set":           s.gatesSet,
 		"settings update-cdn set":      s.updateCDNSet,
 		"settings batch-threshold set": s.batchThresholdSet,

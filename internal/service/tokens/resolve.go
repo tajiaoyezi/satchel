@@ -58,3 +58,36 @@ func (s *Service) ResolveToken(ctx context.Context, token string) (v1.Identity, 
 	}
 	return v1.Identity{Actor: t.Owner, ActorKind: v1.ActorToken, Role: a.Role, TokenID: &id, Scopes: scopes, Danger: danger}, true, nil
 }
+
+// ResolveTokenID 按令牌 ID 复核令牌与签发者账号当前是否仍然有效（不写 last_used_at，供仪表盘长连接定期复核使用）。
+func (s *Service) ResolveTokenID(ctx context.Context, tokenID int64) (v1.Identity, bool, error) {
+	if tokenID <= 0 {
+		return v1.Identity{}, false, nil
+	}
+	t, err := s.repo.GetByID(ctx, tokenID)
+	if err != nil {
+		if !errors.Is(err, core.ErrNotFound) {
+			s.logger.Error("复核令牌时查库出错，按无效处理", "error", err, "token_id", tokenID)
+			return v1.Identity{}, false, err
+		}
+		return v1.Identity{}, false, nil
+	}
+	now := s.now()
+	if t.Revoked || (t.ExpiresAt != nil && !now.Before(*t.ExpiresAt)) {
+		return v1.Identity{}, false, nil
+	}
+	a, err := s.users.GetByUsername(ctx, t.Owner)
+	if err != nil {
+		if !errors.Is(err, users.ErrNotFound) {
+			s.logger.Error("复核令牌时查签发者出错，按无效处理", "error", err, "token_id", t.ID)
+			return v1.Identity{}, false, err
+		}
+		return v1.Identity{}, false, nil
+	}
+	if a.Deleted || !a.IsActive {
+		return v1.Identity{}, false, nil
+	}
+	scopes, danger := intersect(t.Grant, a.Role)
+	id := t.ID
+	return v1.Identity{Actor: t.Owner, ActorKind: v1.ActorToken, Role: a.Role, TokenID: &id, Scopes: scopes, Danger: danger}, true, nil
+}

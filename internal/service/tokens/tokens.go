@@ -6,14 +6,15 @@ package tokens
 import (
 	"context"
 	"errors"
-	"github.com/satchel/satchel/internal/base/db"
 	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/satchel/satchel/internal/base/db"
 	"github.com/satchel/satchel/internal/command"
 	core "github.com/satchel/satchel/internal/core/tokens"
 	"github.com/satchel/satchel/internal/core/users"
@@ -25,15 +26,24 @@ const touchInterval = 60 * time.Second
 
 // Service 持有令牌与用户两个仓储（用户仓储用来查签发者的角色与状态）。
 type Service struct {
-	repo   *core.Repo
-	users  *users.Repo
-	now    func() time.Time
-	logger *slog.Logger
-	gate   *db.WriteGate
+	repo      *core.Repo
+	users     *users.Repo
+	now       func() time.Time
+	logger    *slog.Logger
+	gate      *db.WriteGate
+	hookMu    sync.RWMutex
+	onRevoked func(tokenID int64)
 }
 
 // SetWriteGate 装上「写入暂停」开关：在线迁移拿着 SQLite 写锁时不更新最后使用时间（master-db-migration）。
 func (s *Service) SetWriteGate(g *db.WriteGate) { s.gate = g }
+
+// SetRevokedHook 装上令牌吊销回调：吊销后立即通知实时推送连接层断开对应连接。
+func (s *Service) SetRevokedHook(fn func(tokenID int64)) {
+	s.hookMu.Lock()
+	s.onRevoked = fn
+	s.hookMu.Unlock()
+}
 
 // New 建服务；logger 为 nil 时用 slog.Default()。
 func New(repo *core.Repo, u *users.Repo, logger *slog.Logger) *Service {
@@ -295,6 +305,12 @@ func (s *Service) revoke(ctx context.Context, inv *command.Invocation) (any, err
 		return nil, err
 	}
 	t.Revoked, t.RevokedAt = true, &at
+	s.hookMu.RLock()
+	fn := s.onRevoked
+	s.hookMu.RUnlock()
+	if fn != nil {
+		fn(t.ID)
+	}
 	return s.info(t), nil
 }
 

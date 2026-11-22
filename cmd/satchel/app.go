@@ -448,7 +448,33 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 
 	// 网页（master-web）：/api/、/mcp、/public/ 之外的路径；别的方法交回 notFoundPath。
 	console := web.NewHandler(webFiles(), http.HandlerFunc(notFoundPath))
-	dash := dashboard.New(dashboard.Config{Snapshot: serversSvc.DashboardSnapshot, Logger: logger})
+	dash := dashboard.New(dashboard.Config{
+		Snapshot: serversSvc.DashboardSnapshot,
+		CheckAuth: func(ctx context.Context, ca dashboard.ClientAuth) bool {
+			switch ca.Source {
+			case v1.SourceSession:
+				id, ok, err := identity.ResolveSessionHash(ctx, ca.SessionHash)
+				return err == nil && ok && id.IsAdmin()
+			case v1.SourceToken:
+				id, ok, err := tokens.ResolveTokenID(ctx, ca.TokenID)
+				return err == nil && ok && id.IsAdmin()
+			case v1.SourceSocket:
+				return true
+			default:
+				return false
+			}
+		},
+		Logger: logger,
+	})
+	identity.SetSessionRevokedHook(func(sessionHash, username, keepHash string) {
+		if sessionHash != "" {
+			dash.KickSession(sessionHash)
+		}
+		if username != "" {
+			dash.KickUserSessions(username, keepHash)
+		}
+	})
+	tokens.SetRevokedHook(dash.KickToken)
 
 	mux := http.NewServeMux()
 	mounts := []struct {

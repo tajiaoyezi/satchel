@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,125 @@ func TestDashboardWSAndTelemetryEndToEnd(t *testing.T) {
 			HTTPHeader: http.Header{"Authorization": {"Bearer " + roToken}, "X-Real-IP": {"203.0.113.55"}},
 		}); err == nil || resp == nil || resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("静默模式锁定后面板 WS 应当被藏为 404：err=%v resp=%v", err, resp)
+		}
+	})
+}
+
+// TestDashboardWSRevocationEndToEnd 验证已建连的 /api/v1/ws/dashboard 在登出、吊销令牌、账号停用后立即停止推送并断开。
+func TestDashboardWSRevocationEndToEnd(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		h := start(t, bdb)
+		base := h.tcpURL
+		admin := setupAdmin(t, base)
+		roToken := issueToken(t, admin, base, "readonly")
+
+		// 将仪表盘刷新间隔缩到最小 1000ms，便于快速验证账号停用的周期复核断开。
+		showOut, showErr, code := h.cli("settings", "show", "--json")
+		if code != 0 {
+			t.Fatalf("settings show 失败：%s", showErr)
+		}
+		var setObj struct {
+			Metadata struct {
+				ResourceVersion int `json:"resourceVersion"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal([]byte(showOut), &setObj); err != nil {
+			t.Fatalf("解析 settings show 失败：%v", err)
+		}
+		if _, setErr, code := h.cli("settings", "set", "--set", "dashboard_refresh_interval_ms=1000", "--resource-version", strconv.Itoa(setObj.Metadata.ResourceVersion), "--json"); code != 0 {
+			t.Fatalf("设置刷新间隔失败：%s", setErr)
+		}
+
+		wsEndpoint := "ws" + strings.TrimPrefix(base, "http") + dashboard.Path
+		baseURL, err := url.Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cookieOf := func(b *browser) string {
+			t.Helper()
+			cs := b.c.Jar.Cookies(baseURL)
+			if len(cs) == 0 {
+				t.Fatal("缺少 satchel_session cookie")
+			}
+			return cs[0].Name + "=" + cs[0].Value
+		}
+
+		// 1. 管理员会话登出（DELETE /api/v1/session）后，已建连的 WS 立即以 1008 断开。
+		sessConn, _, err := websocket.Dial(tctx(t), wsEndpoint, &websocket.DialOptions{
+			HTTPHeader: http.Header{"Cookie": {cookieOf(admin)}, "Origin": {base}},
+		})
+		if err != nil {
+			t.Fatalf("建连会话 WS 失败：%v", err)
+		}
+		if _, _, err := sessConn.Read(tctx(t)); err != nil {
+			t.Fatalf("读会话首帧失败：%v", err)
+		}
+		if st, fields, _ := admin.call("DELETE", base+"/api/v1/session", "", map[string]string{"Origin": base}); st != http.StatusOK {
+			t.Fatalf("登出应当 200，得到 %d %v", st, fields)
+		}
+		rctx, rcancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, _, rerr := sessConn.Read(rctx)
+		rcancel()
+		if websocket.CloseStatus(rerr) != websocket.StatusPolicyViolation {
+			t.Fatalf("会话登出后 WS 应立即收到 StatusPolicyViolation (1008)，得到 %v", rerr)
+		}
+
+		// 重新登录以继续测令牌吊销与账号停用。
+		admin = newBrowser(t)
+		if st, fields, _ := admin.call("POST", base+"/api/v1/session", `{"username":"admin","password":"secret12"}`, nil); st != http.StatusOK {
+			t.Fatalf("重新登录失败：%d %v", st, fields)
+		}
+
+		// 2. API 令牌吊销后，已建连的 Bearer WS 立即以 1008 断开。
+		tokConn, _, err := websocket.Dial(tctx(t), wsEndpoint, &websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": {"Bearer " + roToken}},
+		})
+		if err != nil {
+			t.Fatalf("建连 Bearer WS 失败：%v", err)
+		}
+		if _, _, err := tokConn.Read(tctx(t)); err != nil {
+			t.Fatalf("读 Bearer 首帧失败：%v", err)
+		}
+		listOut, listErr, code := h.cli("token", "list", "--json")
+		if code != 0 {
+			t.Fatalf("token list 失败：%s", listErr)
+		}
+		var tokList struct {
+			Items []struct {
+				ID int64 `json:"id"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal([]byte(listOut), &tokList); err != nil || len(tokList.Items) == 0 {
+			t.Fatalf("解析 token list 失败：%v %s", err, listOut)
+		}
+		if st, fields, _ := admin.call("POST", base+"/api/v1/token/revoke/"+strconv.FormatInt(tokList.Items[0].ID, 10), `{"verify-password":"secret12"}`, map[string]string{"Origin": base}); st != http.StatusOK {
+			t.Fatalf("吊销令牌失败：%d %v", st, fields)
+		}
+		rctx2, rcancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+		_, _, rerr2 := tokConn.Read(rctx2)
+		rcancel2()
+		if websocket.CloseStatus(rerr2) != websocket.StatusPolicyViolation {
+			t.Fatalf("令牌吊销后 WS 应立即收到 StatusPolicyViolation (1008)，得到 %v", rerr2)
+		}
+
+		// 3. 账号被停用（is_active=false）后，已建连的会话 WS 在下一轮广播前被复核拦截并以 1008 断开、绝不再发帧。
+		sessConn2, _, err := websocket.Dial(tctx(t), wsEndpoint, &websocket.DialOptions{
+			HTTPHeader: http.Header{"Cookie": {cookieOf(admin)}, "Origin": {base}},
+		})
+		if err != nil {
+			t.Fatalf("二次建连会话 WS 失败：%v", err)
+		}
+		if _, _, err := sessConn2.Read(tctx(t)); err != nil {
+			t.Fatalf("读二次会话首帧失败：%v", err)
+		}
+		if _, err := bdb.NewUpdate().TableExpr("users").Set("is_active = ?", false).Where("username = ?", "admin").Exec(context.Background()); err != nil {
+			t.Fatalf("停用账号失败：%v", err)
+		}
+		rctx3, rcancel3 := context.WithTimeout(context.Background(), 4*time.Second)
+		_, rawAfterDisable, rerr3 := sessConn2.Read(rctx3)
+		rcancel3()
+		if websocket.CloseStatus(rerr3) != websocket.StatusPolicyViolation {
+			t.Fatalf("账号停用后 WS 应在下一轮广播前断开（1008）且不再发帧，得到 err=%v data=%s", rerr3, rawAfterDisable)
 		}
 	})
 }

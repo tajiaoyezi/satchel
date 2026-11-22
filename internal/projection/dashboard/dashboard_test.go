@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/satchel/satchel/internal/service/auth"
 	svcservers "github.com/satchel/satchel/internal/service/servers"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
@@ -134,5 +135,87 @@ func TestDashboardWSAuthCSWSHAndLazyTicker(t *testing.T) {
 	}
 	if hub.ClientCount() != 0 || hub.TickerRunning() {
 		t.Fatalf("全部断开后惰性 ticker 应当停止：count=%d running=%v", hub.ClientCount(), hub.TickerRunning())
+	}
+}
+
+func TestDashboardWSRevocationStopsPush(t *testing.T) {
+	var valid atomic.Bool
+	valid.Store(true)
+	hub := New(Config{
+		RefreshInterval: time.Second,
+		Snapshot: func(context.Context) ([]svcservers.DashboardServer, svcservers.DashboardSummary, error) {
+			return []svcservers.DashboardServer{{ID: 1, Name: "hk-1", Status: "connected"}}, svcservers.DashboardSummary{TotalServers: 1}, nil
+		},
+		CheckAuth: func(_ context.Context, _ ClientAuth) bool {
+			return valid.Load()
+		},
+	})
+	defer hub.Close(context.Background())
+
+	tokID := int64(42)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("X-Test-Kind") {
+		case "session-a":
+			ctx := v1.WithIdentity(r.Context(), v1.Identity{Actor: "alice", ActorKind: v1.ActorUser, Role: v1.RoleAdmin})
+			ctx = v1.WithCredentialSource(auth.WithSessionHash(ctx, "hash-a"), v1.SourceSession)
+			hub.ServeHTTP(w, r.WithContext(ctx))
+		case "session-b":
+			ctx := v1.WithIdentity(r.Context(), v1.Identity{Actor: "alice", ActorKind: v1.ActorUser, Role: v1.RoleAdmin})
+			ctx = v1.WithCredentialSource(auth.WithSessionHash(ctx, "hash-b"), v1.SourceSession)
+			hub.ServeHTTP(w, r.WithContext(ctx))
+		case "token":
+			ctx := v1.WithIdentity(r.Context(), v1.Identity{Actor: "alice", ActorKind: v1.ActorToken, Role: v1.RoleAdmin, TokenID: &tokID})
+			ctx = v1.WithCredentialSource(ctx, v1.SourceToken)
+			hub.ServeHTTP(w, r.WithContext(ctx))
+		}
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + Path
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	dial := func(kind string) *websocket.Conn {
+		t.Helper()
+		hdr := http.Header{"Origin": {srv.URL}, "X-Test-Kind": {kind}}
+		c, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: hdr})
+		if err != nil {
+			t.Fatalf("建连 %s 失败：%v", kind, err)
+		}
+		if _, _, err := c.Read(ctx); err != nil {
+			t.Fatalf("读 %s 首帧失败：%v", kind, err)
+		}
+		return c
+	}
+
+	// 1. KickSession 只断开对应会话，另一个会话不受影响。
+	cA := dial("session-a")
+	cB := dial("session-b")
+	hub.KickSession("hash-a")
+	if _, _, err := cA.Read(ctx); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Fatalf("被踢会话应收到 StatusPolicyViolation (1008)，得到 %v", err)
+	}
+
+	// 2. KickToken 立即断开对应令牌连接。
+	cTok := dial("token")
+	hub.KickToken(tokID)
+	if _, _, err := cTok.Read(ctx); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Fatalf("被吊销令牌连接应收到 StatusPolicyViolation (1008)，得到 %v", err)
+	}
+
+	// 3. CheckAuth 返回 false（模拟账号停用/会话过期）时，下一次广播绝不发帧而是断开连接并停 ticker。
+	valid.Store(false)
+	if _, _, err := cB.Read(ctx); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Fatalf("CheckAuth 失效后下一次广播应断开连接（1008）而不是继续发帧，得到 %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if hub.ClientCount() == 0 && !hub.TickerRunning() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if hub.ClientCount() != 0 || hub.TickerRunning() {
+		t.Fatalf("全部失效断开后应清理客户端并停 ticker：count=%d running=%v", hub.ClientCount(), hub.TickerRunning())
 	}
 }

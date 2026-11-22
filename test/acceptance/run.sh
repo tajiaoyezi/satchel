@@ -121,7 +121,7 @@ docker compose -f "$COMPOSE_FILE" exec -T master \
 
 TOKEN_OUT="$(printf '%s\n\n' "$ADMIN_PASS" | \
   docker compose -f "$COMPOSE_FILE" exec -T master \
-  script -qec "satchel token create --name driver --preset ops --danger restart --verify-user admin --json" /dev/null)"
+  script -qec "satchel token create --name driver --preset ops --danger restart --danger batch --verify-user admin --json" /dev/null)"
 DRIVER_TOKEN="$(printf '%s\n' "$TOKEN_OUT" | tr -d '\r' | grep -o 'sat_[A-Za-z0-9_-]*' | head -n 1)"
 if [ -z "$DRIVER_TOKEN" ]; then
   echo "错误：未能从 token create 输出中提取 API 令牌" >&2

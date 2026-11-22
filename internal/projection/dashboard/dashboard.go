@@ -14,6 +14,7 @@ import (
 
 	"github.com/satchel/satchel/internal/command"
 	"github.com/satchel/satchel/internal/projection/rest"
+	"github.com/satchel/satchel/internal/service/auth"
 	svcservers "github.com/satchel/satchel/internal/service/servers"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
@@ -43,9 +44,21 @@ type Frame struct {
 	Summary           svcservers.DashboardSummary  `json:"summary"`
 }
 
+// ClientAuth 记录仪表盘 WebSocket 建连时的身份凭据，用于在后续推送与保活期间复核会话、账号与令牌是否仍然有效。
+type ClientAuth struct {
+	Source      v1.CredentialSource
+	Actor       string
+	SessionHash string
+	TokenID     int64
+}
+
+// CheckAuthFunc 复核已建连客户端的身份凭据是否仍有效且仍具备管理员角色；返回 false 时断开连接并停止推送。
+type CheckAuthFunc func(ctx context.Context, auth ClientAuth) bool
+
 // Config 是 Hub 的可选参数（测试可缩短心跳与写超时）。
 type Config struct {
 	Snapshot        SnapshotFunc
+	CheckAuth       CheckAuthFunc
 	RefreshInterval time.Duration
 	PingInterval    time.Duration
 	PingTimeout     time.Duration
@@ -56,6 +69,7 @@ type Config struct {
 
 type client struct {
 	conn    *websocket.Conn
+	auth    ClientAuth
 	writeMu sync.Mutex
 }
 
@@ -67,9 +81,16 @@ func (c *client) writeText(ctx context.Context, timeout time.Duration, raw []byt
 	return c.conn.Write(wctx, websocket.MessageText, raw)
 }
 
+func (c *client) closeRevoked(reason string) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	_ = c.conn.Close(websocket.StatusPolicyViolation, reason)
+}
+
 // Hub 管理全部管理员仪表盘 WebSocket 连接与按需启停的惰性推送循环。
 type Hub struct {
 	snapshot     SnapshotFunc
+	checkAuth    CheckAuthFunc
 	logger       *slog.Logger
 	now          func() time.Time
 	pingInterval time.Duration
@@ -105,6 +126,7 @@ func New(cfg Config) *Hub {
 	}
 	return &Hub{
 		snapshot:     cfg.Snapshot,
+		checkAuth:    cfg.CheckAuth,
 		logger:       cfg.Logger,
 		now:          cfg.Now,
 		pingInterval: cfg.PingInterval,
@@ -239,7 +261,15 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.SetReadLimit(clientReadLimit)
-	c := &client{conn: conn}
+	ca := ClientAuth{
+		Source:      src,
+		Actor:       id.Actor,
+		SessionHash: auth.SessionHashFrom(ctx),
+	}
+	if id.TokenID != nil {
+		ca.TokenID = *id.TokenID
+	}
+	c := &client{conn: conn, auth: ca}
 	if !h.addClient(c) {
 		_ = conn.Close(websocket.StatusGoingAway, "server shutting down")
 		return
@@ -360,19 +390,114 @@ func (h *Hub) buildFrame(ctx context.Context) ([]byte, error) {
 	})
 }
 
-func (h *Hub) broadcast(ctx context.Context) {
-	raw, err := h.buildFrame(ctx)
-	if err != nil {
-		h.logger.Warn("构建仪表盘实时推送帧失败", "err", err)
+// KickSession 立即断开使用指定会话哈希的仪表盘连接（登出时调用）。
+func (h *Hub) KickSession(sessionHash string) {
+	if sessionHash == "" {
 		return
 	}
+	h.kickMatching("session revoked", func(a ClientAuth) bool {
+		return a.Source == v1.SourceSession && a.SessionHash == sessionHash
+	})
+}
+
+// KickUserSessions 立即断开指定账号的所有会话连接（keepHash 非空时保留该当前会话，改密或重置密码时调用）。
+func (h *Hub) KickUserSessions(username, keepHash string) {
+	if username == "" {
+		return
+	}
+	h.kickMatching("session revoked", func(a ClientAuth) bool {
+		return a.Source == v1.SourceSession && a.Actor == username && (keepHash == "" || a.SessionHash != keepHash)
+	})
+}
+
+// KickToken 立即断开使用指定 API 令牌 ID 的仪表盘连接（吊销令牌时调用）。
+func (h *Hub) KickToken(tokenID int64) {
+	if tokenID <= 0 {
+		return
+	}
+	h.kickMatching("token revoked", func(a ClientAuth) bool {
+		return a.Source == v1.SourceToken && a.TokenID == tokenID
+	})
+}
+
+func (h *Hub) kickMatching(reason string, match func(ClientAuth) bool) {
+	h.mu.Lock()
+	var victims []*client
+	var cancel context.CancelFunc
+	for c := range h.clients {
+		if match(c.auth) {
+			delete(h.clients, c)
+			victims = append(victims, c)
+		}
+	}
+	if len(h.clients) == 0 && h.tickerCancel != nil {
+		cancel = h.tickerCancel
+		h.tickerCancel = nil
+		h.tickerWake = nil
+	}
+	h.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	for _, c := range victims {
+		go c.closeRevoked(reason)
+	}
+}
+
+func (h *Hub) isClientValid(ctx context.Context, a ClientAuth) bool {
+	if h.checkAuth == nil {
+		return true
+	}
+	cctx, cancel := context.WithTimeout(ctx, h.writeTimeout)
+	defer cancel()
+	return h.checkAuth(cctx, a)
+}
+
+func (h *Hub) broadcast(ctx context.Context) {
 	h.mu.Lock()
 	targets := make([]*client, 0, len(h.clients))
 	for c := range h.clients {
 		targets = append(targets, c)
 	}
 	h.mu.Unlock()
-	for _, c := range targets {
+	if len(targets) == 0 {
+		return
+	}
+	// 先按凭据复核在线客户端身份（同一轮广播内按 ClientAuth 去重查询），失效者立刻移出并断开且绝不推送本帧。
+	validTargets := make([]*client, 0, len(targets))
+	if h.checkAuth != nil {
+		checked := make(map[ClientAuth]bool, len(targets))
+		var revoked []*client
+		for _, c := range targets {
+			ok, seen := checked[c.auth]
+			if !seen {
+				ok = h.isClientValid(ctx, c.auth)
+				checked[c.auth] = ok
+			}
+			if !ok {
+				revoked = append(revoked, c)
+				continue
+			}
+			validTargets = append(validTargets, c)
+		}
+		if len(revoked) > 0 {
+			for _, c := range revoked {
+				h.removeClient(c)
+				go c.closeRevoked("credential revoked or inactive")
+			}
+		}
+	} else {
+		validTargets = targets
+	}
+	if len(validTargets) == 0 {
+		return
+	}
+	raw, err := h.buildFrame(ctx)
+	if err != nil {
+		h.logger.Warn("构建仪表盘实时推送帧失败", "err", err)
+		return
+	}
+	for _, c := range validTargets {
 		if err := c.writeText(ctx, h.writeTimeout, raw); err != nil {
 			c.conn.CloseNow()
 		}
@@ -387,6 +512,11 @@ func (h *Hub) pingLoop(ctx context.Context, c *client) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if !h.isClientValid(ctx, c.auth) {
+				h.removeClient(c)
+				c.closeRevoked("credential revoked or inactive")
+				return
+			}
 			pctx, cancel := context.WithTimeout(ctx, h.pingTimeout)
 			err := c.conn.Ping(pctx)
 			cancel()

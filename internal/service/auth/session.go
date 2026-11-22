@@ -148,12 +148,33 @@ func (s *Service) PruneSessions(ctx context.Context) (int, error) {
 	return s.sessions.DeleteExpired(ctx, s.now())
 }
 
+// SetSessionRevokedHook 装上会话作废回调：登出、改密或重置管理员密码时通知实时推送立即断开失效会话。
+func (s *Service) SetSessionRevokedHook(fn func(sessionHash, username, keepHash string)) {
+	s.mu.Lock()
+	s.onSessionRevoked = fn
+	s.mu.Unlock()
+}
+
+func (s *Service) notifySessionRevoked(sessionHash, username, keepHash string) {
+	s.mu.Lock()
+	fn := s.onSessionRevoked
+	s.mu.Unlock()
+	if fn != nil {
+		fn(sessionHash, username, keepHash)
+	}
+}
+
 // Logout 删掉一条会话（按明文令牌）；没有也算成功。
 func (s *Service) Logout(ctx context.Context, token string) error {
 	if token == "" {
 		return nil
 	}
-	return s.sessions.Delete(ctx, HashToken(token))
+	hash := HashToken(token)
+	if err := s.sessions.Delete(ctx, hash); err != nil {
+		return err
+	}
+	s.notifySessionRevoked(hash, "", "")
+	return nil
 }
 
 // Resolve 把会话令牌解析成身份对象（authn 用）：查不到、过期、账号停用或已删除都返回 ok=false。
@@ -163,27 +184,39 @@ func (s *Service) Resolve(ctx context.Context, token string) (v1.Identity, strin
 		return v1.Identity{}, "", false, nil
 	}
 	hash := HashToken(token)
-	sess, err := s.sessions.GetByHash(ctx, hash)
-	if errors.Is(err, sessions.ErrNotFound) {
-		return v1.Identity{}, "", false, nil
-	}
-	if err != nil {
+	id, ok, err := s.ResolveSessionHash(ctx, hash)
+	if err != nil || !ok {
 		return v1.Identity{}, "", false, err
 	}
+	return id, hash, true, nil
+}
+
+// ResolveSessionHash 按已计算的会话哈希复核会话与账号当前是否仍然有效（仪表盘 WebSocket 长连接定期复核用）。
+func (s *Service) ResolveSessionHash(ctx context.Context, hash string) (v1.Identity, bool, error) {
+	if hash == "" {
+		return v1.Identity{}, false, nil
+	}
+	sess, err := s.sessions.GetByHash(ctx, hash)
+	if errors.Is(err, sessions.ErrNotFound) {
+		return v1.Identity{}, false, nil
+	}
+	if err != nil {
+		return v1.Identity{}, false, err
+	}
 	if !sess.ExpiresAt.After(s.now()) {
-		return v1.Identity{}, "", false, nil
+		return v1.Identity{}, false, nil
 	}
 	a, err := s.users.GetByUsername(ctx, sess.Username)
 	if errors.Is(err, users.ErrNotFound) {
-		return v1.Identity{}, "", false, nil
+		return v1.Identity{}, false, nil
 	}
 	if err != nil {
-		return v1.Identity{}, "", false, err
+		return v1.Identity{}, false, err
 	}
 	if a.Deleted || !a.IsActive {
-		return v1.Identity{}, "", false, nil
+		return v1.Identity{}, false, nil
 	}
-	return identityFor(a), hash, true, nil
+	return identityFor(a), true, nil
 }
 
 // HashToken 是会话令牌在库里的样子：SHA-256 十六进制。

@@ -155,10 +155,12 @@ func (s *Service) accountSetPassword(ctx context.Context, inv *command.Invocatio
 		return nil, err
 	}
 	// 其它会话作废、当前会话保留。
-	revoked, err := s.sessions.DeleteByUser(ctx, a.Username, SessionHashFrom(ctx))
+	keepHash := SessionHashFrom(ctx)
+	revoked, err := s.sessions.DeleteByUser(ctx, a.Username, keepHash)
 	if err != nil {
 		return nil, err
 	}
+	s.notifySessionRevoked("", a.Username, keepHash)
 	return PasswordChanged{Username: a.Username, SessionsRevoked: revoked}, nil
 }
 
