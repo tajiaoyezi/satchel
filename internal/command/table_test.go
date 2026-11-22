@@ -46,6 +46,10 @@ func TestCatalog(t *testing.T) {
 		"server system-info": ClassRead, "server nics": ClassRead, "server speed": ClassRead,
 		"server traffic-stats set": ClassConfig, "server logs list": ClassRead, "server logs files": ClassRead,
 		"server config status": ClassRead, "server config files": ClassRead, "server config read": ClassRead, "server config test": ClassRead,
+		"server service status": ClassRead, "server service control": ClassAction,
+		"server nginx install": ClassAction, "server nginx uninstall": ClassAction,
+		"server nginx servers": ClassRead, "server nginx clear-stream": ClassAction,
+		"website list": ClassRead, "website get": ClassRead, "website scan": ClassAction, "website build": ClassRead, "website templates": ClassRead,
 		"inbound list": ClassRead, "inbound get": ClassRead, "inbound protocols": ClassRead, "inbound examples": ClassRead,
 		"inbound keygen": ClassRead, "inbound build": ClassRead, "inbound batch list": ClassRead, "inbound batch plan": ClassConfig,
 		"outbound list": ClassRead, "outbound get": ClassRead, "outbound probe": ClassAction, "outbound landing plan": ClassConfig,
@@ -65,13 +69,13 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 的类别应当是 %s，得到 %s", name, class, c.Class)
 		}
 	}
-	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "plans list", "snapshot list", "server logs list", "server logs files", "server config files", "inbound list", "inbound batch list", "outbound list", "outbound batch list", "routing list", "routing preset list"} {
+	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "plans list", "snapshot list", "server logs list", "server logs files", "server config files", "server nginx servers", "website list", "inbound list", "inbound batch list", "outbound list", "outbound batch list", "routing list", "routing preset list"} {
 		if c, _ := table.Lookup(name); !c.List {
 			t.Errorf("%s 应当是列表命令", name)
 		}
 	}
 	// m1-07 的执行形状、人类专属与不要身份。
-	for name, shape := range map[string]Shape{"backup create": ShapeJob, "update apply": ShapeJob, "backup upload": ShapeUpload, "setup restore": ShapeUpload, "settings image upload": ShapeUpload, "backup download": ShapeDownload} {
+	for name, shape := range map[string]Shape{"backup create": ShapeJob, "update apply": ShapeJob, "server nginx install": ShapeJob, "server nginx uninstall": ShapeJob, "backup upload": ShapeUpload, "setup restore": ShapeUpload, "settings image upload": ShapeUpload, "backup download": ShapeDownload} {
 		if c, _ := table.Lookup(name); c.Shape != shape {
 			t.Errorf("%s 的执行形状应当是 %s，得到 %q", name, shape, c.Shape)
 		}
@@ -114,8 +118,13 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 不该登记 --force（仅 apply 允许）", c.Name())
 		}
 	}
-	if c, _ := table.Lookup("apply"); !c.DynamicDanger || !c.HasConfirm() {
-		t.Errorf("apply 应当标 DynamicDanger 并支持 --confirm：%+v", c)
+	if c, _ := table.Lookup("apply"); !c.DynamicDanger || !c.HasConfirm() || !c.DynamicHuman || !c.HasVerify() {
+		t.Errorf("apply 应当同时标 DynamicDanger 与 DynamicHuman 并支持 --confirm 与 verify-*：%+v", c)
+	}
+	for _, name := range []string{"server service control", "server nginx install", "server nginx uninstall", "server nginx clear-stream"} {
+		if c, _ := table.Lookup(name); !c.DynamicHuman || !c.HasVerify() || c.HumanOnly {
+			t.Errorf("%s 应当标 DynamicHuman 且不标 HumanOnly：%+v", name, c)
+		}
 	}
 	if c, _ := table.Lookup("settings batch-threshold set"); c.Danger != v1.DangerPermission || c.Confirm == nil || c.Confirm.Kind != ConfirmObject || c.Confirm.Arg != "key" {
 		t.Errorf("settings batch-threshold set 应当是权限类、confirm 取 key：%+v", c)
@@ -217,6 +226,11 @@ func TestTableRules(t *testing.T) {
 		{"静态与动态危险类同时登记", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassConfig, Danger: v1.DangerDelete, Confirm: &Confirm{Kind: ConfirmCount}, DynamicDanger: true}}, "动态危险类"},
 		{"不要身份 + 动态危险类", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Anonymous: true, DynamicDanger: true}}, "动态危险类"},
 		{"非 apply 不许登记 force", []*Command{{Path: []string{"plan"}, Summary: "s", Class: ClassConfig, DynamicDanger: true, Flags: []Flag{{Name: "force", Type: TypeBool}}}}, "force"},
+		{"条件人类专属标在 read 上", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassRead, DynamicHuman: true}}, "条件人类专属"},
+		{"条件人类专属标在 local 上", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassLocal, DynamicHuman: true}}, "条件人类专属"},
+		{"同时标人类专属与条件人类专属", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, HumanOnly: true, DynamicHuman: true}}, "条件人类专属"},
+		{"不要身份 + 条件人类专属", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Anonymous: true, DynamicHuman: true}}, "条件人类专属"},
+		{"上传类 + 条件人类专属", []*Command{{Path: []string{"x"}, Summary: "s", Class: ClassAction, Shape: ShapeUpload, DynamicHuman: true, Flags: []Flag{{Name: UploadFlag, Type: TypeFile}}}}, "条件人类专属"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -232,13 +246,13 @@ func TestTableRules(t *testing.T) {
 	if _, err := New(read("audit", "list"), read("audit", "show"), action("demo", "remove")); err != nil {
 		t.Fatalf("合法的表不该报错：%v", err)
 	}
-	// apply（config + DynamicDanger）允许登记 bool 型 --force，且 HasConfirm 为真。
-	applyCmd := &Command{Path: []string{"apply"}, Summary: "s", Class: ClassConfig, DynamicDanger: true, Flags: []Flag{{Name: "force", Type: TypeBool}}}
+	// apply（config + DynamicDanger + DynamicHuman）允许登记 bool 型 --force，HasConfirm 与 HasVerify 均为真。
+	applyCmd := &Command{Path: []string{"apply"}, Summary: "s", Class: ClassConfig, DynamicDanger: true, DynamicHuman: true, Flags: []Flag{{Name: "force", Type: TypeBool}}}
 	if _, err := New(applyCmd); err != nil {
 		t.Fatalf("合法 apply 应当通过：%v", err)
 	}
-	if !applyCmd.HasConfirm() {
-		t.Fatal("DynamicDanger 命令 HasConfirm 应当为真")
+	if !applyCmd.HasConfirm() || !applyCmd.HasVerify() {
+		t.Fatal("DynamicDanger + DynamicHuman 命令 HasConfirm 与 HasVerify 应当均为真")
 	}
 	// 本地命令可以自己登记 --confirm、--verify-user、--verify-code（admin reset-password、mcp init）。
 	if _, err := New(&Command{Path: []string{"x"}, Summary: "s", Class: ClassLocal, Flags: []Flag{

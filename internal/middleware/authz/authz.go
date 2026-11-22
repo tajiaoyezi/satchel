@@ -10,11 +10,8 @@ import (
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
 
-// HumanVerifier 是第 05 章七组的当场验证：人类专属命令对本机管理员与用户身份要在同一请求里验密码与第二因素。
-// 生产装配传 service/auth 的 Verifier；传 nil 时人类专属命令一律 human_required（没有验证入口）。
-type HumanVerifier interface {
-	Verify(ctx context.Context, inv *command.Invocation) error
-}
+// HumanVerifier 是第 05 章七组的当场验证：与 command.HumanVerifier 同义，由 service/auth 的 Verifier 实现。
+type HumanVerifier = command.HumanVerifier
 
 var dangerLabels = map[v1.Danger]string{
 	v1.DangerDelete: "删除类", v1.DangerRestart: "重启类", v1.DangerPermission: "权限类",

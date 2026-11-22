@@ -29,6 +29,7 @@ import (
 	coreservers "github.com/satchel/satchel/internal/core/servers"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
 	coresnapshots "github.com/satchel/satchel/internal/core/snapshots"
+	corewebsites "github.com/satchel/satchel/internal/core/websites"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 	"github.com/satchel/satchel/pkg/xrpc"
 )
@@ -39,6 +40,11 @@ type NodeClient interface {
 	CallConfigApply(ctx context.Context, serverID int64, params xrpc.ConfigApplyParams) (*xrpc.ConfigApplyResult, error)
 }
 
+// WebsiteNodeClient 是向节点下发 nginx.websites.apply 原子站点同步的最小接口（由 service/servers 实现）。
+type WebsiteNodeClient interface {
+	CallNginxWebsitesApply(ctx context.Context, serverID int64, params xrpc.NginxWebsitesApplyParams) (*xrpc.NginxWebsitesApplyResult, error)
+}
+
 // Deps 聚合 apply 编排服务所需的仓储与回调。
 type Deps struct {
 	DB             *bun.DB
@@ -46,6 +52,7 @@ type Deps struct {
 	Inbounds       *coreinbounds.Repo
 	Outbounds      *coreoutbounds.Repo
 	RoutingRules   *corerouting.Repo
+	Websites       *corewebsites.Repo
 	Plans          *coreplans.Repo
 	Snapshots      *coresnapshots.Repo
 	Batch          *corebatch.Repo
@@ -53,6 +60,8 @@ type Deps struct {
 	BatchOutbounds *corebatchout.Repo
 	Settings       *coresettings.Repo
 	Nodes          NodeClient
+	WebsiteNodes   WebsiteNodeClient
+	Verifier       command.HumanVerifier
 	Now            func() time.Time
 	PlanTTL        time.Duration
 }
@@ -69,6 +78,11 @@ func New(deps Deps) *Service {
 	}
 	if deps.PlanTTL <= 0 {
 		deps.PlanTTL = coreplans.DefaultTTL
+	}
+	if deps.WebsiteNodes == nil {
+		if w, ok := deps.Nodes.(WebsiteNodeClient); ok {
+			deps.WebsiteNodes = w
+		}
 	}
 	return &Service{deps: deps}
 }
@@ -169,18 +183,28 @@ type PlannedObject struct {
 	Dangers         []v1.Danger            `json:"dangers,omitempty"`
 }
 
-// ServerConfigDiff 是单台受影响服务器在预演前后的 sing-box 配置摘要。
+// WebsiteConfigDiff 描述单台受影响服务器在预演中待同步或移除的受管站点配置预览。
+type WebsiteConfigDiff struct {
+	Domain   string `json:"domain"`
+	Action   string `json:"action"` // "apply" | "remove"
+	ConfPath string `json:"conf_path"`
+	Conf     string `json:"conf,omitempty"`
+}
+
+// ServerConfigDiff 是单台受影响服务器在预演前后的 sing-box 配置摘要与站点配置预览。
 type ServerConfigDiff struct {
-	ServerID            int64    `json:"server_id"`
-	ServerName          string   `json:"server_name"`
-	ExpectedCurrentHash string   `json:"expected_current_hash"`
-	CurrentRenderedHash string   `json:"current_rendered_hash"`
-	NextHash            string   `json:"next_hash"`
-	ConfigChanged       bool     `json:"config_changed"`
-	FirstApplyEligible  bool     `json:"first_apply_eligible"`
-	Inbounds            []string `json:"inbounds"`
-	BeforeConfig        string   `json:"before_config,omitempty"`
-	AfterConfig         string   `json:"after_config,omitempty"`
+	ServerID            int64               `json:"server_id"`
+	ServerName          string              `json:"server_name"`
+	ExpectedCurrentHash string              `json:"expected_current_hash"`
+	CurrentRenderedHash string              `json:"current_rendered_hash"`
+	NextHash            string              `json:"next_hash"`
+	ConfigChanged       bool                `json:"config_changed"`
+	FirstApplyEligible  bool                `json:"first_apply_eligible"`
+	Inbounds            []string            `json:"inbounds"`
+	BeforeConfig        string              `json:"before_config,omitempty"`
+	AfterConfig         string              `json:"after_config,omitempty"`
+	WebsiteChanged      bool                `json:"website_changed,omitempty"`
+	Websites            []WebsiteConfigDiff `json:"websites,omitempty"`
 }
 
 // BatchMeta 记录多机批量入站/出站规划附带的批次追踪元数据（存于 Plan.diff 内，零迁移）。
@@ -195,6 +219,7 @@ type PlanDiffData struct {
 	Servers         []ServerConfigDiff `json:"servers"`
 	RequiredDangers []v1.Danger        `json:"required_dangers"`
 	ConfirmHint     string             `json:"confirm_hint,omitempty"`
+	RequiresHuman   bool               `json:"requires_human,omitempty"`
 	BatchMeta       *BatchMeta         `json:"batch_meta,omitempty"`
 }
 
@@ -226,6 +251,7 @@ type PlanView struct {
 	CreatedAt       time.Time          `json:"created_at"`
 	RequiredDangers []v1.Danger        `json:"required_dangers"`
 	ConfirmHint     string             `json:"confirm_hint,omitempty"`
+	RequiresHuman   bool               `json:"requires_human,omitempty"`
 	BatchWindow     *BatchWindowInfo   `json:"batch_window,omitempty"`
 	Objects         []PlannedObject    `json:"objects"`
 	Servers         []ServerConfigDiff `json:"servers"`
@@ -244,17 +270,20 @@ type PlanSummary struct {
 
 // ServerApplyResult 是单台节点在 apply 阶段的推送结果。
 type ServerApplyResult struct {
-	ServerID      int64    `json:"server_id"`
-	ServerName    string   `json:"server_name"`
-	Status        string   `json:"status"` // "applied" | "unchanged" | "failed"
-	AppliedHash   string   `json:"applied_hash,omitempty"`
-	Generation    uint64   `json:"generation,omitempty"`
-	Inbounds      []string `json:"inbounds,omitempty"`
-	Code          string   `json:"code,omitempty"`
-	Error         string   `json:"error,omitempty"`
-	RolledBack    bool     `json:"rolled_back,omitempty"`
-	RollbackError string   `json:"rollback_error,omitempty"`
-	CurrentHash   string   `json:"current_hash,omitempty"`
+	ServerID        int64    `json:"server_id"`
+	ServerName      string   `json:"server_name"`
+	Status          string   `json:"status"` // "applied" | "unchanged" | "failed"
+	AppliedHash     string   `json:"applied_hash,omitempty"`
+	Generation      uint64   `json:"generation,omitempty"`
+	Inbounds        []string `json:"inbounds,omitempty"`
+	WebsitesApplied []string `json:"websites_applied,omitempty"`
+	WebsitesRemoved []string `json:"websites_removed,omitempty"`
+	NginxReloaded   bool     `json:"nginx_reloaded,omitempty"`
+	Code            string   `json:"code,omitempty"`
+	Error           string   `json:"error,omitempty"`
+	RolledBack      bool     `json:"rolled_back,omitempty"`
+	RollbackError   string   `json:"rollback_error,omitempty"`
+	CurrentHash     string   `json:"current_hash,omitempty"`
 }
 
 // AppliedObjectSummary 记录单条对象写库后的最新主键与版本。
@@ -278,7 +307,7 @@ type ApplyResult struct {
 
 func supportedKind(kind string) bool {
 	switch kind {
-	case coreservers.KindName, coreinbounds.KindName, coreoutbounds.KindName, corerouting.KindName:
+	case coreservers.KindName, coreinbounds.KindName, coreoutbounds.KindName, corerouting.KindName, corewebsites.KindName:
 		return true
 	}
 	return false
@@ -335,7 +364,7 @@ func parseOperations(raw string) ([]Operation, error) {
 		op.Op = strings.TrimSpace(op.Op)
 		op.Kind = strings.TrimSpace(op.Kind)
 		if !supportedKind(op.Kind) {
-			return nil, v1.Newf(v1.CodeBadRequest, "第 %d 条变更的 kind %q 不支持（当前支持 Server、Inbound、Outbound、RoutingRule）", idx+1, op.Kind)
+			return nil, v1.Newf(v1.CodeBadRequest, "第 %d 条变更的 kind %q 不支持（当前支持 Server、Inbound、Outbound、RoutingRule、Website）", idx+1, op.Kind)
 		}
 		switch op.Op {
 		case "create":

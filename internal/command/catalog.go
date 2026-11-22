@@ -36,6 +36,9 @@ var GroupSummaries = map[string]string{
 	"server limit":             "主控临时限速：设与撤（只动「主控临时」那一份来源）",
 	"server update":            "节点 satchel-agent 版本检查、单台自更新与批量串行自更新",
 	"server config":            "节点只读配置检查与无侵入校验（配置文件只读，改动须经 plan / apply）",
+	"server service":           "节点运行服务（kernel / nginx / agent）状态查询与启停控制（同机 nginx 控制需当场人类验证）",
+	"server nginx":             "节点 nginx 远程安装/卸载、server 块巡检与受保护的 stream 清理（同机操作需当场人类验证并保护 443）",
+	"website":                  "网站（kind Website）：查询、扫盘（未纳管零覆盖）、无状态向导与模板目录（所有写操作一律经 plan / apply）",
 	"inbound":                  "代理入站：查询、协议矩阵、配置示例、密钥生成、无状态向导与多机批量规划（只对管理员开放）",
 	"inbound batch":            "多机批量入站规划与批次记录查询（所有写操作一律经 plan / apply）",
 	"outbound":                 "代理出站：查询、节点实时探活、中转/落地规划与多机批量规划（只对管理员开放）",
@@ -64,8 +67,37 @@ func catalogCommands() []*Command {
 	all = append(all, updateCommands()...)
 	all = append(all, configTxCommands()...)
 	all = append(all, proxyCommands()...)
+	all = append(all, websiteCommands()...)
 	all = append(all, serverCommands()...)
 	return all
+}
+
+// websiteCommands 是 m2-15 的网站（kind Website）查询、目录扫描、无状态向导与模板目录命令（node-nginx-websites）。
+func websiteCommands() []*Command {
+	return []*Command{
+		{Path: []string{"website", "list"}, Summary: "分页列出 Website 站点配置与扫盘纳管状态（按服务器与域名升序）", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "server-name", Type: TypeString, Description: "按服务器名或 ID 过滤"},
+				{Name: "type", Type: TypeString, Description: "按站点类型过滤：static、proxy 或 decoy"},
+				{Name: "include-deleted", Type: TypeBool, Description: "包含已软删除的站点"},
+			},
+			Columns: []string{"id", "server_id", "domain", "type", "use_443", "managed", "conf_path"}},
+		{Path: []string{"website", "get"}, Summary: "查看单条 Website 站点配置与运行态扫盘信息", Class: ClassRead,
+			Args: []Arg{{Name: "id", Description: "站点 ID（website list 里的 id）"}}},
+		{Path: []string{"website", "scan"}, Summary: "扫描节点 nginx HTTP 站点目录：已纳管站点只更新 status 不抬版本，未纳管手工文件原样列出绝不覆盖", Class: ClassAction,
+			Args: []Arg{{Name: "name", Description: "服务器名或 ID"}}},
+		{Path: []string{"website", "build"}, Summary: "无状态站点向导：校验域名与防注入规则、支持静态/普通反代/WSS反代/伪装站并输出预览配置与 plan_op", Class: ClassRead,
+			Flags: []Flag{
+				{Name: "server-name", Type: TypeString, Description: "目标服务器名或 ID（必填）"},
+				{Name: "domain", Type: TypeString, Description: "站点域名，如 app.example.com（必填）"},
+				{Name: "type", Type: TypeString, Description: "站点类型：static、proxy 或 decoy（必填）"},
+				{Name: "target", Type: TypeString, Description: "目标目录、反代上游 URL 或伪装模板名（landing/blog/docs/empty）"},
+				{Name: "wss-path", Type: TypeString, Description: "可选（仅 proxy）：WebSocket 路径（如 /ws），自动生成 WSS 反代目标与 Upgrade 配置"},
+				{Name: "certificate-id", Type: TypeInt, Description: "可选：关联证书 ID"},
+				{Name: "use-443", Type: TypeBool, Description: "是否直接监听 443 端口（主控同机节点禁止启用）"},
+			}},
+		{Path: []string{"website", "templates"}, Summary: "列出内置站点类型、WSS 反代与伪装站模板目录及安全保护规则", Class: ClassRead},
+	}
 }
 
 // proxyCommands 是 m2-13 的代理资源（Inbound / Outbound / RoutingRule）查询、向导、密钥生成、探测、预设与多机批量规划命令（node-proxy-resources）。
@@ -208,13 +240,13 @@ func proxyCommands() []*Command {
 // configTxCommands 是 m2-12 的配置类唯一写路径与快照回滚命令（node-config-tx）。
 func configTxCommands() []*Command {
 	return []*Command{
-		{Path: []string{"plan"}, Summary: "预演配置类资源变更（Server/Inbound/Outbound/RoutingRule），返回逐对象与节点配置 diff、所需危险类与确认提示", Class: ClassConfig,
+		{Path: []string{"plan"}, Summary: "预演配置类资源变更（Server/Inbound/Outbound/RoutingRule/Website），返回逐对象与节点配置 diff、所需危险类与确认提示", Class: ClassConfig,
 			Flags: []Flag{
 				{Name: "spec", Type: TypeString, Description: "内联 JSON 字符串（单条变更对象或变更对象数组；与 --file 二选一）"},
 				{Name: "file", Type: TypeFile, Description: "CLI 本地 JSON 文件路径或 -（读 stdin 并内联发给主控；REST/MCP 拒绝）"},
 			}},
-		{Path: []string{"apply"}, Summary: "确认并事务提交一份预演计划（写前快照、递增版本并串行推送节点原子生效；危险类与 --confirm 动态判定）",
-			Class: ClassConfig, DynamicDanger: true,
+		{Path: []string{"apply"}, Summary: "确认并事务提交一份预演计划（写前快照、递增版本并串行推送节点原子生效；危险类与同机 nginx 人类验证按实时状态动态判定）",
+			Class: ClassConfig, DynamicDanger: true, DynamicHuman: true,
 			Flags: []Flag{
 				{Name: "plan", Type: TypeInt, Description: "要提交的计划编号（plan 或 snapshot rollback 返回的 plan_id）"},
 				{Name: "force", Type: TypeBool, Description: "跳过乐观锁 resourceVersion 校验（仍拒绝 diff 漂移；触发 permission 危险类与 --confirm）"},
@@ -226,7 +258,7 @@ func configTxCommands() []*Command {
 			Args: []Arg{{Name: "id", Description: "计划编号（plans list 里的 id）"}}},
 		{Path: []string{"snapshot", "list"}, Summary: "按 id 倒序分页列出配置类对象写前快照元数据（不含正文，只对管理员开放）", Class: ClassRead, List: true,
 			Flags: []Flag{
-				{Name: "kind", Type: TypeString, Description: "按资源类型过滤，如 Server、Inbound、Outbound、RoutingRule"},
+				{Name: "kind", Type: TypeString, Description: "按资源类型过滤，如 Server、Inbound、Outbound、RoutingRule、Website"},
 				{Name: "object-id", Type: TypeInt, Description: "按对象 ID 过滤"},
 				{Name: "apply-id", Type: TypeString, Description: "按 apply 批次编号过滤"},
 			},
@@ -354,6 +386,29 @@ func serverCommands() []*Command {
 			Flags: []Flag{{Name: "path", Type: TypeString, Description: "要读取的白名单文件完整路径（见 server config files 输出）"}}},
 		{Path: []string{"server", "config", "test"}, Summary: "用主控当前渲染的规范 kernel.json 在节点上做无侵入 sing-box 校验（不中断运行中连接）", Class: ClassRead,
 			Args: []Arg{name}},
+		{Path: []string{"server", "service", "status"}, Summary: "远程查询节点 kernel、nginx 与 agent 三项服务运行状态与初始化方式", Class: ClassRead,
+			Args: []Arg{name}},
+		{Path: []string{"server", "service", "control"}, Summary: "远程启停或重载节点 kernel 或 nginx 服务（重启类危险操作；同机 nginx 操作触发七组当场人类验证）",
+			Class: ClassAction, DynamicHuman: true, Danger: v1.DangerRestart, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"},
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "service", Type: TypeString, Description: "目标服务：kernel 或 nginx（禁止控制 agent）"},
+				{Name: "action", Type: TypeString, Description: "执行动作：start、stop、restart（nginx 额外支持 reload）"},
+			}},
+		{Path: []string{"server", "nginx", "install"}, Summary: "远程在节点安装并初始化 nginx（长任务；Docker 节点直接回复已预装；同机节点触发七组当场人类验证）",
+			Class: ClassAction, Shape: ShapeJob, DynamicHuman: true,
+			Args: []Arg{name}},
+		{Path: []string{"server", "nginx", "uninstall"}, Summary: "远程卸载节点 nginx（长任务，删除类危险操作；Docker 节点拒绝卸载；同机节点触发七组当场人类验证）",
+			Class: ClassAction, Shape: ShapeJob, DynamicHuman: true, Danger: v1.DangerDelete, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"},
+			Args: []Arg{name}},
+		{Path: []string{"server", "nginx", "servers"}, Summary: "远程只读分页巡检节点白名单配置目录内的 nginx HTTP 与 stream server 块（标注是否 Satchel 纳管）",
+			Class: ClassRead, List: true,
+			Args:    []Arg{name},
+			Columns: []string{"kind", "conf_path", "managed", "server_names", "listen_ports", "has_ssl"}},
+		{Path: []string{"server", "nginx", "clear-stream"}, Summary: "清理节点 /etc/nginx/stream_servers/ 下指定端口的 Satchel 纳管配置并重载（删除类；保护主控同机 443 与未纳管文件，同机触发七组当场验证）",
+			Class: ClassAction, DynamicHuman: true, Danger: v1.DangerDelete, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"},
+			Args:  []Arg{name},
+			Flags: []Flag{{Name: "port", Type: TypeInt, Description: "要清理的目标 stream 监听端口（1..65535，同机 443 受保护）"}}},
 	}
 }
 

@@ -35,8 +35,12 @@ func GenerateDocs(t *Table) []byte {
 				confirm += " (" + c.Confirm.Arg + ")"
 			}
 		}
+		human := yesNo(c.HumanOnly)
+		if !c.HumanOnly && c.DynamicHuman {
+			human = "条件"
+		}
 		fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | `%s %s` |\n",
-			c.Name(), c.Class, info.Scope, dash(danger), dash(confirm), yesNo(c.HumanOnly), yesNo(c.Anonymous), yesNo(c.List), info.REST.Method, info.REST.Path)
+			c.Name(), c.Class, info.Scope, dash(danger), dash(confirm), human, yesNo(c.Anonymous), yesNo(c.List), info.REST.Method, info.REST.Path)
 	}
 	b.WriteString("\n## 执行形状\n\n")
 	b.WriteString("长任务受理后立刻返回 job（CLI 默认跟到结束，`--no-wait` 不等；MCP 最多等 60 秒），之后用 `job get` 查；")

@@ -86,7 +86,7 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 		leaf.Flags().StringVar(&confirm, "confirm", "", "危险操作的确认字符串："+confirmHint(c))
 	}
 	var verifyCode, verifyUser string
-	if c.HumanOnly {
+	if c.HasVerify() {
 		// 当场验证：密码只从终端读；验证码可以作参数也可以终端输入；verify-user 是本机管理员要指明的管理员账号。
 		leaf.Flags().StringVar(&verifyCode, command.VerifyCodeFlag, "", "当场验证的第二因素：验证器当前的码或一枚恢复码（不给会在终端里问）")
 		leaf.Flags().StringVar(&verifyUser, command.VerifyUserFlag, "", "当场验证要验的管理员账号（本机管理员必填；登录的用户只能验自己）")
@@ -131,8 +131,9 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 		if !opts.ServerSide && c.Class != command.ClassLocal {
 			// 读终端之前：人类专属命令只有经本机 socket、不带令牌才验得过，别的连法直接拒绝，不把密码发出去；
 			// 终端里读的密码要经明文 HTTP 发往别的机器时先提示（带令牌时 Connect 已经提示过；输出是 JSON 时不提示）。
+			wantVerify := c.HumanOnly || (c.DynamicHuman && (verifyUser != "" || verifyCode != ""))
 			if conn != nil {
-				if c.HumanOnly {
+				if wantVerify {
 					if err := humanReachable(c.Name(), *conn); err != nil {
 						return err
 					}
@@ -141,11 +142,11 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 					plaintextWarning(cmd.Context(), conn.Server, "终端里读的密码会")
 				}
 			}
-			// 密码类 flag 从终端读两遍（新密钥），人类专属命令再读当场验证的密码与可选的验证码。
+			// 密码类 flag 从终端读两遍（新密钥），人类专属或显式传入 verify-* 的条件人类专属命令再读当场验证的密码与可选的验证码。
 			if err := readPasswords(c, inv, opts); err != nil {
 				return err
 			}
-			if c.HumanOnly {
+			if wantVerify {
 				if err := readVerification(c, inv, verifyCode, verifyUser, opts); err != nil {
 					return err
 				}
@@ -297,7 +298,7 @@ func noTerminal(c *command.Command, err error) error {
 	if !errors.Is(err, ErrNoTerminal) {
 		return v1.Wrap(v1.CodeInternal, "从终端读取失败", err)
 	}
-	if c.HumanOnly {
+	if c.HasVerify() {
 		return v1.Wrap(v1.CodeHumanRequired, c.Name()+" 是只有人能做的操作，要在终端里当场验证身份；当前没有终端", err).
 			WithNext("在有终端的会话里执行" + orWeb(c.Name()))
 	}

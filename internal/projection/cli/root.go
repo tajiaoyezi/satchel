@@ -271,7 +271,7 @@ func TakesValueFlag(cmd *command.Command, name string) bool {
 	case "confirm":
 		return cmd == nil || cmd.HasConfirm()
 	case command.VerifyCodeFlag, command.VerifyUserFlag:
-		return cmd == nil || cmd.HumanOnly
+		return cmd == nil || cmd.HasVerify()
 	case "limit", "cursor":
 		return cmd == nil || cmd.List
 	}

@@ -11,7 +11,7 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 
 - 加一台：`satchel server add <名字>`（可选参数 `--mode <模式>`、`--domain`、`--domain-v6`、`--listen-port`、`--pull-address`、`--pull-address-v6`、`--pull-port`）。它属于配置类，令牌要有日常运维权限（`operate`）；名字不能和已有的重复（重复时是 `name_taken`）。
 - `--mode` 支持 `auto`、`websocket`、`http`、`pull`（省略时默认是 `auto`：WebSocket 优先 → 加密 HTTP 上报 → 轮询兜底）；建机时一次生成 `token`（节点上行认证）、`agent_token`（主控管理节点口，默认 `23889`）与 `pull_token`（主控只读轮询口，默认 `23890`）三把互不相同的 43 字符凭据。`pull` 模式必须至少提供一个可达地址。
-- 服务器建好后的完整规格编辑（含连接模式、地址端口、内核全局配置 `core_log_level`/`core_dns`/`core_stats_enabled`、排序等）、软删除与恢复，以及管理 `Inbound`/`Outbound`/`RoutingRule`，统一经 `satchel plan` 与 `satchel apply` 两阶段配置事务执行（见 `satchel-basics`）；代理入站向导、密钥生成、出站探活、中转落地、路由预设与多机批量规划见 `satchel-proxy`；修改连接模式或地址端口会触发 `permission` 危险类，若需在线无中断热切管理/轮询端口请优先使用 `satchel server switch-listen-port`。
+- 服务器建好后的完整规格编辑（含连接模式、地址端口、内核全局配置 `core_log_level`/`core_dns`/`core_stats_enabled`、排序等）、软删除与恢复，以及管理 `Inbound`/`Outbound`/`RoutingRule`/`Website`，统一经 `satchel plan` 与 `satchel apply` 两阶段配置事务执行（见 `satchel-basics`）；代理入站向导、密钥生成、出站探活、中转落地、路由预设与多机批量规划见 `satchel-proxy`；nginx 站点查询、扫盘与向导见 `satchel-websites`；修改连接模式或地址端口会触发 `permission` 危险类，若需在线无中断热切管理/轮询端口请优先使用 `satchel server switch-listen-port`。
 - 结果是这台服务器的完整对象，`status.status` 是 `pending`；里面的三把凭据一律是打码的，原文只经安装命令或 `server token show` 取。
 
 ## 取安装命令
@@ -81,6 +81,15 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 - 列出白名单配置文件：`satchel server config files <名字>`（读类列表；可选 `--scope all` / `kernel` / `nginx`，仅列 `kernel.json` 与 nginx 白名单配置目录下的 `.conf`/`nginx.conf`，自动排除 `config.yaml`、`limiter-state.json` 与证书私钥）。
 - 只读查看文件内容：`satchel server config read <名字> --path <路径>`（读类，单次上限 512 KiB；无 `secrets` 权限自动将私钥、密码、UUID、PSK、short_id 等敏感值打码为 `***`；读取非白名单或敏感路径返回 `not_found`）。
 - 远程无侵入校验配置：`satchel server config test <名字>`（读类；用主控当前渲染的规范 `kernel.json` 在节点执行不绑定端口、不断开运行中连接的完整 `sing-box` 校验，返回 `ok`、`error`、`inbounds` 与 `hash`）。
+
+## 节点服务状态、启停控制与 nginx 运维
+
+- 查看三项服务状态：`satchel server service status <名字>`（读类；经管理通道返回节点 `kernel`、`nginx`、`agent` 运行状态、版本、是否 `in_docker` 与 init 方式）。
+- 启停或重载服务：`satchel server service control <名字> --service nginx --action reload --confirm <名字>`（动作类，需 `restart` 危险类；`--service` 支持 `kernel` 或 `nginx`，禁止控制 `agent`；`kernel` 支持 `start`/`stop`/`restart`，`nginx` 支持 `start`/`stop`/`restart`/`reload`）。当目标节点 `same_host_as_master=true` 且控制 `nginx` 时，动态触发七组人类当场验证（API 令牌返 `human_required`，需管理员在主控本机带 `--verify-user` 或在网页验密）。
+- 远程安装 nginx：`satchel server nginx install <名字>`（长任务；Docker 容器节点检测到镜像内置 nginx 时直接成功并标 `already_installed: true` 与 `in_docker: true`；物理机/虚拟机探测 `apt-get`/`dnf`/`yum`/`apk` 安装并初始化 `/etc/nginx/{servers,stream_servers,html,cert}`；同机节点在建长任务前触发七组当场验证）。
+- 远程卸载 nginx：`satchel server nginx uninstall <名字> --confirm <名字>`（长任务，需 `delete` 危险类；Docker 容器节点直接拒绝卸载并提示更换或移除容器；同机节点在建长任务前触发七组当场验证）。
+- 巡检 nginx server 与 stream 块：`satchel server nginx servers <名字>`（读类列表；扫描白名单配置目录并返回每个块的 `kind`、`conf_path`、`managed`、`server_names`、`listen_ports` 与 `has_ssl`，清晰区分是否带 `# satchel-managed:` 标记）。
+- 清理 Satchel 管理的 stream 端口：`satchel server nginx clear-stream <名字> --port 8443 --confirm <名字>`（动作类，需 `delete` 危险类；只清理 `/etc/nginx/stream_servers/` 下监听指定端口且带 `# satchel-managed:` 的文件，绝不删未纳管文件，失败自动回滚；同机节点触发七组当场验证且严禁清理主控 443 端口配置，遇主控 443 报 `conflict`）。站点管理见 `satchel-websites`。
 
 ## 注意
 

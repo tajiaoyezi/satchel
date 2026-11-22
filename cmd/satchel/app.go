@@ -46,6 +46,7 @@ import (
 	"github.com/satchel/satchel/internal/core/taskruns"
 	coretokens "github.com/satchel/satchel/internal/core/tokens"
 	"github.com/satchel/satchel/internal/core/users"
+	corewebsites "github.com/satchel/satchel/internal/core/websites"
 	mwaudit "github.com/satchel/satchel/internal/middleware/audit"
 	"github.com/satchel/satchel/internal/middleware/authn"
 	"github.com/satchel/satchel/internal/middleware/authz"
@@ -73,6 +74,7 @@ import (
 	svcsettings "github.com/satchel/satchel/internal/service/settings"
 	svctokens "github.com/satchel/satchel/internal/service/tokens"
 	svcupdate "github.com/satchel/satchel/internal/service/update"
+	svcwebsites "github.com/satchel/satchel/internal/service/websites"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 	"github.com/satchel/satchel/pkg/release"
 	"github.com/satchel/satchel/pkg/xrpc"
@@ -201,18 +203,21 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	inboundsRepo := coreinbounds.New(bdb, st)
 	outboundsRepo := coreoutbounds.New(bdb, st)
 	routingRepo := corerouting.New(bdb, st)
+	websitesRepo := corewebsites.New(bdb, st)
 	batchRepo := corebatch.New(bdb, st)
 	batchInRepo := corebatchin.New(bdb, st)
 	batchOutRepo := corebatchout.New(bdb, st)
 	presetRepo := corepresets.New(bdb, st)
 	serversSvc := svcservers.New(serversRepo, settingsRepo, masterPub, logger)
 	serversSvc.SetMasterVersion(buildinfo.Version)
+	serversSvc.SetVerifier(identity.Verifier())
 	applySvc := svcapply.New(svcapply.Deps{
 		DB:             bdb,
 		Servers:        serversRepo,
 		Inbounds:       inboundsRepo,
 		Outbounds:      outboundsRepo,
 		RoutingRules:   routingRepo,
+		Websites:       websitesRepo,
 		Plans:          coreplans.New(bdb, st),
 		Snapshots:      coresnapshots.New(bdb, st),
 		Batch:          batchRepo,
@@ -220,6 +225,13 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		BatchOutbounds: batchOutRepo,
 		Settings:       settingsRepo,
 		Nodes:          serversSvc,
+		WebsiteNodes:   serversSvc,
+		Verifier:       identity.Verifier(),
+	})
+	websitesSvc := svcwebsites.New(svcwebsites.Deps{
+		Servers:  serversRepo,
+		Websites: websitesRepo,
+		Scanner:  serversSvc,
 	})
 	proxySvc := svcproxy.New(svcproxy.Deps{
 		Servers:        serversRepo,
@@ -406,6 +418,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		bindings[name] = h
 	}
 	for name, h := range proxySvc.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range websitesSvc.Bindings() {
 		bindings[name] = h
 	}
 	if err := table.CheckBindings(bindings); err != nil {

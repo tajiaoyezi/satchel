@@ -221,7 +221,7 @@ func decodeBody(c *command.Command, r *http.Request, inv *command.Invocation) er
 		if isFileFlag(c, name) {
 			return fileFlagError(name)
 		}
-		if c.HumanOnly && isVerifyFlag(name) {
+		if c.HasVerify() && isVerifyFlag(name) {
 			// 当场验证的值进 inv.Verify，不进 Flags，永不进审计摘要；不是字符串就当没给。
 			s, _ := raw.(string)
 			if inv.Verify == nil {

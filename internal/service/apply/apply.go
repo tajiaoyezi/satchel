@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
 
+	"github.com/satchel/satchel/internal/base/nginx"
 	"github.com/satchel/satchel/internal/base/singbox"
 	"github.com/satchel/satchel/internal/command"
 	corebatchin "github.com/satchel/satchel/internal/core/batchinbounds"
@@ -22,6 +24,7 @@ import (
 	coreservers "github.com/satchel/satchel/internal/core/servers"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
 	coresnapshots "github.com/satchel/satchel/internal/core/snapshots"
+	corewebsites "github.com/satchel/satchel/internal/core/websites"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 	"github.com/satchel/satchel/pkg/xrpc"
 )
@@ -79,6 +82,19 @@ func (s *Service) applyCmd(ctx context.Context, inv *command.Invocation) (any, e
 		}
 	}
 
+	// 0. 动态人类专属门控：按提交瞬间实时 same_host_as_master 检查是否触及同机节点 nginx/Website，先验人再查危险类与动库。
+	liveNeedsHuman, err := s.checkLiveSameHostNginx(ctx, plannedObjs)
+	if err != nil {
+		return nil, err
+	}
+	humanVerified := false
+	if liveNeedsHuman {
+		if err := command.VerifyDynamicHuman(ctx, s.deps.Verifier, "apply", "修改主控同机节点的 nginx/Website 配置", inv); err != nil {
+			return nil, err
+		}
+		humanVerified = true
+	}
+
 	// 先按计划对象与 --force 及实时滚动窗口检查动态危险类与 --confirm（先验权再动库，拒绝越权探测）。
 	prelimDangers := map[v1.Danger]bool{}
 	for _, po := range plannedObjs {
@@ -103,6 +119,12 @@ func (s *Service) applyCmd(ctx context.Context, inv *command.Invocation) (any, e
 				WithNext("请重新运行 satchel plan")
 		}
 		return nil, err
+	}
+	if !humanVerified && ev.RequiresHuman {
+		if err := command.VerifyDynamicHuman(ctx, s.deps.Verifier, "apply", "修改主控同机节点的 nginx/Website 配置", inv); err != nil {
+			return nil, err
+		}
+		humanVerified = true
 	}
 
 	// 核对逐对象 diff 是否漂移（无论是否带 --force，diff 漂移一律拒收并要求重跑 plan）。
@@ -231,7 +253,7 @@ func (s *Service) applyCmd(ctx context.Context, inv *command.Invocation) (any, e
 		return nil, err
 	}
 
-	// 4. 数据库已提交：逐台串行推送规范 kernel.json 至受影响节点；任一节点失败不回滚已成功节点，汇总返回 partial_failure（退出码 8）。
+	// 4. 数据库已提交：逐台串行推送规范 kernel.json 与受管 Website 至受影响节点；任一节点失败不回滚已成功节点，汇总返回 partial_failure（退出码 8）。
 	serverResults := make([]ServerApplyResult, 0, len(ev.AffectedServers))
 	failedCount := 0
 	sdiffByID := make(map[int64]ServerConfigDiff, len(ev.Servers))
@@ -247,87 +269,83 @@ func (s *Service) applyCmd(ctx context.Context, inv *command.Invocation) (any, e
 			})
 			continue
 		}
-		rendered, err := s.RenderServerConfig(ctx, srvID)
-		if err != nil {
+		srvRes := ServerApplyResult{
+			ServerID:   srvID,
+			ServerName: srv.Spec.Name,
+			Status:     "unchanged",
+		}
+		srvFailed := false
+
+		if ev.KernelAffectedServers[srvID] {
+			rendered, err := s.RenderServerConfig(ctx, srvID)
+			if err != nil {
+				srvFailed = true
+				srvRes.Status = "failed"
+				srvRes.Code = string(v1.AsError(err).Code)
+				srvRes.Error = v1.AsError(err).Reason
+			} else {
+				sd := sdiffByID[srvID]
+				if !sd.ConfigChanged && srv.Status.AppliedHash != "" && srv.Status.AppliedHash == rendered.Hash {
+					srvRes.AppliedHash = srv.Status.AppliedHash
+					srvRes.Generation = uint64(srv.Status.AppliedGeneration)
+					srvRes.Inbounds = rendered.Inbounds
+				} else if s.deps.Nodes == nil {
+					srvFailed = true
+					srvRes.Status = "failed"
+					srvRes.Code = string(v1.CodeUnavailable)
+					srvRes.Error = "节点通道未装配"
+				} else {
+					params := xrpc.ConfigApplyParams{
+						Config:  string(rendered.Pretty),
+						ApplyID: applyID,
+					}
+					if srv.Status.AppliedHash == "" || srv.Status.FirstApplyEligible {
+						params.ForceInitial = true
+					} else {
+						params.ExpectedCurrentHash = srv.Status.AppliedHash
+					}
+					res, callErr := s.deps.Nodes.CallConfigApply(ctx, srvID, params)
+					if callErr != nil {
+						ae := v1.AsError(callErr)
+						srvFailed = true
+						srvRes.Status = "failed"
+						srvRes.Code = string(ae.Code)
+						srvRes.Error = ae.Reason
+					} else if !res.Applied {
+						srvFailed = true
+						srvRes.Status = "failed"
+						srvRes.Code = string(v1.CodeInternal)
+						srvRes.Error = res.Error
+						srvRes.RolledBack = res.RolledBack
+						srvRes.RollbackError = res.RollbackError
+						srvRes.CurrentHash = res.CurrentHash
+					} else if err := s.deps.Servers.MarkAppliedConfig(ctx, srvID, res.AppliedHash, int64(res.Generation)); err != nil {
+						srvFailed = true
+						srvRes.Status = "failed"
+						srvRes.Code = string(v1.AsError(err).Code)
+						srvRes.Error = "节点已应用配置但更新主控 applied_hash 失败：" + v1.AsError(err).Reason
+						srvRes.AppliedHash = res.AppliedHash
+						srvRes.Generation = res.Generation
+					} else {
+						srvRes.Status = "applied"
+						srvRes.AppliedHash = res.AppliedHash
+						srvRes.Generation = res.Generation
+						srvRes.Inbounds = res.Inbounds
+					}
+				}
+			}
+		}
+
+		if !srvFailed && ev.WebsiteAffectedServers[srvID] {
+			if err := s.syncServerWebsites(ctx, srv, ev.Items, &srvRes); err != nil {
+				srvFailed = true
+			}
+		}
+
+		if srvFailed {
 			failedCount++
-			serverResults = append(serverResults, ServerApplyResult{
-				ServerID: srvID, ServerName: srv.Spec.Name, Status: "failed", Code: string(v1.AsError(err).Code), Error: v1.AsError(err).Reason,
-			})
-			continue
 		}
-		// 若节点已同步且渲染配置前后无变化（例如仅改服务器地区标签等元数据），无需重启内核。
-		sd := sdiffByID[srvID]
-		if !sd.ConfigChanged && srv.Status.AppliedHash != "" && srv.Status.AppliedHash == rendered.Hash {
-			serverResults = append(serverResults, ServerApplyResult{
-				ServerID:    srvID,
-				ServerName:  srv.Spec.Name,
-				Status:      "unchanged",
-				AppliedHash: srv.Status.AppliedHash,
-				Generation:  uint64(srv.Status.AppliedGeneration),
-				Inbounds:    rendered.Inbounds,
-			})
-			continue
-		}
-		if s.deps.Nodes == nil {
-			failedCount++
-			serverResults = append(serverResults, ServerApplyResult{
-				ServerID: srvID, ServerName: srv.Spec.Name, Status: "failed", Code: string(v1.CodeUnavailable), Error: "节点通道未装配",
-			})
-			continue
-		}
-		params := xrpc.ConfigApplyParams{
-			Config:  string(rendered.Pretty),
-			ApplyID: applyID,
-		}
-		if srv.Status.AppliedHash == "" || srv.Status.FirstApplyEligible {
-			params.ForceInitial = true
-		} else {
-			params.ExpectedCurrentHash = srv.Status.AppliedHash
-		}
-		res, callErr := s.deps.Nodes.CallConfigApply(ctx, srvID, params)
-		if callErr != nil {
-			ae := v1.AsError(callErr)
-			failedCount++
-			serverResults = append(serverResults, ServerApplyResult{
-				ServerID:   srvID,
-				ServerName: srv.Spec.Name,
-				Status:     "failed",
-				Code:       string(ae.Code),
-				Error:      ae.Reason,
-			})
-			continue
-		}
-		if !res.Applied {
-			failedCount++
-			serverResults = append(serverResults, ServerApplyResult{
-				ServerID:      srvID,
-				ServerName:    srv.Spec.Name,
-				Status:        "failed",
-				Code:          string(v1.CodeInternal),
-				Error:         res.Error,
-				RolledBack:    res.RolledBack,
-				RollbackError: res.RollbackError,
-				CurrentHash:   res.CurrentHash,
-			})
-			continue
-		}
-		if err := s.deps.Servers.MarkAppliedConfig(ctx, srvID, res.AppliedHash, int64(res.Generation)); err != nil {
-			failedCount++
-			serverResults = append(serverResults, ServerApplyResult{
-				ServerID: srvID, ServerName: srv.Spec.Name, Status: "failed",
-				Code: string(v1.AsError(err).Code), Error: "节点已应用配置但更新主控 applied_hash 失败：" + v1.AsError(err).Reason,
-				AppliedHash: res.AppliedHash, Generation: res.Generation,
-			})
-			continue
-		}
-		serverResults = append(serverResults, ServerApplyResult{
-			ServerID:    srvID,
-			ServerName:  srv.Spec.Name,
-			Status:      "applied",
-			AppliedHash: res.AppliedHash,
-			Generation:  res.Generation,
-			Inbounds:    res.Inbounds,
-		})
+		serverResults = append(serverResults, srvRes)
 	}
 
 	if failedCount > 0 {
@@ -514,8 +532,202 @@ func (s *Service) applyOneTx(ctx context.Context, tx bun.Tx, it evaluatedItem, f
 			return AppliedObjectSummary{}, err
 		}
 		return AppliedObjectSummary{Op: it.Op.Op, Kind: it.Op.Kind, ID: out.Metadata.ID, Name: fmt.Sprintf("RoutingRule#%d", out.Metadata.ID), ResourceVersion: out.Metadata.ResourceVersion}, nil
+
+	case corewebsites.KindName:
+		if s.deps.Websites == nil {
+			return AppliedObjectSummary{}, v1.New(v1.CodeInternal, "Website 仓储未装配")
+		}
+		var out *corewebsites.Website
+		var err error
+		switch it.Op.Op {
+		case "create":
+			out, err = s.deps.Websites.CreateTx(ctx, tx, *it.WebsiteSpec)
+		case "update":
+			out, err = s.deps.Websites.UpdateTx(ctx, tx, it.Op.ID, it.Op.ResourceVersion, force, *it.WebsiteSpec)
+		case "delete":
+			out, err = s.deps.Websites.SoftDeleteTx(ctx, tx, it.Op.ID, it.Op.ResourceVersion, force)
+		case "restore":
+			out, err = s.deps.Websites.RestoreTx(ctx, tx, it.Op.ID, it.Op.ResourceVersion, force)
+		}
+		if err != nil {
+			return AppliedObjectSummary{}, err
+		}
+		return AppliedObjectSummary{Op: it.Op.Op, Kind: it.Op.Kind, ID: out.Metadata.ID, Name: out.Metadata.Name, ResourceVersion: out.Metadata.ResourceVersion}, nil
 	}
 	return AppliedObjectSummary{}, v1.Newf(v1.CodeBadRequest, "不支持的 kind %q", it.Op.Kind)
+}
+
+func (s *Service) checkLiveSameHostNginx(ctx context.Context, plannedObjs []PlannedObject) (bool, error) {
+	checked := map[int64]bool{}
+	isSameHost := func(serverID int64) (bool, error) {
+		if serverID <= 0 {
+			return false, nil
+		}
+		if v, ok := checked[serverID]; ok {
+			return v, nil
+		}
+		srv, err := s.deps.Servers.ByIDIncludeDeleted(ctx, serverID)
+		if err != nil {
+			if errors.Is(err, coreservers.ErrNotFound) {
+				checked[serverID] = false
+				return false, nil
+			}
+			return false, err
+		}
+		checked[serverID] = srv.Status.SameHostAsMaster
+		return srv.Status.SameHostAsMaster, nil
+	}
+
+	for _, po := range plannedObjs {
+		switch po.Kind {
+		case corewebsites.KindName:
+			srvID := po.ServerID
+			if srvID <= 0 && len(po.Spec) > 0 {
+				var sp struct {
+					ServerID int64 `json:"server_id"`
+				}
+				_ = json.Unmarshal(po.Spec, &sp)
+				srvID = sp.ServerID
+			}
+			if srvID <= 0 && po.ID > 0 && s.deps.Websites != nil {
+				if w, err := s.deps.Websites.ByIDIncludeDeleted(ctx, po.ID); err == nil {
+					srvID = w.Spec.ServerID
+				}
+			}
+			sameHost, err := isSameHost(srvID)
+			if err != nil {
+				return false, err
+			}
+			if sameHost {
+				return true, nil
+			}
+		case coreservers.KindName:
+			if po.Op != "update" {
+				continue
+			}
+			sameHost, err := isSameHost(po.ID)
+			if err != nil {
+				return false, err
+			}
+			if !sameHost {
+				continue
+			}
+			for k := range po.FieldDiff {
+				if serverNginxCriticalFields[k] {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+func (s *Service) syncServerWebsites(ctx context.Context, srv *coreservers.Server, items []evaluatedItem, srvRes *ServerApplyResult) error {
+	if s.deps.Websites == nil {
+		srvRes.Status = "failed"
+		srvRes.Code = string(v1.CodeInternal)
+		srvRes.Error = "Website 仓储未装配"
+		return v1.New(v1.CodeInternal, srvRes.Error)
+	}
+	if s.deps.WebsiteNodes == nil {
+		srvRes.Status = "failed"
+		srvRes.Code = string(v1.CodeUnavailable)
+		srvRes.Error = "节点网站同步通道未装配"
+		return v1.New(v1.CodeUnavailable, srvRes.Error)
+	}
+	active, err := s.deps.Websites.ListByServer(ctx, srv.Metadata.ID)
+	if err != nil {
+		ae := v1.AsError(err)
+		srvRes.Status = "failed"
+		srvRes.Code = string(ae.Code)
+		srvRes.Error = ae.Reason
+		return err
+	}
+	files := make([]xrpc.ManagedWebsiteFile, 0, len(active))
+	idByDomain := make(map[string]int64, len(active))
+	for _, w := range active {
+		rs, err := nginx.RenderWebsite(w.Metadata.ID, w.Spec, srv.Status.SameHostAsMaster)
+		if err != nil {
+			ae := v1.AsError(err)
+			srvRes.Status = "failed"
+			srvRes.Code = string(ae.Code)
+			srvRes.Error = ae.Reason
+			return err
+		}
+		files = append(files, xrpc.ManagedWebsiteFile{
+			Domain:      rs.Domain,
+			Conf:        rs.Conf,
+			HTMLPath:    rs.HTMLPath,
+			HTMLContent: rs.HTMLContent,
+		})
+		idByDomain[rs.Domain] = w.Metadata.ID
+	}
+	removeSet := map[string]bool{}
+	var deletedIDs []int64
+	for _, it := range items {
+		if it.Op.Kind != corewebsites.KindName || it.Planned.ServerID != srv.Metadata.ID {
+			continue
+		}
+		if it.WebsiteRemovedDomain != "" {
+			if _, stillActive := idByDomain[it.WebsiteRemovedDomain]; !stillActive {
+				removeSet[it.WebsiteRemovedDomain] = true
+			}
+		}
+		if it.Op.Op == "delete" && it.Op.ID > 0 {
+			deletedIDs = append(deletedIDs, it.Op.ID)
+		}
+	}
+	removeDomains := make([]string, 0, len(removeSet))
+	for d := range removeSet {
+		removeDomains = append(removeDomains, d)
+	}
+	sort.Strings(removeDomains)
+
+	res, callErr := s.deps.WebsiteNodes.CallNginxWebsitesApply(ctx, srv.Metadata.ID, xrpc.NginxWebsitesApplyParams{
+		Sites:            files,
+		RemoveDomains:    removeDomains,
+		ProtectMaster443: srv.Status.SameHostAsMaster,
+	})
+	if callErr != nil {
+		ae := v1.AsError(callErr)
+		srvRes.Status = "failed"
+		srvRes.Code = string(ae.Code)
+		srvRes.Error = ae.Reason
+		return callErr
+	}
+	if res.Error != "" || res.RolledBack {
+		srvRes.Status = "failed"
+		srvRes.Code = string(v1.CodeInternal)
+		srvRes.Error = res.Error
+		if srvRes.Error == "" {
+			srvRes.Error = "节点 nginx 站点配置应用失败并已自动回滚"
+		}
+		srvRes.RolledBack = res.RolledBack
+		srvRes.RollbackError = res.RollbackError
+		return v1.New(v1.CodeInternal, srvRes.Error)
+	}
+	appliedDomains := make([]string, 0, len(res.Applied))
+	for _, f := range res.Applied {
+		appliedDomains = append(appliedDomains, f.Domain)
+		if wid, ok := idByDomain[f.Domain]; ok {
+			if err := s.deps.Websites.UpdateManagedStatus(ctx, wid, true, f.ConfPath); err != nil {
+				ae := v1.AsError(err)
+				srvRes.Status = "failed"
+				srvRes.Code = string(ae.Code)
+				srvRes.Error = "节点 nginx 站点已生效但回写 managed/conf_path 失败：" + ae.Reason
+				return err
+			}
+		}
+	}
+	for _, delID := range deletedIDs {
+		_ = s.deps.Websites.UpdateManagedStatus(ctx, delID, false, "")
+	}
+	sort.Strings(appliedDomains)
+	srvRes.WebsitesApplied = appliedDomains
+	srvRes.WebsitesRemoved = res.Removed
+	srvRes.NginxReloaded = res.Reloaded
+	srvRes.Status = "applied"
+	return nil
 }
 
 func (s *Service) snapshotList(ctx context.Context, inv *command.Invocation) (any, error) {
@@ -681,6 +893,18 @@ func (s *Service) currentObjectState(ctx context.Context, kind string, id int64)
 	case corerouting.KindName:
 		obj, err := s.deps.RoutingRules.ByIDIncludeDeleted(ctx, id)
 		if errors.Is(err, corerouting.ErrNotFound) {
+			return 0, false, false, nil
+		}
+		if err != nil {
+			return 0, false, false, err
+		}
+		return obj.Metadata.ResourceVersion, obj.Metadata.DeletedAt != nil, true, nil
+	case corewebsites.KindName:
+		if s.deps.Websites == nil {
+			return 0, false, false, nil
+		}
+		obj, err := s.deps.Websites.ByIDIncludeDeleted(ctx, id)
+		if errors.Is(err, corewebsites.ErrNotFound) {
 			return 0, false, false, nil
 		}
 		if err != nil {

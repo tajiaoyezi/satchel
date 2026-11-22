@@ -8,30 +8,38 @@ import (
 // 连接管控与流量的方法（m2-03 design 第 1 条，node-limiter「通道上的连接管控方法」、node-traffic「定时拉取计数快照」）。
 // 都是主控发请求、节点回复；参数问题由节点回 CodeBadParams。
 const (
-	MethodLimiterSet        = "limiter.set"             // LimiterSetParams → LimiterState
-	MethodLimiterUnset      = "limiter.unset"           // LimiterUnsetParams → LimiterState
-	MethodConnectionsList   = "connections.list"        // ConnectionsListParams → ConnectionsList
-	MethodConnectionsKick   = "connections.kick"        // ConnectionsKickParams → ConnectionsKicked
-	MethodTrafficSnapshot   = "traffic.snapshot"        // 无参数 → TrafficSnapshot
-	MethodKernelRestart     = "kernel.restart"          // 无参数 → KernelRestarted
-	MethodTokenRotate       = "token.rotate"            // TokenRotateParams → TokenRotateAck
-	MethodAgentUpdate       = "agent.update"            // AgentUpdateParams → AgentUpdateAck
-	MethodAgentUninstall    = "agent.uninstall"         // AgentUninstallParams → AgentUninstallAck
-	MethodAgentSwitchPorts  = "agent.switch_ports"      // SwitchPortsParams → SwitchPortsAck
-	MethodAgentProbeMaster  = "agent.probe_master_url"  // ProbeMasterParams → ProbeMasterResult
-	MethodAgentUpdateMaster = "agent.update_master_url" // UpdateMasterParams → UpdateMasterAck
-	MethodSystemInfo        = "system.info"             // 无参数 → SystemInfo
-	MethodSystemNICs        = "system.nics"             // 无参数 → SystemNICs
-	MethodSpeedGet          = "speed.get"               // 无参数 → SpeedReport
-	MethodAgentLogs         = "agent.logs"              // AgentLogsParams → AgentLogsResult
-	MethodAgentLogFiles     = "agent.logs.files"        // 无参数 → AgentLogFilesResult
-	MethodAgentConfigUpdate = "agent.config_update"     // AgentConfigUpdate → AgentConfigUpdateAck
-	MethodConfigStatus      = "config.status"           // 无参数 → ConfigStatusResult
-	MethodConfigTest        = "config.test"             // ConfigTestParams → ConfigTestResult
-	MethodConfigApply       = "config.apply"            // ConfigApplyParams → ConfigApplyResult
-	MethodConfigFiles       = "config.files"            // ConfigFilesParams → ConfigFilesResult
-	MethodConfigRead        = "config.read"             // ConfigReadParams → ConfigReadResult
-	MethodOutboundProbe     = "outbound.probe"          // OutboundProbeParams → OutboundProbeResult
+	MethodLimiterSet         = "limiter.set"             // LimiterSetParams → LimiterState
+	MethodLimiterUnset       = "limiter.unset"           // LimiterUnsetParams → LimiterState
+	MethodConnectionsList    = "connections.list"        // ConnectionsListParams → ConnectionsList
+	MethodConnectionsKick    = "connections.kick"        // ConnectionsKickParams → ConnectionsKicked
+	MethodTrafficSnapshot    = "traffic.snapshot"        // 无参数 → TrafficSnapshot
+	MethodKernelRestart      = "kernel.restart"          // 无参数 → KernelRestarted
+	MethodTokenRotate        = "token.rotate"            // TokenRotateParams → TokenRotateAck
+	MethodAgentUpdate        = "agent.update"            // AgentUpdateParams → AgentUpdateAck
+	MethodAgentUninstall     = "agent.uninstall"         // AgentUninstallParams → AgentUninstallAck
+	MethodAgentSwitchPorts   = "agent.switch_ports"      // SwitchPortsParams → SwitchPortsAck
+	MethodAgentProbeMaster   = "agent.probe_master_url"  // ProbeMasterParams → ProbeMasterResult
+	MethodAgentUpdateMaster  = "agent.update_master_url" // UpdateMasterParams → UpdateMasterAck
+	MethodSystemInfo         = "system.info"             // 无参数 → SystemInfo
+	MethodSystemNICs         = "system.nics"             // 无参数 → SystemNICs
+	MethodSpeedGet           = "speed.get"               // 无参数 → SpeedReport
+	MethodAgentLogs          = "agent.logs"              // AgentLogsParams → AgentLogsResult
+	MethodAgentLogFiles      = "agent.logs.files"        // 无参数 → AgentLogFilesResult
+	MethodAgentConfigUpdate  = "agent.config_update"     // AgentConfigUpdate → AgentConfigUpdateAck
+	MethodConfigStatus       = "config.status"           // 无参数 → ConfigStatusResult
+	MethodConfigTest         = "config.test"             // ConfigTestParams → ConfigTestResult
+	MethodConfigApply        = "config.apply"            // ConfigApplyParams → ConfigApplyResult
+	MethodConfigFiles        = "config.files"            // ConfigFilesParams → ConfigFilesResult
+	MethodConfigRead         = "config.read"             // ConfigReadParams → ConfigReadResult
+	MethodOutboundProbe      = "outbound.probe"          // OutboundProbeParams → OutboundProbeResult
+	MethodServiceStatus      = "service.status"          // 无参数 → ServiceStatusResult
+	MethodServiceControl     = "service.control"         // ServiceControlParams → ServiceControlResult
+	MethodNginxInstall       = "nginx.install"           // NginxInstallParams → NginxInstallResult
+	MethodNginxUninstall     = "nginx.uninstall"         // NginxUninstallParams → NginxUninstallResult
+	MethodNginxServers       = "nginx.servers"           // 无参数 → NginxServersResult
+	MethodNginxClearStream   = "nginx.clear_stream"      // NginxClearStreamParams → NginxClearStreamResult
+	MethodNginxWebsitesScan  = "nginx.websites.scan"     // 无参数 → NginxWebsitesScanResult
+	MethodNginxWebsitesApply = "nginx.websites.apply"    // NginxWebsitesApplyParams → NginxWebsitesApplyResult
 )
 
 // 节点只读日志与只读配置拉取的上限，确保远低于单帧 ReadLimit（4 MiB）。

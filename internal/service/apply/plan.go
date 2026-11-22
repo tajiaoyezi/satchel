@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/satchel/satchel/internal/base/nginx"
 	"github.com/satchel/satchel/internal/base/singbox"
 	"github.com/satchel/satchel/internal/command"
 	coreinbounds "github.com/satchel/satchel/internal/core/inbounds"
@@ -19,6 +20,7 @@ import (
 	corerouting "github.com/satchel/satchel/internal/core/routingrules"
 	coreservers "github.com/satchel/satchel/internal/core/servers"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
+	corewebsites "github.com/satchel/satchel/internal/core/websites"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 	"github.com/satchel/satchel/pkg/xrpc"
 )
@@ -34,24 +36,38 @@ var serverConnCriticalFields = map[string]bool{
 	"pull_address_v6": true,
 }
 
+// serverNginxCriticalFields 在同机节点上变更这些 nginx/443 字段时触发七组动态人类当场验证。
+var serverNginxCriticalFields = map[string]bool{
+	"use_443":    true,
+	"steal_mode": true,
+	"site_type":  true,
+	"site_value": true,
+}
+
 type evaluatedItem struct {
-	Op              Operation
-	Planned         PlannedObject
-	CurrentVersion  int64
-	CurrentBefore   json.RawMessage // 写前快照原文（不含 Server 令牌）
-	ServerSpec      *v1.ServerSpec
-	InboundSpec     *v1.InboundSpec
-	OutboundSpec    *v1.OutboundSpec
-	RoutingRuleSpec *v1.RoutingRuleSpec
+	Op                   Operation
+	Planned              PlannedObject
+	CurrentVersion       int64
+	CurrentBefore        json.RawMessage // 写前快照原文（不含 Server 令牌）
+	ServerSpec           *v1.ServerSpec
+	InboundSpec          *v1.InboundSpec
+	OutboundSpec         *v1.OutboundSpec
+	RoutingRuleSpec      *v1.RoutingRuleSpec
+	WebsiteSpec          *v1.WebsiteSpec
+	WebsiteRemovedDomain string
+	TouchesSameHostNginx bool
 }
 
 type evalResult struct {
-	Items            []evaluatedItem
-	Servers          []ServerConfigDiff
-	BaseDangers      []v1.Danger
-	AffectedCount    int64
-	AffectedServers  []int64 // 排序后需要推送配置的已有活跃服务器 ID
-	DeletedServerIDs map[int64]bool
+	Items                  []evaluatedItem
+	Servers                []ServerConfigDiff
+	BaseDangers            []v1.Danger
+	AffectedCount          int64
+	AffectedServers        []int64 // 排序后需要推送配置的已有活跃服务器 ID
+	KernelAffectedServers  map[int64]bool
+	WebsiteAffectedServers map[int64]bool
+	DeletedServerIDs       map[int64]bool
+	RequiresHuman          bool
 }
 
 func (s *Service) planCmd(ctx context.Context, inv *command.Invocation) (any, error) {
@@ -102,6 +118,7 @@ func (s *Service) createPlanFromOps(ctx context.Context, ops []Operation, skippe
 		Servers:         ev.Servers,
 		RequiredDangers: dangers,
 		ConfirmHint:     confirmHint,
+		RequiresHuman:   ev.RequiresHuman,
 		BatchMeta:       meta,
 	}
 	objectsJSON, err := json.Marshal(plannedObjs)
@@ -130,9 +147,11 @@ func (s *Service) createPlanFromOps(ctx context.Context, ops []Operation, skippe
 // checkVersion 为 true（plan 阶段）时若版本号不匹配立即返回 version_conflict；为 false（apply 重算阶段）时交由 apply 结合 --force 统一判定。
 func (s *Service) evaluateOps(ctx context.Context, ops []Operation, checkVersion bool) (*evalResult, error) {
 	ev := &evalResult{
-		Items:            make([]evaluatedItem, 0, len(ops)),
-		AffectedCount:    int64(len(ops)),
-		DeletedServerIDs: map[int64]bool{},
+		Items:                  make([]evaluatedItem, 0, len(ops)),
+		AffectedCount:          int64(len(ops)),
+		KernelAffectedServers:  map[int64]bool{},
+		WebsiteAffectedServers: map[int64]bool{},
+		DeletedServerIDs:       map[int64]bool{},
 	}
 	dangerSet := map[v1.Danger]bool{}
 	affectedServerSet := map[int64]bool{}
@@ -140,6 +159,7 @@ func (s *Service) evaluateOps(ctx context.Context, ops []Operation, checkVersion
 	createdServerNames := map[string]bool{}
 	createdInboundTags := map[string]bool{}
 	createdOutboundTags := map[string]bool{}
+	createdWebsiteDomains := map[string]bool{}
 
 	for _, op := range ops {
 		item, srvID, itemDangers, err := s.evaluateOne(ctx, op, checkVersion)
@@ -166,16 +186,30 @@ func (s *Service) evaluateOps(ctx context.Context, ops []Operation, checkVersion
 					return nil, v1.Newf(v1.CodeNameTaken, "单次 plan 中重复创建同名出站 %q", k)
 				}
 				createdOutboundTags[k] = true
+			case corewebsites.KindName:
+				k := fmt.Sprintf("%d/%s", item.WebsiteSpec.ServerID, item.WebsiteSpec.Domain)
+				if createdWebsiteDomains[k] {
+					return nil, v1.Newf(v1.CodeNameTaken, "单次 plan 中重复创建同名站点 %q", k)
+				}
+				createdWebsiteDomains[k] = true
 			}
 		}
 		for _, d := range itemDangers {
 			dangerSet[d] = true
+		}
+		if item.TouchesSameHostNginx {
+			ev.RequiresHuman = true
 		}
 		if op.Kind == coreservers.KindName && op.Op == "delete" {
 			ev.DeletedServerIDs[op.ID] = true
 		}
 		if srvID > 0 {
 			affectedServerSet[srvID] = true
+			if op.Kind == corewebsites.KindName {
+				ev.WebsiteAffectedServers[srvID] = true
+			} else {
+				ev.KernelAffectedServers[srvID] = true
+			}
 		}
 		ev.Items = append(ev.Items, item)
 	}
@@ -193,7 +227,7 @@ func (s *Service) evaluateOps(ctx context.Context, ops []Operation, checkVersion
 
 	ev.Servers = make([]ServerConfigDiff, 0, len(serverIDs))
 	for _, srvID := range serverIDs {
-		sdiff, err := s.simulateServerConfig(ctx, srvID, ev.Items)
+		sdiff, err := s.simulateServerConfig(ctx, srvID, ev.Items, ev.KernelAffectedServers[srvID], ev.WebsiteAffectedServers[srvID])
 		if err != nil {
 			return nil, err
 		}
@@ -214,6 +248,8 @@ func (s *Service) evaluateOne(ctx context.Context, op Operation, checkVersion bo
 		return s.evalOutbound(ctx, op, checkVersion)
 	case corerouting.KindName:
 		return s.evalRoutingRule(ctx, op, checkVersion)
+	case corewebsites.KindName:
+		return s.evalWebsite(ctx, op, checkVersion)
 	default:
 		return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "不支持的 kind %q", op.Kind)
 	}
@@ -300,10 +336,13 @@ func (s *Service) evalServer(ctx context.Context, op Operation, checkVersion boo
 		}
 		diff := computeFieldDiff(beforeMap, afterMap, explicitKeys)
 		var dangers []v1.Danger
+		touchesSameHostNginx := false
 		for k := range diff {
 			if serverConnCriticalFields[k] {
 				dangers = []v1.Danger{v1.DangerPermission}
-				break
+			}
+			if cur.Status.SameHostAsMaster && serverNginxCriticalFields[k] {
+				touchesSameHostNginx = true
 			}
 		}
 		p := PlannedObject{
@@ -312,7 +351,10 @@ func (s *Service) evalServer(ctx context.Context, op Operation, checkVersion boo
 			FieldDiff: diff, FieldDiffHash: hashFieldDiff(diff),
 			BeforeSpec: beforeRaw, AfterSpec: afterRaw, Dangers: dangers,
 		}
-		return evaluatedItem{Op: op, Planned: p, CurrentVersion: cur.Metadata.ResourceVersion, CurrentBefore: beforeRaw, ServerSpec: &norm}, op.ID, dangers, nil
+		return evaluatedItem{
+			Op: op, Planned: p, CurrentVersion: cur.Metadata.ResourceVersion, CurrentBefore: beforeRaw,
+			ServerSpec: &norm, TouchesSameHostNginx: touchesSameHostNginx,
+		}, op.ID, dangers, nil
 
 	case "delete":
 		cur, err := s.deps.Servers.ByIDIncludeDeleted(ctx, op.ID)
@@ -826,21 +868,227 @@ func (s *Service) evalRoutingRule(ctx context.Context, op Operation, checkVersio
 	return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "不支持的操作 %q", op.Op)
 }
 
+func (s *Service) evalWebsite(ctx context.Context, op Operation, checkVersion bool) (evaluatedItem, int64, []v1.Danger, error) {
+	if s.deps.Websites == nil {
+		return evaluatedItem{}, 0, nil, v1.New(v1.CodeInternal, "Website 仓储未装配")
+	}
+	switch op.Op {
+	case "create":
+		var spec v1.WebsiteSpec
+		if err := v1.DecodeSpec(v1.Kind(corewebsites.KindName), op.Spec, &spec); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		norm, err := corewebsites.NormalizeSpec(spec)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		srv, err := s.getActiveServer(ctx, norm.ServerID)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		if err := nginx.ValidateWebsiteSpec(norm, srv.Status.SameHostAsMaster); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		if _, err := nginx.RenderWebsite(0, norm, srv.Status.SameHostAsMaster); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		if _, err := s.deps.Websites.ByServerDomainIncludeDeleted(ctx, norm.ServerID, norm.Domain); err == nil {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNameTaken, "服务器 %d 下的站点域名 %q 已被占用（含软删除对象）", norm.ServerID, norm.Domain)
+		} else if !errors.Is(err, corewebsites.ErrNotFound) {
+			return evaluatedItem{}, 0, nil, err
+		}
+		afterRaw, afterMap, err := marshalRawWebsiteSpec(norm)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		diff := map[string]FieldChange{}
+		for k, v := range afterMap {
+			diff[k] = FieldChange{Before: nil, After: v}
+		}
+		name := fmt.Sprintf("%d/%s", norm.ServerID, norm.Domain)
+		p := PlannedObject{
+			Op: op.Op, Kind: op.Kind, Name: name, ServerID: norm.ServerID, Spec: op.Spec,
+			FieldDiff: diff, FieldDiffHash: hashFieldDiff(diff), AfterSpec: afterRaw,
+		}
+		return evaluatedItem{
+			Op: op, Planned: p, WebsiteSpec: &norm, TouchesSameHostNginx: srv.Status.SameHostAsMaster,
+		}, norm.ServerID, nil, nil
+
+	case "update":
+		cur, err := s.deps.Websites.ByIDIncludeDeleted(ctx, op.ID)
+		if err != nil {
+			if errors.Is(err, corewebsites.ErrNotFound) {
+				return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNotFound, "Website 里没有 id 为 %d 的对象", op.ID)
+			}
+			return evaluatedItem{}, 0, nil, err
+		}
+		if cur.Metadata.DeletedAt != nil {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeConflict, "Website %d 处于软删除状态，不能修改 spec（请先 restore）", op.ID)
+		}
+		if checkVersion && cur.Metadata.ResourceVersion != op.ResourceVersion {
+			return evaluatedItem{}, 0, nil, versionConflictErr("Website", op.ResourceVersion, cur.Metadata.ResourceVersion)
+		}
+		var tmp v1.WebsiteSpec
+		if err := v1.DecodeSpec(v1.Kind(corewebsites.KindName), op.Spec, &tmp); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		beforeRaw, beforeMap, err := marshalRawWebsiteSpec(cur.Spec)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		mergedMap, explicitKeys, err := mergeSpecMap(beforeMap, op.Spec, nil)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		mergedBytes, err := json.Marshal(mergedMap)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, v1.Wrap(v1.CodeInternal, "合并 Website spec 失败", err)
+		}
+		var merged v1.WebsiteSpec
+		if err := json.Unmarshal(mergedBytes, &merged); err != nil {
+			return evaluatedItem{}, 0, nil, v1.Wrap(v1.CodeBadRequest, "Website.spec 字段类型不合法", err)
+		}
+		if merged.ServerID != cur.Spec.ServerID {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "Website %d 不允许跨服务器修改 server_id", op.ID)
+		}
+		norm, err := corewebsites.NormalizeSpec(merged)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		srv, err := s.getActiveServer(ctx, norm.ServerID)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		if err := nginx.ValidateWebsiteSpec(norm, srv.Status.SameHostAsMaster); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		if _, err := nginx.RenderWebsite(op.ID, norm, srv.Status.SameHostAsMaster); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		removedDomain := ""
+		if norm.Domain != cur.Spec.Domain {
+			if _, err := s.deps.Websites.ByServerDomainIncludeDeleted(ctx, norm.ServerID, norm.Domain); err == nil {
+				return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNameTaken, "服务器 %d 下的站点域名 %q 已被占用", norm.ServerID, norm.Domain)
+			} else if !errors.Is(err, corewebsites.ErrNotFound) {
+				return evaluatedItem{}, 0, nil, err
+			}
+			removedDomain = cur.Spec.Domain
+		}
+		afterRaw, afterMap, err := marshalRawWebsiteSpec(norm)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		diff := computeFieldDiff(beforeMap, afterMap, explicitKeys)
+		name := fmt.Sprintf("%d/%s", cur.Spec.ServerID, cur.Spec.Domain)
+		p := PlannedObject{
+			Op: op.Op, Kind: op.Kind, ID: op.ID, Name: name, ServerID: cur.Spec.ServerID,
+			ExpectedVersion: op.ResourceVersion, Spec: op.Spec,
+			FieldDiff: diff, FieldDiffHash: hashFieldDiff(diff),
+			BeforeSpec: beforeRaw, AfterSpec: afterRaw,
+		}
+		return evaluatedItem{
+			Op: op, Planned: p, CurrentVersion: cur.Metadata.ResourceVersion, CurrentBefore: beforeRaw,
+			WebsiteSpec: &norm, WebsiteRemovedDomain: removedDomain, TouchesSameHostNginx: srv.Status.SameHostAsMaster,
+		}, cur.Spec.ServerID, nil, nil
+
+	case "delete":
+		cur, err := s.deps.Websites.ByIDIncludeDeleted(ctx, op.ID)
+		if err != nil {
+			if errors.Is(err, corewebsites.ErrNotFound) {
+				return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNotFound, "Website 里没有 id 为 %d 的对象", op.ID)
+			}
+			return evaluatedItem{}, 0, nil, err
+		}
+		if cur.Metadata.DeletedAt != nil {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "Website %d 已经是软删除状态", op.ID)
+		}
+		if checkVersion && cur.Metadata.ResourceVersion != op.ResourceVersion {
+			return evaluatedItem{}, 0, nil, versionConflictErr("Website", op.ResourceVersion, cur.Metadata.ResourceVersion)
+		}
+		srv, err := s.deps.Servers.ByIDIncludeDeleted(ctx, cur.Spec.ServerID)
+		if err != nil && !errors.Is(err, coreservers.ErrNotFound) {
+			return evaluatedItem{}, 0, nil, err
+		}
+		sameHost := srv != nil && srv.Status.SameHostAsMaster
+		beforeRaw, _, err := marshalRawWebsiteSpec(cur.Spec)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		diff := map[string]FieldChange{"deleted": {Before: false, After: true}}
+		dangers := []v1.Danger{v1.DangerDelete}
+		name := fmt.Sprintf("%d/%s", cur.Spec.ServerID, cur.Spec.Domain)
+		p := PlannedObject{
+			Op: op.Op, Kind: op.Kind, ID: op.ID, Name: name, ServerID: cur.Spec.ServerID,
+			ExpectedVersion: op.ResourceVersion, FieldDiff: diff, FieldDiffHash: hashFieldDiff(diff),
+			BeforeSpec: beforeRaw, Dangers: dangers,
+		}
+		return evaluatedItem{
+			Op: op, Planned: p, CurrentVersion: cur.Metadata.ResourceVersion, CurrentBefore: beforeRaw,
+			WebsiteRemovedDomain: cur.Spec.Domain, TouchesSameHostNginx: sameHost,
+		}, cur.Spec.ServerID, dangers, nil
+
+	case "restore":
+		cur, err := s.deps.Websites.ByIDIncludeDeleted(ctx, op.ID)
+		if err != nil {
+			if errors.Is(err, corewebsites.ErrNotFound) {
+				return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNotFound, "Website 里没有 id 为 %d 的对象", op.ID)
+			}
+			return evaluatedItem{}, 0, nil, err
+		}
+		if cur.Metadata.DeletedAt == nil {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "Website %d 没有被删除，不需要恢复", op.ID)
+		}
+		if checkVersion && cur.Metadata.ResourceVersion != op.ResourceVersion {
+			return evaluatedItem{}, 0, nil, versionConflictErr("Website", op.ResourceVersion, cur.Metadata.ResourceVersion)
+		}
+		srv, err := s.getActiveServer(ctx, cur.Spec.ServerID)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		if err := nginx.ValidateWebsiteSpec(cur.Spec, srv.Status.SameHostAsMaster); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		beforeRaw, _, err := marshalRawWebsiteSpec(cur.Spec)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		diff := map[string]FieldChange{"deleted": {Before: true, After: false}}
+		dangers := []v1.Danger{v1.DangerDelete}
+		name := fmt.Sprintf("%d/%s", cur.Spec.ServerID, cur.Spec.Domain)
+		p := PlannedObject{
+			Op: op.Op, Kind: op.Kind, ID: op.ID, Name: name, ServerID: cur.Spec.ServerID,
+			ExpectedVersion: op.ResourceVersion, FieldDiff: diff, FieldDiffHash: hashFieldDiff(diff),
+			BeforeSpec: beforeRaw, AfterSpec: beforeRaw, Dangers: dangers,
+		}
+		specCopy := cur.Spec
+		return evaluatedItem{
+			Op: op, Planned: p, CurrentVersion: cur.Metadata.ResourceVersion, CurrentBefore: beforeRaw,
+			WebsiteSpec: &specCopy, TouchesSameHostNginx: srv.Status.SameHostAsMaster,
+		}, cur.Spec.ServerID, dangers, nil
+	}
+	return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "不支持的操作 %q", op.Op)
+}
+
 func (s *Service) ensureActiveServer(ctx context.Context, serverID int64) error {
+	_, err := s.getActiveServer(ctx, serverID)
+	return err
+}
+
+func (s *Service) getActiveServer(ctx context.Context, serverID int64) (*coreservers.Server, error) {
 	srv, err := s.deps.Servers.ByIDIncludeDeleted(ctx, serverID)
 	if err != nil {
 		if errors.Is(err, coreservers.ErrNotFound) {
-			return v1.Newf(v1.CodeNotFound, "目标服务器 server_id=%d 不存在", serverID)
+			return nil, v1.Newf(v1.CodeNotFound, "目标服务器 server_id=%d 不存在", serverID)
 		}
-		return err
+		return nil, err
 	}
 	if srv.Metadata.DeletedAt != nil {
-		return v1.Newf(v1.CodeConflict, "目标服务器 server_id=%d 处于软删除状态", serverID)
+		return nil, v1.Newf(v1.CodeConflict, "目标服务器 server_id=%d 处于软删除状态", serverID)
 	}
-	return nil
+	return srv, nil
 }
 
-func (s *Service) simulateServerConfig(ctx context.Context, serverID int64, items []evaluatedItem) (ServerConfigDiff, error) {
+func (s *Service) simulateServerConfig(ctx context.Context, serverID int64, items []evaluatedItem, kernelAffected, websiteAffected bool) (ServerConfigDiff, error) {
 	srv, err := s.deps.Servers.ByIDIncludeDeleted(ctx, serverID)
 	if err != nil {
 		return ServerConfigDiff{}, err
@@ -965,17 +1213,107 @@ func (s *Service) simulateServerConfig(ctx context.Context, serverID int64, item
 		return ServerConfigDiff{}, err
 	}
 
+	var websiteDiffs []WebsiteConfigDiff
+	if websiteAffected && s.deps.Websites != nil {
+		ws, err := s.deps.Websites.ListByServer(ctx, serverID)
+		if err != nil {
+			return ServerConfigDiff{}, err
+		}
+		byID := make(map[int64]v1.WebsiteSpec, len(ws))
+		for _, w := range ws {
+			byID[w.Metadata.ID] = w.Spec
+		}
+		var extraWS []v1.WebsiteSpec
+		removedSet := map[string]bool{}
+		for _, it := range items {
+			if it.Op.Kind != corewebsites.KindName || it.Planned.ServerID != serverID {
+				continue
+			}
+			switch it.Op.Op {
+			case "create":
+				if it.WebsiteSpec != nil {
+					extraWS = append(extraWS, *it.WebsiteSpec)
+				}
+			case "update", "restore":
+				if it.WebsiteSpec != nil {
+					byID[it.Op.ID] = *it.WebsiteSpec
+				}
+				if it.WebsiteRemovedDomain != "" {
+					removedSet[it.WebsiteRemovedDomain] = true
+				}
+			case "delete":
+				delete(byID, it.Op.ID)
+				if it.WebsiteRemovedDomain != "" {
+					removedSet[it.WebsiteRemovedDomain] = true
+				}
+			}
+		}
+		type wsEntry struct {
+			id   int64
+			spec v1.WebsiteSpec
+		}
+		entries := make([]wsEntry, 0, len(byID)+len(extraWS))
+		activeDomains := map[string]bool{}
+		for id, sp := range byID {
+			entries = append(entries, wsEntry{id: id, spec: sp})
+			activeDomains[sp.Domain] = true
+		}
+		for _, sp := range extraWS {
+			entries = append(entries, wsEntry{id: 0, spec: sp})
+			activeDomains[sp.Domain] = true
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].spec.Domain != entries[j].spec.Domain {
+				return entries[i].spec.Domain < entries[j].spec.Domain
+			}
+			return entries[i].id < entries[j].id
+		})
+		for _, e := range entries {
+			rs, err := nginx.RenderWebsite(e.id, e.spec, srv.Status.SameHostAsMaster)
+			if err != nil {
+				return ServerConfigDiff{}, err
+			}
+			websiteDiffs = append(websiteDiffs, WebsiteConfigDiff{
+				Domain:   rs.Domain,
+				Action:   "apply",
+				ConfPath: rs.ConfPath,
+				Conf:     rs.Conf,
+			})
+		}
+		removedDomains := make([]string, 0, len(removedSet))
+		for d := range removedSet {
+			if !activeDomains[d] {
+				removedDomains = append(removedDomains, d)
+			}
+		}
+		sort.Strings(removedDomains)
+		for _, d := range removedDomains {
+			websiteDiffs = append(websiteDiffs, WebsiteConfigDiff{
+				Domain:   d,
+				Action:   "remove",
+				ConfPath: nginx.ManagedConfPath(d),
+			})
+		}
+	}
+
+	configChanged := false
+	if kernelAffected {
+		configChanged = srv.Status.AppliedHash != afterRendered.Hash || beforeRendered.Hash != afterRendered.Hash
+	}
+
 	return ServerConfigDiff{
 		ServerID:            serverID,
 		ServerName:          afterServer.Name,
 		ExpectedCurrentHash: srv.Status.AppliedHash,
 		CurrentRenderedHash: beforeRendered.Hash,
 		NextHash:            afterRendered.Hash,
-		ConfigChanged:       srv.Status.AppliedHash != afterRendered.Hash || beforeRendered.Hash != afterRendered.Hash,
+		ConfigChanged:       configChanged,
 		FirstApplyEligible:  srv.Status.FirstApplyEligible,
 		Inbounds:            afterRendered.Inbounds,
 		BeforeConfig:        string(beforeRendered.Pretty),
 		AfterConfig:         string(afterRendered.Pretty),
+		WebsiteChanged:      websiteAffected,
+		Websites:            websiteDiffs,
 	}, nil
 }
 
@@ -1130,6 +1468,7 @@ func buildPlanView(p *coreplans.Plan, diff PlanDiffData, bw *BatchWindowInfo, sk
 		CreatedAt:       p.Metadata.CreatedAt,
 		RequiredDangers: dangers,
 		ConfirmHint:     diff.ConfirmHint,
+		RequiresHuman:   diff.RequiresHuman,
 		BatchWindow:     bw,
 		Objects:         objs,
 		Servers:         srvs,
@@ -1221,6 +1560,10 @@ func marshalRawOutboundSpec(spec v1.OutboundSpec) (json.RawMessage, map[string]a
 }
 
 func marshalRawRoutingRuleSpec(spec v1.RoutingRuleSpec) (json.RawMessage, map[string]any, error) {
+	return marshalCanonicalMap(spec)
+}
+
+func marshalRawWebsiteSpec(spec v1.WebsiteSpec) (json.RawMessage, map[string]any, error) {
 	return marshalCanonicalMap(spec)
 }
 

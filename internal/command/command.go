@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -272,6 +273,10 @@ type Command struct {
 	// HumanOnly 是第 05 章七组人类专属操作：任何令牌都拒绝，本机管理员与用户要当场验证
 	// （请求里自动带保留 flag verify-password / verify-code / verify-user，见 VerifyFlags）。
 	HumanOnly bool
+	// DynamicHuman 是条件人类专属操作（如 apply 及可能改写主控同机节点 nginx 的命令）：
+	// 与 HumanOnly 互斥，投影层自动暴露 verify-* 保留参数；仅当运行时命中同机节点等人类专属条件时，
+	// 业务层通过 HumanVerifier 强制执行当场验证（令牌一律返 human_required），远程节点对合规令牌照常放行。
+	DynamicHuman bool
 	// Anonymous 表示不要身份也能调（只给初始化向导的 setup status / setup init 用）：authz 跳过身份检查，MCP 一律拒绝，审计照记。
 	Anonymous bool
 	// List 表示列表命令：一律分页，REST 用 GET 并去掉末尾的 list 段。
@@ -293,6 +298,29 @@ func (c *Command) Name() string { return strings.Join(c.Path, " ") }
 
 // HasConfirm 报告这条命令是否需要投影层自动暴露保留 flag --confirm（静态危险类或动态危险类）。
 func (c *Command) HasConfirm() bool { return c.Danger != "" || c.DynamicDanger }
+
+// HasVerify 报告这条命令是否需要投影层自动暴露当场验证保留 flag（静态人类专属或条件人类专属）。
+func (c *Command) HasVerify() bool { return c.HumanOnly || c.DynamicHuman }
+
+// HumanVerifier 是第 05 章七组的当场验证入口：由 service/auth.Verifier 实现，
+// 既给 authz 处理静态 HumanOnly，也给业务服务处理 DynamicHuman（如主控同机节点 nginx 写操作）。
+type HumanVerifier interface {
+	Verify(ctx context.Context, inv *Invocation) error
+}
+
+// VerifyDynamicHuman 对条件人类专属命令执行一次性当场验证：
+// 令牌与系统身份一律返回 human_required；管理员会话与本机管理员调用 verifier 当场验密与第二因素。
+func VerifyDynamicHuman(ctx context.Context, verifier HumanVerifier, cmdName, detail string, inv *Invocation) error {
+	id := v1.IdentityFrom(ctx)
+	if id.ActorKind == v1.ActorToken || id.ActorKind == v1.ActorSystem {
+		return v1.Newf(v1.CodeHumanRequired, "%s（%s）属于只有人能做的操作，令牌一律不能做", cmdName, detail).
+			WithNext(HumanOnlyNext(cmdName))
+	}
+	if verifier == nil {
+		return v1.Newf(v1.CodeHumanRequired, "%s（%s）属于只有人能做的操作，需要当场验证身份，但验证入口未装配", cmdName, detail)
+	}
+	return verifier.Verify(ctx, inv)
+}
 
 // Scope 返回命令所需的权限范围；local 命令返回 false。
 func (c *Command) Scope() (v1.Scope, bool) { return c.Class.Scope() }
@@ -460,13 +488,13 @@ func (c *Command) validate() error {
 		if c.Class != ClassRead && c.Class != ClassAction {
 			return fmt.Errorf("命令 %q 标了不要身份，类别只能是 read 或 action", name)
 		}
-		if c.HumanOnly || c.Danger != "" {
-			return fmt.Errorf("命令 %q 标了不要身份，不能同时是人类专属或危险类", name)
+		if c.HumanOnly || c.DynamicHuman || c.Danger != "" {
+			return fmt.Errorf("命令 %q 标了不要身份，不能同时是人类专属、条件人类专属或危险类", name)
 		}
 	}
 	if c.Class == ClassLocal {
-		if c.Danger != "" || c.DynamicDanger || c.HumanOnly || c.REST != nil || c.List || c.Offline {
-			return fmt.Errorf("命令 %q 是本地命令，不能登记危险类、人类专属、列表、离线或 REST 映射", name)
+		if c.Danger != "" || c.DynamicDanger || c.HumanOnly || c.DynamicHuman || c.REST != nil || c.List || c.Offline {
+			return fmt.Errorf("命令 %q 是本地命令，不能登记危险类、人类专属、条件人类专属、列表、离线或 REST 映射", name)
 		}
 	}
 	if c.Danger != "" && c.Confirm == nil {
@@ -491,6 +519,14 @@ func (c *Command) validate() error {
 	}
 	if c.HumanOnly && (c.Class == ClassRead || c.Class == ClassLocal) {
 		return fmt.Errorf("命令 %q 是人类专属，类别不能是 read 或 local", name)
+	}
+	if c.DynamicHuman {
+		if c.Class == ClassRead || c.Class == ClassLocal {
+			return fmt.Errorf("命令 %q 是条件人类专属，类别不能是 read 或 local", name)
+		}
+		if c.HumanOnly {
+			return fmt.Errorf("命令 %q 不能同时登记人类专属与条件人类专属", name)
+		}
 	}
 	if err := c.validateShape(); err != nil {
 		return err
@@ -528,8 +564,8 @@ func (c *Command) validateShape() error {
 	want := ""
 	switch c.Shape {
 	case ShapeUpload:
-		if c.HumanOnly {
-			return fmt.Errorf("命令 %q 是上传类，不能是人类专属：请求体被文件占了，当场验证的密码放不进去", name)
+		if c.HasVerify() {
+			return fmt.Errorf("命令 %q 是上传类，不能是人类专属或条件人类专属：请求体被文件占了，当场验证的密码放不进去", name)
 		}
 		want = UploadFlag
 	case ShapeDownload:
@@ -635,7 +671,7 @@ func CLIFlags(c *Command) []Flag {
 	if c.HasConfirm() {
 		out = append(out, Flag{Name: "confirm", Type: TypeString})
 	}
-	if c.HumanOnly {
+	if c.HasVerify() {
 		out = append(out, Flag{Name: VerifyCodeFlag, Type: TypeString}, Flag{Name: VerifyUserFlag, Type: TypeString})
 	}
 	if c.Shape == ShapeJob {

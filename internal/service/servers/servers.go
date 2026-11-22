@@ -53,6 +53,21 @@ type Service struct {
 	configMu     sync.Mutex
 	configLocks  map[int64]*sync.Mutex
 	renderConfig func(ctx context.Context, serverID int64) (*singbox.Rendered, error)
+	verifier     command.HumanVerifier
+}
+
+// SetVerifier 注入当场人类验证器（用于同机节点 nginx 操作的七组动态验证）。
+func (s *Service) SetVerifier(v command.HumanVerifier) {
+	s.configMu.Lock()
+	s.verifier = v
+	s.configMu.Unlock()
+}
+
+func (s *Service) getVerifier() command.HumanVerifier {
+	s.configMu.Lock()
+	v := s.verifier
+	s.configMu.Unlock()
+	return v
 }
 
 // New 建服务；masterKey 是主控通信身份的公钥（安装命令里要带它）；logger 为空时不记日志。
@@ -112,6 +127,12 @@ func (s *Service) Bindings() command.Bindings {
 		"server config files":       s.configFiles,
 		"server config read":        s.configRead,
 		"server config test":        s.configTest,
+		"server service status":     s.serviceStatus,
+		"server service control":    s.serviceControl,
+		"server nginx install":      s.nginxInstall,
+		"server nginx uninstall":    s.nginxUninstall,
+		"server nginx servers":      s.nginxServers,
+		"server nginx clear-stream": s.nginxClearStream,
 	}
 }
 

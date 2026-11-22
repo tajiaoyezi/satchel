@@ -13,7 +13,7 @@
 | `account totp confirm` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/totp/confirm` |
 | `account totp disable` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/totp/disable` |
 | `account totp setup` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/account/totp/setup` |
-| `apply` | config | operate | 动态 | 动态 | 否 | 否 | 否 | `POST /api/v1/apply` |
+| `apply` | config | operate | 动态 | 动态 | 条件 | 否 | 否 | `POST /api/v1/apply` |
 | `audit list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/audit` |
 | `backup create` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/backup/create` |
 | `backup download` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/backup/download/{name}` |
@@ -73,9 +73,15 @@
 | `server list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server` |
 | `server logs files` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server/logs/files/{name}` |
 | `server logs list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server/logs/{name}` |
+| `server nginx clear-stream` | action | operate | delete | object (name) | 条件 | 否 | 否 | `POST /api/v1/server/nginx/clear-stream/{name}` |
+| `server nginx install` | action | operate | — | — | 条件 | 否 | 否 | `POST /api/v1/server/nginx/install/{name}` |
+| `server nginx servers` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server/nginx/servers/{name}` |
+| `server nginx uninstall` | action | operate | delete | object (name) | 条件 | 否 | 否 | `POST /api/v1/server/nginx/uninstall/{name}` |
 | `server nics` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/nics/{name}` |
 | `server probe-master-url` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/probe-master-url/{name}` |
 | `server restart-kernel` | action | operate | restart | object (name) | 否 | 否 | 否 | `POST /api/v1/server/restart-kernel/{name}` |
+| `server service control` | action | operate | restart | object (name) | 条件 | 否 | 否 | `POST /api/v1/server/service/control/{name}` |
+| `server service status` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/service/status/{name}` |
 | `server speed` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/speed/{name}` |
 | `server switch-listen-port` | action | operate | permission | object (name) | 否 | 否 | 否 | `POST /api/v1/server/switch-listen-port/{name}` |
 | `server system-info` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/system-info/{name}` |
@@ -111,6 +117,11 @@
 | `token update` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/update/{id}` |
 | `update apply` | action | operate | master | object (version) | 否 | 否 | 否 | `POST /api/v1/update/apply/{version}` |
 | `update check` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/update/check` |
+| `website build` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/website/build` |
+| `website get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/website/get/{id}` |
+| `website list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/website` |
+| `website scan` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/website/scan/{name}` |
+| `website templates` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/website/templates` |
 | `whoami` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/whoami` |
 
 ## 执行形状
@@ -123,6 +134,8 @@
 | `backup download` | 下载 |
 | `backup upload` | 上传 |
 | `database migrate` | 长任务 |
+| `server nginx install` | 长任务 |
+| `server nginx uninstall` | 长任务 |
 | `server update apply` | 长任务 |
 | `server update batch` | 长任务 |
 | `settings image upload` | 上传 |

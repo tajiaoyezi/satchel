@@ -19,20 +19,21 @@ type Overview struct {
 
 // CommandInfo 是一条命令的说明。
 type CommandInfo struct {
-	Name      string     `json:"name"`
-	Summary   string     `json:"summary"`
-	Class     Class      `json:"class"`
-	Scope     string     `json:"scope"`
+	Name          string     `json:"name"`
+	Summary       string     `json:"summary"`
+	Class         Class      `json:"class"`
+	Scope         string     `json:"scope"`
 	Danger        string     `json:"danger"`
 	DynamicDanger bool       `json:"dynamic_danger,omitempty"`
 	Confirm       *Confirm   `json:"confirm,omitempty"`
-	HumanOnly bool       `json:"human_only"`
-	Anonymous bool       `json:"anonymous"`
-	List      bool       `json:"list"`
-	Offline   bool       `json:"offline"`
-	Args      []ArgInfo  `json:"args"`
-	Flags     []FlagInfo `json:"flags"`
-	REST      *RESTInfo  `json:"rest,omitempty"`
+	HumanOnly     bool       `json:"human_only"`
+	DynamicHuman  bool       `json:"dynamic_human,omitempty"`
+	Anonymous     bool       `json:"anonymous"`
+	List          bool       `json:"list"`
+	Offline       bool       `json:"offline"`
+	Args          []ArgInfo  `json:"args"`
+	Flags         []FlagInfo `json:"flags"`
+	REST          *RESTInfo  `json:"rest,omitempty"`
 	// Shape 是执行形状：job、upload、download，普通命令为空。
 	Shape Shape `json:"shape,omitempty"`
 	// Reserved 是投影层随类别自动加的 flag：列表命令的 limit / cursor，危险命令的 confirm。
@@ -124,7 +125,7 @@ func overview(t *Table) Overview {
 func Describe(c *Command) CommandInfo {
 	info := CommandInfo{
 		Name: c.Name(), Summary: c.Summary, Class: c.Class, Danger: string(c.Danger), DynamicDanger: c.DynamicDanger, Confirm: c.Confirm,
-		HumanOnly: c.HumanOnly, Anonymous: c.Anonymous, List: c.List, Offline: c.Offline, Args: []ArgInfo{}, Flags: []FlagInfo{}, Reserved: []string{}, Shape: c.Shape,
+		HumanOnly: c.HumanOnly, DynamicHuman: c.DynamicHuman, Anonymous: c.Anonymous, List: c.List, Offline: c.Offline, Args: []ArgInfo{}, Flags: []FlagInfo{}, Reserved: []string{}, Shape: c.Shape,
 	}
 	if scope, ok := c.Scope(); ok {
 		info.Scope = string(scope)
@@ -148,7 +149,7 @@ func Describe(c *Command) CommandInfo {
 	if c.Shape == ShapeJob {
 		info.Reserved = append(info.Reserved, NoWaitFlag)
 	}
-	if c.HumanOnly {
+	if c.HasVerify() {
 		info.Reserved = append(info.Reserved, VerifyFlags...)
 	}
 	return info

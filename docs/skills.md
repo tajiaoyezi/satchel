@@ -16,6 +16,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `satchel-settings` | 看与改系统设置时用：日常运维档的设置、logo 与登录壁纸的图片上传、写前快照与回滚；主控地址与门这两组要请人改。 |
 | `satchel-troubleshoot` | 主控出问题时用：看日志、内置定时任务的运行记录、长任务、审计与安全事件，主控起不来或被挡在门外时请人在主控本机处理。 |
 | `satchel-upgrade` | 升级主控时用：检查更新、升到所选渠道的最新版、更新 CDN 的开关、升级失败时的自动回退。 |
+| `satchel-websites` | 管理节点上的 nginx 站点（kind Website）：查站点、扫盘区分已纳管与未纳管文件、查模板目录、用无状态向导生成静态/普通反代/WSS反代/伪装站配置并经 plan/apply 声明式落盘，严守未纳管零覆盖与同机七组/443 双闸门。 |
 
 ## 命令
 
@@ -28,7 +29,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `account totp disable` | `satchel-access` |
 | `account totp setup` | `satchel-access` |
 | `admin reset-password` | `satchel-troubleshoot` |
-| `apply` | `satchel-basics`、`satchel-proxy`、`satchel-servers` |
+| `apply` | `satchel-basics`、`satchel-proxy`、`satchel-servers`、`satchel-websites` |
 | `audit list` | `satchel-troubleshoot` |
 | `backup create` | `satchel-backup`、`satchel-basics`、`satchel-upgrade` |
 | `backup download` | `satchel-backup` |
@@ -66,7 +67,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `outbound list` | `satchel-proxy` |
 | `outbound probe` | `satchel-proxy` |
 | `overview` | `satchel-basics` |
-| `plan` | `satchel-basics`、`satchel-proxy`、`satchel-servers` |
+| `plan` | `satchel-basics`、`satchel-proxy`、`satchel-servers`、`satchel-websites` |
 | `plans get` | `satchel-basics` |
 | `plans list` | `satchel-basics` |
 | `routing get` | `satchel-proxy` |
@@ -96,9 +97,15 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `server list` | `satchel-servers` |
 | `server logs files` | `satchel-servers`、`satchel-troubleshoot` |
 | `server logs list` | `satchel-servers`、`satchel-troubleshoot` |
+| `server nginx clear-stream` | `satchel-servers` |
+| `server nginx install` | `satchel-servers` |
+| `server nginx servers` | `satchel-servers` |
+| `server nginx uninstall` | `satchel-servers` |
 | `server nics` | `satchel-servers` |
 | `server probe-master-url` | `satchel-servers` |
 | `server restart-kernel` | `satchel-servers` |
+| `server service control` | `satchel-servers` |
+| `server service status` | `satchel-servers` |
 | `server speed` | `satchel-servers` |
 | `server switch-listen-port` | `satchel-servers` |
 | `server system-info` | `satchel-servers`、`satchel-troubleshoot` |
@@ -127,7 +134,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `setup status` | `satchel-backup` |
 | `snapshot get` | `satchel-basics` |
 | `snapshot list` | `satchel-basics` |
-| `snapshot rollback` | `satchel-basics` |
+| `snapshot rollback` | `satchel-basics`、`satchel-websites` |
 | `token create` | `satchel-access` |
 | `token list` | `satchel-access`、`satchel-basics` |
 | `token revoke` | `satchel-access`、`satchel-basics` |
@@ -135,4 +142,9 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `update apply` | `satchel-basics`、`satchel-upgrade` |
 | `update check` | `satchel-basics`、`satchel-upgrade` |
 | `version` | `satchel-basics` |
+| `website build` | `satchel-websites` |
+| `website get` | `satchel-websites` |
+| `website list` | `satchel-websites` |
+| `website scan` | `satchel-websites` |
+| `website templates` | `satchel-websites` |
 | `whoami` | `satchel-access`、`satchel-basics` |

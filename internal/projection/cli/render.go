@@ -205,7 +205,11 @@ func renderExplain(w io.Writer, result any) error {
 		if danger == "" && x.DynamicDanger {
 			danger = "动态"
 		}
-		fmt.Fprintf(w, "%s：%s\n类别：%s\tscope：%s\t危险类：%s\t人类专属：%v\n", x.Name, x.Summary, x.Class, orDash(x.Scope), orDash(danger), x.HumanOnly)
+		human := fmt.Sprintf("%v", x.HumanOnly)
+		if !x.HumanOnly && x.DynamicHuman {
+			human = "条件"
+		}
+		fmt.Fprintf(w, "%s：%s\n类别：%s\tscope：%s\t危险类：%s\t人类专属：%s\n", x.Name, x.Summary, x.Class, orDash(x.Scope), orDash(danger), human)
 		if x.REST != nil {
 			fmt.Fprintf(w, "REST：%s %s\n", x.REST.Method, x.REST.Path)
 		}
