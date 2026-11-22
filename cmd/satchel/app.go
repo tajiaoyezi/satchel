@@ -36,6 +36,7 @@ import (
 	corejobs "github.com/satchel/satchel/internal/core/jobs"
 	coreoutbounds "github.com/satchel/satchel/internal/core/outbounds"
 	coreplans "github.com/satchel/satchel/internal/core/plans"
+	corereturnroutes "github.com/satchel/satchel/internal/core/returnroutes"
 	corepresets "github.com/satchel/satchel/internal/core/routingpresets"
 	corerouting "github.com/satchel/satchel/internal/core/routingrules"
 	coresecurity "github.com/satchel/satchel/internal/core/security"
@@ -66,6 +67,7 @@ import (
 	svcdatabase "github.com/satchel/satchel/internal/service/database"
 	"github.com/satchel/satchel/internal/service/jobs"
 	svclogs "github.com/satchel/satchel/internal/service/logs"
+	svcnetwork "github.com/satchel/satchel/internal/service/network"
 	svcoverview "github.com/satchel/satchel/internal/service/overview"
 	svcproxy "github.com/satchel/satchel/internal/service/proxy"
 	"github.com/satchel/satchel/internal/service/schedule"
@@ -205,6 +207,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	outboundsRepo := coreoutbounds.New(bdb, st)
 	routingRepo := corerouting.New(bdb, st)
 	websitesRepo := corewebsites.New(bdb, st)
+	returnRoutesRepo := corereturnroutes.New(bdb, st)
 	batchRepo := corebatch.New(bdb, st)
 	batchInRepo := corebatchin.New(bdb, st)
 	batchOutRepo := corebatchout.New(bdb, st)
@@ -219,6 +222,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		Outbounds:      outboundsRepo,
 		RoutingRules:   routingRepo,
 		Websites:       websitesRepo,
+		ReturnRoutes:   returnRoutesRepo,
 		Plans:          coreplans.New(bdb, st),
 		Snapshots:      coresnapshots.New(bdb, st),
 		Batch:          batchRepo,
@@ -310,6 +314,18 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	jobsSvc.SetServerLookup(serversSvc.LookupIDByName)
 	serversSvc.SetStartJob(func(ctx context.Context, serverID int64, inv *command.Invocation, run func(context.Context) (any, error), done func()) (any, error) {
 		return jobsSvc.StartForServer(ctx, serverID, inv, run, done)
+	})
+	networkSvc := svcnetwork.New(svcnetwork.Deps{
+		Servers:      serversRepo,
+		Inbounds:     inboundsRepo,
+		Outbounds:    outboundsRepo,
+		RoutingRules: routingRepo,
+		ReturnRoutes: returnRoutesRepo,
+		Nodes:        serversSvc,
+		Planner:      applySvc,
+		StartJob: func(ctx context.Context, serverID int64, inv *command.Invocation, run func(context.Context) (any, error), done func()) (any, error) {
+			return jobsSvc.StartForServer(ctx, serverID, inv, run, done)
+		},
 	})
 	settings.SetMigration(serverMigrationAdapter{serversSvc})
 	var handedOff []string
@@ -433,6 +449,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		bindings[name] = h
 	}
 	for name, h := range tunnelsSvc.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range networkSvc.Bindings() {
 		bindings[name] = h
 	}
 	if err := table.CheckBindings(bindings); err != nil {

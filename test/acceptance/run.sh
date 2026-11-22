@@ -73,9 +73,9 @@ echo "==> 交叉编译 Linux/$GOARCH 二进制（satchel / satchel-agent / accep
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
   go -C "$ROOT" build -trimpath -o "$BUILD_DIR/satchel" ./cmd/satchel
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
-  go -C "$AGENT_DIR" build -trimpath -tags with_quic,with_utls -o "$BUILD_DIR/satchel-agent" ./cmd/satchel-agent
+  go -C "$AGENT_DIR" build -trimpath -tags with_quic,with_utls,with_wireguard,with_gvisor -o "$BUILD_DIR/satchel-agent" ./cmd/satchel-agent
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
-  go -C "$DIR" test -c -tags with_quic,with_utls -o "$BUILD_DIR/acceptance.test" .
+  go -C "$DIR" test -c -tags with_quic,with_utls,with_wireguard,with_gvisor -o "$BUILD_DIR/acceptance.test" .
 
 cp "$DIR/kernel.json" "$BUILD_DIR/kernel.json"
 cp "$DIR/node-entrypoint.sh" "$BUILD_DIR/node-entrypoint.sh"

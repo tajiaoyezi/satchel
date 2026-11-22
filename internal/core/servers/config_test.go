@@ -101,6 +101,28 @@ func TestServerConfigTxLifecycle(t *testing.T) {
 		if got.Metadata.ResourceVersion != 4 || got.Status.AppliedHash != "abc123" || got.Status.AppliedGeneration != 9 || got.Status.FirstApplyEligible {
 			t.Fatalf("MarkAppliedConfig 状态不对：%+v", got.Status)
 		}
+
+		// SetWarpInstalled 仅更新 warp_installed 状态列，不抬升 resourceVersion。
+		if err := r.SetWarpInstalled(ctx, restored.Metadata.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		got, err = r.ByID(ctx, restored.Metadata.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Metadata.ResourceVersion != 4 || !got.Status.WarpInstalled {
+			t.Fatalf("SetWarpInstalled(true) 状态异常：ver=%d warp=%v", got.Metadata.ResourceVersion, got.Status.WarpInstalled)
+		}
+		if err := r.SetWarpInstalled(ctx, restored.Metadata.ID, false); err != nil {
+			t.Fatal(err)
+		}
+		got, err = r.ByID(ctx, restored.Metadata.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Metadata.ResourceVersion != 4 || got.Status.WarpInstalled {
+			t.Fatalf("SetWarpInstalled(false) 状态异常：ver=%d warp=%v", got.Metadata.ResourceVersion, got.Status.WarpInstalled)
+		}
 	})
 }
 

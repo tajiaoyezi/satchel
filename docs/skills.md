@@ -11,6 +11,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `satchel-backup` | 备份与恢复主控时用：生成、列出、上传备份；下载与恢复要请人做；新装的主控用初始化向导建管理员或从备份恢复。 |
 | `satchel-basics` | 用 Satchel 之前先读：开局看总览与身份，怎么学命令、看输出与错误，危险操作与只有人能做的操作怎么处理，MCP 上怎么调用。 |
 | `satchel-database` | 看或更换主控的数据库时用：看当前的数据库、试连 PostgreSQL、从 SQLite 在线迁移。 |
+| `satchel-network` | 管理节点网络探测（端口扫描、站点 TLS/Reality 校验、最多 200 域名 16 并发延迟批量探测）、纯 Go WARP WireGuard 凭据与出站/防送中快捷路由规划，以及返程路由（kind ReturnRoute）的查询与测路长任务。 |
 | `satchel-proxy` | 管理 sing-box 代理入站（Inbound）、出站（Outbound）、路由规则（RoutingRule）、密钥生成、无状态建站向导、出站实时探活、中转落地规划、路由预设与多机批量规划时用：所有配置变更一律走 plan / apply。 |
 | `satchel-servers` | 加服务器（节点）、取安装命令、看节点是否在线，以及给节点上的凭据临时限速、踢线、看连接与流量、重启节点内核时用：安装命令要 https 主控地址，token 原文要请人取。 |
 | `satchel-settings` | 看与改系统设置时用：日常运维档的设置、logo 与登录壁纸的图片上传、写前快照与回滚；主控地址与门这两组要请人改。 |
@@ -30,7 +31,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `account totp disable` | `satchel-access` |
 | `account totp setup` | `satchel-access` |
 | `admin reset-password` | `satchel-troubleshoot` |
-| `apply` | `satchel-basics`、`satchel-proxy`、`satchel-servers`、`satchel-tunnels`、`satchel-websites` |
+| `apply` | `satchel-basics`、`satchel-network`、`satchel-proxy`、`satchel-servers`、`satchel-tunnels`、`satchel-websites` |
 | `audit list` | `satchel-troubleshoot` |
 | `backup create` | `satchel-backup`、`satchel-basics`、`satchel-upgrade` |
 | `backup download` | `satchel-backup` |
@@ -68,9 +69,12 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `outbound list` | `satchel-proxy` |
 | `outbound probe` | `satchel-proxy` |
 | `overview` | `satchel-basics` |
-| `plan` | `satchel-basics`、`satchel-proxy`、`satchel-servers`、`satchel-websites` |
+| `plan` | `satchel-basics`、`satchel-network`、`satchel-proxy`、`satchel-servers`、`satchel-websites` |
 | `plans get` | `satchel-basics` |
 | `plans list` | `satchel-basics` |
+| `return-route get` | `satchel-network` |
+| `return-route list` | `satchel-network` |
+| `return-route test` | `satchel-network` |
 | `routing get` | `satchel-proxy` |
 | `routing list` | `satchel-proxy` |
 | `routing preset builtin` | `satchel-proxy` |
@@ -90,6 +94,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `server config status` | `satchel-servers` |
 | `server config test` | `satchel-servers` |
 | `server connections` | `satchel-servers` |
+| `server domain-latency` | `satchel-network` |
 | `server get` | `satchel-servers` |
 | `server install-command` | `satchel-servers` |
 | `server kick` | `satchel-servers` |
@@ -105,6 +110,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `server nics` | `satchel-servers` |
 | `server probe-master-url` | `satchel-servers` |
 | `server restart-kernel` | `satchel-servers` |
+| `server scan` | `satchel-network` |
 | `server service control` | `satchel-servers` |
 | `server service status` | `satchel-servers` |
 | `server speed` | `satchel-servers` |
@@ -121,6 +127,11 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `server update apply` | `satchel-servers` |
 | `server update batch` | `satchel-servers` |
 | `server update check` | `satchel-servers` |
+| `server warp authorize` | `satchel-network` |
+| `server warp install` | `satchel-network` |
+| `server warp outbound-plan` | `satchel-network` |
+| `server warp remove` | `satchel-network` |
+| `server warp status` | `satchel-network` |
 | `settings batch-threshold set` | `satchel-settings` |
 | `settings gates set` | `satchel-settings`、`satchel-troubleshoot` |
 | `settings image upload` | `satchel-settings` |
@@ -137,7 +148,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `setup status` | `satchel-backup` |
 | `snapshot get` | `satchel-basics` |
 | `snapshot list` | `satchel-basics` |
-| `snapshot rollback` | `satchel-basics`、`satchel-tunnels`、`satchel-websites` |
+| `snapshot rollback` | `satchel-basics`、`satchel-network`、`satchel-tunnels`、`satchel-websites` |
 | `token create` | `satchel-access` |
 | `token list` | `satchel-access`、`satchel-basics` |
 | `token revoke` | `satchel-access`、`satchel-basics` |
@@ -157,4 +168,5 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `website list` | `satchel-websites` |
 | `website scan` | `satchel-websites` |
 | `website templates` | `satchel-websites` |
+| `website validate` | `satchel-network` |
 | `whoami` | `satchel-access`、`satchel-basics` |

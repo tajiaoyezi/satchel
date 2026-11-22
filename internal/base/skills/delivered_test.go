@@ -27,10 +27,35 @@ func TestSkillsDelivered(t *testing.T) {
 	for _, s := range skills {
 		names = append(names, s.Name)
 	}
-	want := "satchel-access,satchel-backup,satchel-basics,satchel-database,satchel-proxy,satchel-servers,satchel-settings,satchel-troubleshoot,satchel-tunnels,satchel-upgrade,satchel-websites"
+	want := "satchel-access,satchel-backup,satchel-basics,satchel-database,satchel-network,satchel-proxy,satchel-servers,satchel-settings,satchel-troubleshoot,satchel-tunnels,satchel-upgrade,satchel-websites"
 	if strings.Join(names, ",") != want {
-		t.Fatalf("应当恰好是 M1 的七份加 satchel-servers、satchel-proxy、satchel-websites 与 satchel-tunnels：%v", names)
+		t.Fatalf("应当恰好是 M1 的七份加 satchel-servers、satchel-proxy、satchel-websites、satchel-tunnels 与 satchel-network：%v", names)
 	}
+}
+
+func TestNetworkSkillMentions(t *testing.T) {
+	skills, _, err := Load(Files())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range skills {
+		if s.Name != "satchel-network" {
+			continue
+		}
+		for _, want := range []string{
+			"satchel server scan", "satchel website validate", "satchel server domain-latency",
+			"satchel server warp status", "satchel server warp install", "satchel server warp authorize",
+			"satchel server warp remove", "satchel server warp outbound-plan",
+			"satchel return-route list", "satchel return-route get", "satchel return-route test",
+			"200", "16", "warp-google-meta", "ReturnRoute", "resourceVersion",
+		} {
+			if !strings.Contains(s.Content, want) {
+				t.Errorf("satchel-network 里应当有 %s", want)
+			}
+		}
+		return
+	}
+	t.Fatal("没有 satchel-network")
 }
 
 func TestTunnelsSkillMentions(t *testing.T) {
@@ -180,8 +205,8 @@ func TestCurrentCommandsCovered(t *testing.T) {
 			visible++
 		}
 	}
-	if visible != 135 || !used["overview"] || !used["token create"] || !used["serve"] || !used["inbound build"] || !used["outbound probe"] || !used["routing preset save"] || !used["website build"] || !used["server service control"] || !used["server nginx clear-stream"] || !used["server steal plan"] || !used["tunnel plan"] || !used["tunnel chain plan"] {
-		t.Fatalf("应当覆盖 135 条非隐藏命令，含 overview、token create、serve、代理资源、网站/服务与偷取模式/隧道命令：%d %v", visible, used)
+	if visible != 146 || !used["overview"] || !used["token create"] || !used["serve"] || !used["inbound build"] || !used["outbound probe"] || !used["routing preset save"] || !used["website build"] || !used["website validate"] || !used["server service control"] || !used["server nginx clear-stream"] || !used["server steal plan"] || !used["tunnel plan"] || !used["tunnel chain plan"] || !used["server scan"] || !used["server domain-latency"] || !used["server warp outbound-plan"] || !used["return-route test"] {
+		t.Fatalf("应当覆盖 146 条非隐藏命令，含 overview、token create、serve、代理资源、网站/服务、偷取模式/隧道与网络探测/WARP/返程路由命令：%d %v", visible, used)
 	}
 	extra := command.MustNew(append(command.Catalog().All(), &command.Command{Path: []string{"demo", "ping"}, Summary: "测试", Class: command.ClassRead})...)
 	if missing := Coverage(extra, refs); strings.Join(missing, ",") != "demo ping" {

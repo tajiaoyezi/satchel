@@ -47,6 +47,9 @@
 | `plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/plan` |
 | `plans get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/plans/get/{id}` |
 | `plans list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/plans` |
+| `return-route get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/return-route/get/{id}` |
+| `return-route list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/return-route` |
+| `return-route test` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/return-route/test/{name}` |
 | `routing get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/routing/get/{id}` |
 | `routing list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/routing` |
 | `routing preset builtin` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/routing/preset/builtin` |
@@ -65,6 +68,7 @@
 | `server config status` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/config/status/{name}` |
 | `server config test` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/config/test/{name}` |
 | `server connections` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server/connections/{name}` |
+| `server domain-latency` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/domain-latency/{name}` |
 | `server get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/get/{name}` |
 | `server install-command` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/install-command/{name}` |
 | `server kick` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/kick/{name}` |
@@ -80,6 +84,7 @@
 | `server nics` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/nics/{name}` |
 | `server probe-master-url` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/probe-master-url/{name}` |
 | `server restart-kernel` | action | operate | restart | object (name) | 否 | 否 | 否 | `POST /api/v1/server/restart-kernel/{name}` |
+| `server scan` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/scan/{name}` |
 | `server service control` | action | operate | restart | object (name) | 条件 | 否 | 否 | `POST /api/v1/server/service/control/{name}` |
 | `server service status` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/service/status/{name}` |
 | `server speed` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/speed/{name}` |
@@ -96,6 +101,11 @@
 | `server update apply` | action | operate | restart | object (name) | 否 | 否 | 否 | `POST /api/v1/server/update/apply/{name}/{version}` |
 | `server update batch` | action | operate | batch | count | 否 | 否 | 否 | `POST /api/v1/server/update/batch/{version}` |
 | `server update check` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/update/check/{name}` |
+| `server warp authorize` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/warp/authorize/{name}` |
+| `server warp install` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/warp/install/{name}` |
+| `server warp outbound-plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/warp/outbound-plan/{name}` |
+| `server warp remove` | action | operate | delete | object (name) | 否 | 否 | 否 | `POST /api/v1/server/warp/remove/{name}` |
+| `server warp status` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/warp/status/{name}` |
 | `settings batch-threshold set` | master_settings | operate | permission | object (key) | 否 | 否 | 否 | `POST /api/v1/settings/batch-threshold/set/{key}/{value}` |
 | `settings gates set` | master_settings | operate | — | — | 是 | 否 | 否 | `POST /api/v1/settings/gates/set` |
 | `settings image upload` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/settings/image/upload` |
@@ -131,6 +141,7 @@
 | `website list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/website` |
 | `website scan` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/website/scan/{name}` |
 | `website templates` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/website/templates` |
+| `website validate` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/website/validate/{name}` |
 | `whoami` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/whoami` |
 
 ## 执行形状
@@ -143,10 +154,12 @@
 | `backup download` | 下载 |
 | `backup upload` | 上传 |
 | `database migrate` | 长任务 |
+| `return-route test` | 长任务 |
 | `server nginx install` | 长任务 |
 | `server nginx uninstall` | 长任务 |
 | `server update apply` | 长任务 |
 | `server update batch` | 长任务 |
+| `server warp install` | 长任务 |
 | `settings image upload` | 上传 |
 | `setup restore` | 上传 |
 | `update apply` | 长任务 |

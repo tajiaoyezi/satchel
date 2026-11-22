@@ -94,7 +94,7 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 ## 服务器偷取模式（tunnel / fallback / off）
 
 - 查看偷取模式状态与预览：`satchel server steal status <名字>`（读类，纯读主控数据库，返回 `same_host_as_master`、`use_443`、`steal_mode`、`domain`、`tunnel-in` 绑定与路由、推荐空闲端口 `next_free_port` 以及 `use_443=true` 时的本地偷自己 nginx 配置预览）。
-- 声明式部署、切换或关闭偷自己：`satchel server steal plan <名字> --mode tunnel --domain decoy.example.com`（也支持 `--mode fallback` 与 `--mode off`，可选 `--site-type`、`--site-value`、`--internal-port`、`--inbound-tag`），生成单一待确认 `Plan`，再经 `satchel apply --plan <计划号>` 按序同步 `/etc/nginx/servers/satchel-steal.conf` 与 `kernel.json`。主控同机节点严禁开启 `use_443` 或监听 443 端口；完整偷取模式原理与任意门/链式隧道编排见 `satchel-tunnels`。
+- 声明式部署、切换或关闭偷自己：`satchel server steal plan <名字> --mode tunnel --domain decoy.example.com`（也支持 `--mode fallback` 与 `--mode off`，可选 `--site-type`、`--site-value`、`--internal-port`、`--inbound-tag`），生成单一待确认 `Plan`，再经 `satchel apply --plan <计划号>` 按序同步 `/etc/nginx/servers/satchel-steal.conf` 与 `kernel.json`。主控同机节点严禁开启 `use_443` 或监听 443 端口；完整偷取模式原理与任意门/链式隧道编排见 `satchel-tunnels`；节点端口扫描、域名延迟探测、WARP 管理与返程路由测路见 `satchel-network`。
 
 ## 注意
 

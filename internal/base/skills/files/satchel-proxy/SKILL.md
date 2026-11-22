@@ -43,4 +43,4 @@ description: "管理 sing-box 代理入站（Inbound）、出站（Outbound）�
 
 - `inbound build`、`inbound batch plan`、`outbound batch plan` 与 `outbound landing plan` 均不会直接修改正在运行的节点，必须审阅 `plan` 输出并执行 `satchel apply --plan <plan_id>` 才会落库并原子推送到节点。
 - 多机批量变更达到系统设定的批量门控阈值时，`satchel apply` 会动态要求 `batch` 危险类与 `--confirm`，请按 `satchel-basics` 中的配置事务流程确认执行。
-- 涉及私钥、密码、UUID 与 `settings` 原文的操作请遵守最小权限原则，不要把 `secrets` 凭据原文贴进无关对话或日志。
+- 涉及私钥、密码、UUID 与 `settings` 原文的操作请遵守最小权限原则，不要把 `secrets` 凭据原文贴进无关对话或日志。如需在节点部署 WARP WireGuard 出站并一键附带防止送中路由，见 `satchel-network`。

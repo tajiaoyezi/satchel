@@ -56,8 +56,8 @@ func notExist(t *testing.T, path string) {
 	}
 }
 
-// skillCount 是编进二进制的 skills 份数（M1 的七份加 M2 的 satchel-servers、satchel-proxy、satchel-websites 与 satchel-tunnels）。
-const skillCount = 11
+// skillCount 是编进二进制的 skills 份数（M1 的七份加 M2 的 satchel-servers、satchel-proxy、satchel-websites、satchel-tunnels 与 satchel-network）。
+const skillCount = 12
 
 // master-mcp「接入时装上 skills」：编进二进制的每一份 satchel-*（目前八份）与二进制里的相同，别的 skill 不动；files 里只有配置文件，skills 单独一项；
 // 提示有重启生效与会被覆盖，没有「skills 随 m1-10 交付」。

@@ -293,6 +293,12 @@ func (r *Repo) SetSameHost(ctx context.Context, id int64, sameHost bool) error {
 	return r.store.UpdateStatus(ctx, m, []string{"same_host_as_master"})
 }
 
+// SetWarpInstalled 更新节点 WARP 安装状态（status 档字段，不抬 resourceVersion，不进审计）。
+func (r *Repo) SetWarpInstalled(ctx context.Context, id int64, installed bool) error {
+	m := &model.Server{ID: id, WarpInstalled: installed}
+	return r.store.UpdateStatus(ctx, m, []string{"warp_installed"})
+}
+
 // UpdatePorts 原子更新服务器的管理口与只读轮询口，按乐观并发抬升 resourceVersion。
 func (r *Repo) UpdatePorts(ctx context.Context, id, resourceVersion, listenPort, pullPort int64) (*Server, error) {
 	m := &model.Server{

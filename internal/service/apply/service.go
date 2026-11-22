@@ -26,6 +26,7 @@ import (
 	coreinbounds "github.com/satchel/satchel/internal/core/inbounds"
 	coreoutbounds "github.com/satchel/satchel/internal/core/outbounds"
 	coreplans "github.com/satchel/satchel/internal/core/plans"
+	corereturnroutes "github.com/satchel/satchel/internal/core/returnroutes"
 	corerouting "github.com/satchel/satchel/internal/core/routingrules"
 	coreservers "github.com/satchel/satchel/internal/core/servers"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
@@ -54,6 +55,7 @@ type Deps struct {
 	Outbounds      *coreoutbounds.Repo
 	RoutingRules   *corerouting.Repo
 	Websites       *corewebsites.Repo
+	ReturnRoutes   *corereturnroutes.Repo
 	Plans          *coreplans.Repo
 	Snapshots      *coresnapshots.Repo
 	Batch          *corebatch.Repo
@@ -335,7 +337,7 @@ type ApplyResult struct {
 
 func supportedKind(kind string) bool {
 	switch kind {
-	case coreservers.KindName, coreinbounds.KindName, coreoutbounds.KindName, corerouting.KindName, corewebsites.KindName:
+	case coreservers.KindName, coreinbounds.KindName, coreoutbounds.KindName, corerouting.KindName, corewebsites.KindName, corereturnroutes.KindName:
 		return true
 	}
 	return false
@@ -392,7 +394,7 @@ func parseOperations(raw string) ([]Operation, error) {
 		op.Op = strings.TrimSpace(op.Op)
 		op.Kind = strings.TrimSpace(op.Kind)
 		if !supportedKind(op.Kind) {
-			return nil, v1.Newf(v1.CodeBadRequest, "第 %d 条变更的 kind %q 不支持（当前支持 Server、Inbound、Outbound、RoutingRule、Website）", idx+1, op.Kind)
+			return nil, v1.Newf(v1.CodeBadRequest, "第 %d 条变更的 kind %q 不支持（当前支持 Server、Inbound、Outbound、RoutingRule、Website、ReturnRoute）", idx+1, op.Kind)
 		}
 		switch op.Op {
 		case "create":

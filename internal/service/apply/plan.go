@@ -17,6 +17,7 @@ import (
 	coreinbounds "github.com/satchel/satchel/internal/core/inbounds"
 	coreoutbounds "github.com/satchel/satchel/internal/core/outbounds"
 	coreplans "github.com/satchel/satchel/internal/core/plans"
+	corereturnroutes "github.com/satchel/satchel/internal/core/returnroutes"
 	corerouting "github.com/satchel/satchel/internal/core/routingrules"
 	coreservers "github.com/satchel/satchel/internal/core/servers"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
@@ -55,6 +56,7 @@ type evaluatedItem struct {
 	RoutingRuleSpec      *v1.RoutingRuleSpec
 	WebsiteSpec          *v1.WebsiteSpec
 	WebsiteRemovedDomain string
+	ReturnRouteSpec      *v1.ReturnRouteSpec
 	TouchesSameHostNginx bool
 }
 
@@ -162,6 +164,7 @@ func (s *Service) evaluateOps(ctx context.Context, ops []Operation, checkVersion
 	createdInboundTags := map[string]bool{}
 	createdOutboundTags := map[string]bool{}
 	createdWebsiteDomains := map[string]bool{}
+	createdReturnRoutes := map[string]bool{}
 
 	for _, op := range ops {
 		item, srvID, itemDangers, err := s.evaluateOne(ctx, op, checkVersion)
@@ -194,6 +197,12 @@ func (s *Service) evaluateOps(ctx context.Context, ops []Operation, checkVersion
 					return nil, v1.Newf(v1.CodeNameTaken, "单次 plan 中重复创建同名站点 %q", k)
 				}
 				createdWebsiteDomains[k] = true
+			case corereturnroutes.KindName:
+				k := fmt.Sprintf("%d/%s", item.ReturnRouteSpec.ServerID, item.ReturnRouteSpec.Carrier)
+				if createdReturnRoutes[k] {
+					return nil, v1.Newf(v1.CodeNameTaken, "单次 plan 中重复创建同运营商返程路由 %q", k)
+				}
+				createdReturnRoutes[k] = true
 			}
 		}
 		for _, d := range itemDangers {
@@ -255,6 +264,8 @@ func (s *Service) evaluateOne(ctx context.Context, op Operation, checkVersion bo
 		return s.evalRoutingRule(ctx, op, checkVersion)
 	case corewebsites.KindName:
 		return s.evalWebsite(ctx, op, checkVersion)
+	case corereturnroutes.KindName:
+		return s.evalReturnRoute(ctx, op, checkVersion)
 	default:
 		return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "不支持的 kind %q", op.Kind)
 	}
@@ -1128,6 +1139,182 @@ func (s *Service) evalWebsite(ctx context.Context, op Operation, checkVersion bo
 	return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "不支持的操作 %q", op.Op)
 }
 
+func (s *Service) evalReturnRoute(ctx context.Context, op Operation, checkVersion bool) (evaluatedItem, int64, []v1.Danger, error) {
+	if s.deps.ReturnRoutes == nil {
+		return evaluatedItem{}, 0, nil, v1.New(v1.CodeInternal, "ReturnRoute 仓储未装配")
+	}
+	switch op.Op {
+	case "create":
+		var spec v1.ReturnRouteSpec
+		if err := v1.DecodeSpec(v1.Kind(corereturnroutes.KindName), op.Spec, &spec); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		norm, err := corereturnroutes.NormalizeSpec(spec)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		if _, err := s.getActiveServer(ctx, norm.ServerID); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		if _, err := s.deps.ReturnRoutes.ByServerCarrierIncludeDeleted(ctx, norm.ServerID, norm.Carrier); err == nil {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNameTaken, "服务器 %d 下的返程运营商 %q 已被占用（含软删除对象）", norm.ServerID, norm.Carrier)
+		} else if !errors.Is(err, corereturnroutes.ErrNotFound) {
+			return evaluatedItem{}, 0, nil, err
+		}
+		afterRaw, afterMap, err := marshalRawReturnRouteSpec(norm)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		diff := map[string]FieldChange{}
+		for k, v := range afterMap {
+			diff[k] = FieldChange{Before: nil, After: v}
+		}
+		name := fmt.Sprintf("%d/%s", norm.ServerID, norm.Carrier)
+		p := PlannedObject{
+			Op: op.Op, Kind: op.Kind, Name: name, ServerID: norm.ServerID, Spec: op.Spec,
+			FieldDiff: diff, FieldDiffHash: hashFieldDiff(diff), AfterSpec: afterRaw,
+		}
+		// ReturnRoute 纯属主控配置，不触发节点 kernel.json 或 nginx 推送，故返回 serverID=0。
+		return evaluatedItem{
+			Op: op, Planned: p, ReturnRouteSpec: &norm,
+		}, 0, nil, nil
+
+	case "update":
+		cur, err := s.deps.ReturnRoutes.ByIDIncludeDeleted(ctx, op.ID)
+		if err != nil {
+			if errors.Is(err, corereturnroutes.ErrNotFound) {
+				return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNotFound, "ReturnRoute 里没有 id 为 %d 的对象", op.ID)
+			}
+			return evaluatedItem{}, 0, nil, err
+		}
+		if cur.Metadata.DeletedAt != nil {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeConflict, "ReturnRoute %d 处于软删除状态，不能修改 spec（请先 restore）", op.ID)
+		}
+		if checkVersion && cur.Metadata.ResourceVersion != op.ResourceVersion {
+			return evaluatedItem{}, 0, nil, versionConflictErr("ReturnRoute", op.ResourceVersion, cur.Metadata.ResourceVersion)
+		}
+		var tmp v1.ReturnRouteSpec
+		if err := v1.DecodeSpec(v1.Kind(corereturnroutes.KindName), op.Spec, &tmp); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		beforeRaw, beforeMap, err := marshalRawReturnRouteSpec(cur.Spec)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		mergedMap, explicitKeys, err := mergeSpecMap(beforeMap, op.Spec, nil)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		mergedBytes, err := json.Marshal(mergedMap)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, v1.Wrap(v1.CodeInternal, "合并 ReturnRoute spec 失败", err)
+		}
+		var merged v1.ReturnRouteSpec
+		if err := json.Unmarshal(mergedBytes, &merged); err != nil {
+			return evaluatedItem{}, 0, nil, v1.Wrap(v1.CodeBadRequest, "ReturnRoute.spec 字段类型不合法", err)
+		}
+		if merged.ServerID != cur.Spec.ServerID {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "ReturnRoute %d 不允许跨服务器修改 server_id", op.ID)
+		}
+		norm, err := corereturnroutes.NormalizeSpec(merged)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		if _, err := s.getActiveServer(ctx, norm.ServerID); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		if norm.Carrier != cur.Spec.Carrier {
+			if _, err := s.deps.ReturnRoutes.ByServerCarrierIncludeDeleted(ctx, norm.ServerID, norm.Carrier); err == nil {
+				return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNameTaken, "服务器 %d 下的返程运营商 %q 已被占用", norm.ServerID, norm.Carrier)
+			} else if !errors.Is(err, corereturnroutes.ErrNotFound) {
+				return evaluatedItem{}, 0, nil, err
+			}
+		}
+		afterRaw, afterMap, err := marshalRawReturnRouteSpec(norm)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		diff := computeFieldDiff(beforeMap, afterMap, explicitKeys)
+		name := fmt.Sprintf("%d/%s", cur.Spec.ServerID, cur.Spec.Carrier)
+		p := PlannedObject{
+			Op: op.Op, Kind: op.Kind, ID: op.ID, Name: name, ServerID: cur.Spec.ServerID,
+			ExpectedVersion: op.ResourceVersion, Spec: op.Spec,
+			FieldDiff: diff, FieldDiffHash: hashFieldDiff(diff),
+			BeforeSpec: beforeRaw, AfterSpec: afterRaw,
+		}
+		return evaluatedItem{
+			Op: op, Planned: p, CurrentVersion: cur.Metadata.ResourceVersion, CurrentBefore: beforeRaw,
+			ReturnRouteSpec: &norm,
+		}, 0, nil, nil
+
+	case "delete":
+		cur, err := s.deps.ReturnRoutes.ByIDIncludeDeleted(ctx, op.ID)
+		if err != nil {
+			if errors.Is(err, corereturnroutes.ErrNotFound) {
+				return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNotFound, "ReturnRoute 里没有 id 为 %d 的对象", op.ID)
+			}
+			return evaluatedItem{}, 0, nil, err
+		}
+		if cur.Metadata.DeletedAt != nil {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "ReturnRoute %d 已经是软删除状态", op.ID)
+		}
+		if checkVersion && cur.Metadata.ResourceVersion != op.ResourceVersion {
+			return evaluatedItem{}, 0, nil, versionConflictErr("ReturnRoute", op.ResourceVersion, cur.Metadata.ResourceVersion)
+		}
+		beforeRaw, _, err := marshalRawReturnRouteSpec(cur.Spec)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		diff := map[string]FieldChange{"deleted": {Before: false, After: true}}
+		dangers := []v1.Danger{v1.DangerDelete}
+		name := fmt.Sprintf("%d/%s", cur.Spec.ServerID, cur.Spec.Carrier)
+		p := PlannedObject{
+			Op: op.Op, Kind: op.Kind, ID: op.ID, Name: name, ServerID: cur.Spec.ServerID,
+			ExpectedVersion: op.ResourceVersion, FieldDiff: diff, FieldDiffHash: hashFieldDiff(diff),
+			BeforeSpec: beforeRaw, Dangers: dangers,
+		}
+		return evaluatedItem{
+			Op: op, Planned: p, CurrentVersion: cur.Metadata.ResourceVersion, CurrentBefore: beforeRaw,
+		}, 0, dangers, nil
+
+	case "restore":
+		cur, err := s.deps.ReturnRoutes.ByIDIncludeDeleted(ctx, op.ID)
+		if err != nil {
+			if errors.Is(err, corereturnroutes.ErrNotFound) {
+				return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNotFound, "ReturnRoute 里没有 id 为 %d 的对象", op.ID)
+			}
+			return evaluatedItem{}, 0, nil, err
+		}
+		if cur.Metadata.DeletedAt == nil {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "ReturnRoute %d 没有被删除，不需要恢复", op.ID)
+		}
+		if checkVersion && cur.Metadata.ResourceVersion != op.ResourceVersion {
+			return evaluatedItem{}, 0, nil, versionConflictErr("ReturnRoute", op.ResourceVersion, cur.Metadata.ResourceVersion)
+		}
+		if _, err := s.getActiveServer(ctx, cur.Spec.ServerID); err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		beforeRaw, _, err := marshalRawReturnRouteSpec(cur.Spec)
+		if err != nil {
+			return evaluatedItem{}, 0, nil, err
+		}
+		diff := map[string]FieldChange{"deleted": {Before: true, After: false}}
+		dangers := []v1.Danger{v1.DangerDelete}
+		name := fmt.Sprintf("%d/%s", cur.Spec.ServerID, cur.Spec.Carrier)
+		p := PlannedObject{
+			Op: op.Op, Kind: op.Kind, ID: op.ID, Name: name, ServerID: cur.Spec.ServerID,
+			ExpectedVersion: op.ResourceVersion, FieldDiff: diff, FieldDiffHash: hashFieldDiff(diff),
+			BeforeSpec: beforeRaw, AfterSpec: beforeRaw, Dangers: dangers,
+		}
+		specCopy := cur.Spec
+		return evaluatedItem{
+			Op: op, Planned: p, CurrentVersion: cur.Metadata.ResourceVersion, CurrentBefore: beforeRaw,
+			ReturnRouteSpec: &specCopy,
+		}, 0, dangers, nil
+	}
+	return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeBadRequest, "不支持的操作 %q", op.Op)
+}
+
 func (s *Service) ensureActiveServer(ctx context.Context, serverID int64) error {
 	_, err := s.getActiveServer(ctx, serverID)
 	return err
@@ -1693,6 +1880,10 @@ func marshalRawRoutingRuleSpec(spec v1.RoutingRuleSpec) (json.RawMessage, map[st
 }
 
 func marshalRawWebsiteSpec(spec v1.WebsiteSpec) (json.RawMessage, map[string]any, error) {
+	return marshalCanonicalMap(spec)
+}
+
+func marshalRawReturnRouteSpec(spec v1.ReturnRouteSpec) (json.RawMessage, map[string]any, error) {
 	return marshalCanonicalMap(spec)
 }
 

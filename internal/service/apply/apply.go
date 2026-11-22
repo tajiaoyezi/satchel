@@ -20,6 +20,7 @@ import (
 	coreinbounds "github.com/satchel/satchel/internal/core/inbounds"
 	coreoutbounds "github.com/satchel/satchel/internal/core/outbounds"
 	coreplans "github.com/satchel/satchel/internal/core/plans"
+	corereturnroutes "github.com/satchel/satchel/internal/core/returnroutes"
 	corerouting "github.com/satchel/satchel/internal/core/routingrules"
 	coreservers "github.com/satchel/satchel/internal/core/servers"
 	coresettings "github.com/satchel/satchel/internal/core/settings"
@@ -516,6 +517,27 @@ func (s *Service) applyOneTx(ctx context.Context, tx bun.Tx, it evaluatedItem, f
 			return AppliedObjectSummary{}, err
 		}
 		return AppliedObjectSummary{Op: it.Op.Op, Kind: it.Op.Kind, ID: out.Metadata.ID, Name: out.Metadata.Name, ResourceVersion: out.Metadata.ResourceVersion}, nil
+
+	case corereturnroutes.KindName:
+		if s.deps.ReturnRoutes == nil {
+			return AppliedObjectSummary{}, v1.New(v1.CodeInternal, "ReturnRoute 仓储未装配")
+		}
+		var out *corereturnroutes.ReturnRoute
+		var err error
+		switch it.Op.Op {
+		case "create":
+			out, err = s.deps.ReturnRoutes.CreateTx(ctx, tx, *it.ReturnRouteSpec)
+		case "update":
+			out, err = s.deps.ReturnRoutes.UpdateTx(ctx, tx, it.Op.ID, it.Op.ResourceVersion, force, *it.ReturnRouteSpec)
+		case "delete":
+			out, err = s.deps.ReturnRoutes.SoftDeleteTx(ctx, tx, it.Op.ID, it.Op.ResourceVersion, force)
+		case "restore":
+			out, err = s.deps.ReturnRoutes.RestoreTx(ctx, tx, it.Op.ID, it.Op.ResourceVersion, force)
+		}
+		if err != nil {
+			return AppliedObjectSummary{}, err
+		}
+		return AppliedObjectSummary{Op: it.Op.Op, Kind: it.Op.Kind, ID: out.Metadata.ID, Name: out.Metadata.Name, ResourceVersion: out.Metadata.ResourceVersion}, nil
 	}
 	return AppliedObjectSummary{}, v1.Newf(v1.CodeBadRequest, "不支持的 kind %q", it.Op.Kind)
 }
@@ -988,6 +1010,18 @@ func (s *Service) currentObjectState(ctx context.Context, kind string, id int64)
 		}
 		obj, err := s.deps.Websites.ByIDIncludeDeleted(ctx, id)
 		if errors.Is(err, corewebsites.ErrNotFound) {
+			return 0, false, false, nil
+		}
+		if err != nil {
+			return 0, false, false, err
+		}
+		return obj.Metadata.ResourceVersion, obj.Metadata.DeletedAt != nil, true, nil
+	case corereturnroutes.KindName:
+		if s.deps.ReturnRoutes == nil {
+			return 0, false, false, nil
+		}
+		obj, err := s.deps.ReturnRoutes.ByIDIncludeDeleted(ctx, id)
+		if errors.Is(err, corereturnroutes.ErrNotFound) {
 			return 0, false, false, nil
 		}
 		if err != nil {

@@ -39,6 +39,8 @@ var GroupSummaries = map[string]string{
 	"server service":           "节点运行服务（kernel / nginx / agent）状态查询与启停控制（同机 nginx 控制需当场人类验证）",
 	"server nginx":             "节点 nginx 远程安装/卸载、server 块巡检与受保护的 stream 清理（同机操作需当场人类验证并保护 443）",
 	"server steal":             "服务器偷取模式（tunnel / fallback / off）：查 443 绑定状态与偷自己本地 nginx 预览、声明式部署与切换",
+	"server warp":              "节点纯 Go WARP WireGuard 凭据管理（状态、注册安装、授权/离线导入、移除）与出站/防送中快捷路由规划",
+	"return-route":             "返程路由（kind ReturnRoute）：列表查询与节点返程测路长任务（增删改恢复走 plan / apply）",
 	"tunnel":                   "任意门单跳转发、复用分流与 N 台链式隧道编排（零迁移，全部写操作一律经 plan / apply）",
 	"tunnel multiplex":         "复用已有 direct 入站按域名/IP 分流转发（不另开端口，自动排在兜底规则之前）",
 	"tunnel chain":             "N 台服务器首尾相接链式隧道查询、单 Plan 原子编排与整链清理",
@@ -73,8 +75,90 @@ func catalogCommands() []*Command {
 	all = append(all, proxyCommands()...)
 	all = append(all, websiteCommands()...)
 	all = append(all, tunnelCommands()...)
+	all = append(all, networkCommands()...)
 	all = append(all, serverCommands()...)
 	return all
+}
+
+// networkCommands 是 m2-19 的节点网络探测、纯 Go WARP 闭环与返程路由查询/测路命令（node-network-warp-and-return-routes）。
+func networkCommands() []*Command {
+	name := Arg{Name: "name", Description: "服务器的名字或 ID"}
+	return []*Command{
+		{Path: []string{"server", "scan"}, Summary: "从节点执行受限 TCP 端口扫描（单次最多 256 个端口、有界并发与超时）", Class: ClassAction,
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "host", Type: TypeString, Default: "127.0.0.1", Description: "待扫描主机或 IP（默认 127.0.0.1）"},
+				{Name: "ports", Type: TypeStrings, Description: "端口或区间列表（如 443、8000-8010；总数上限 256，留空扫常用端口）"},
+				{Name: "timeout", Type: TypeDuration, Default: "1s", Description: "单端口连接超时（100ms..5s，默认 1s）"},
+				{Name: "concurrency", Type: TypeInt, Default: "32", Description: "并发数（1..64，默认 32）"},
+			}},
+		{Path: []string{"website", "validate"}, Summary: "从节点对远程站点执行 TCP/TLS/SNI/HTTP2/证书与 Reality 适用性校验", Class: ClassAction,
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "domain", Type: TypeString, Description: "待校验目标域名或主机（必填）"},
+				{Name: "port", Type: TypeInt, Default: "443", Description: "目标端口（1..65535，默认 443）"},
+				{Name: "sni", Type: TypeString, Description: "可选：TLS SNI 域名（默认同 --domain）"},
+				{Name: "timeout", Type: TypeDuration, Default: "10s", Description: "单次探测超时（1s..30s，默认 10s）"},
+			}},
+		{Path: []string{"server", "domain-latency"}, Summary: "从节点批量探测域名 TCP/TLS 握手延迟（最多 200 域名、最多 16 并发）", Class: ClassAction,
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "domains", Type: TypeStrings, Description: "待探测域名列表（必填，去重后 1..200 个）"},
+				{Name: "port", Type: TypeInt, Default: "443", Description: "探测端口（1..65535，默认 443）"},
+				{Name: "mode", Type: TypeString, Default: "tls", Description: "探测模式：tls（默认）或 tcp"},
+				{Name: "timeout", Type: TypeDuration, Default: "5s", Description: "单域名超时（500ms..15s，默认 5s）"},
+				{Name: "concurrency", Type: TypeInt, Default: "16", Description: "并发数（1..16，默认 16）"},
+			}},
+		{Path: []string{"server", "warp", "status"}, Summary: "查询节点纯 Go WARP WireGuard 状态与库内 WARP 出站/防送中路由摘要（绝不暴露私钥）", Class: ClassRead,
+			Args: []Arg{name}},
+		{Path: []string{"server", "warp", "install"}, Summary: "在节点以纯 Go 注册 Cloudflare WARP WireGuard 设备并以 0600 落盘（裸机与容器通用）", Class: ClassAction, Shape: ShapeJob,
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "license-key", Type: TypeString, Secret: true, Description: "可选：顺带绑定的 WARP+ license 密钥（审计打码）"},
+				{Name: "mtu", Type: TypeInt, Default: "1280", Description: "WireGuard MTU（1280..1500，默认 1280）"},
+				{Name: "endpoint", Type: TypeString, Description: "可选：自定义 WARP endpoint（host:port，默认 engage.cloudflareclient.com:2408）"},
+				{Name: "api-base", Type: TypeString, Description: "可选：覆盖 Cloudflare WARP API 基址（调试/测试用）"},
+				{Name: "reinstall", Type: TypeBool, Description: "已安装时强制重新注册新设备"},
+			}},
+		{Path: []string{"server", "warp", "authorize"}, Summary: "为节点绑定 WARP+ license 或离线导入已有 WireGuard 凭据（两种模式二选一，敏感参数打码）", Class: ClassAction,
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "license-key", Type: TypeString, Secret: true, Description: "WARP+ license 密钥（与离线导入参数互斥，审计打码）"},
+				{Name: "api-base", Type: TypeString, Description: "可选：覆盖 Cloudflare WARP API 基址"},
+				{Name: "private-key", Type: TypeString, Secret: true, Description: "离线导入模式：标准 Base64 32 字节 WireGuard 私钥（审计打码）"},
+				{Name: "address-v4", Type: TypeString, Description: "离线导入模式：WireGuard IPv4 地址或 CIDR（如 172.16.0.2/32）"},
+				{Name: "address-v6", Type: TypeString, Description: "离线导入模式（可选）：WireGuard IPv6 地址或 CIDR"},
+				{Name: "peer-public-key", Type: TypeString, Description: "离线导入模式（可选）：对端公钥（默认 Cloudflare 官方公钥）"},
+				{Name: "endpoint", Type: TypeString, Description: "离线导入模式（可选）：对端 host:port"},
+				{Name: "reserved", Type: TypeString, Description: "离线导入模式（可选）：3 个逗号分隔的 0..255 保留字节"},
+				{Name: "mtu", Type: TypeInt, Default: "1280", Description: "离线导入模式（可选）：MTU（1280..1500，默认 1280）"},
+			}},
+		{Path: []string{"server", "warp", "remove"}, Summary: "原子删除节点 WARP 凭据文件、更新 warp_installed 状态并提示库内残留 WARP 出站", Class: ClassAction, Danger: v1.DangerDelete, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"},
+			Args: []Arg{name}},
+		{Path: []string{"server", "warp", "outbound-plan"}, Summary: "从节点拉取 WARP WireGuard 凭据规划 sing-box endpoints[] 出站（可选 --anti-china 附带防送中路由）并生成待确认 Plan", Class: ClassConfig,
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "tag", Type: TypeString, Default: "warp", Description: "WARP 出站 tag（默认 warp）"},
+				{Name: "anti-china", Type: TypeBool, Description: "同时附带一条复用内置 warp-google-meta 预设的防止送中路由规则"},
+				{Name: "inbound-tag", Type: TypeString, Description: "可选（配合 --anti-china）：限定仅匹配指定入站 tag"},
+				{Name: "sort-order", Type: TypeInt, Default: "40", Description: "防送中路由规则排序值（默认 40）"},
+			}},
+		{Path: []string{"return-route", "list"}, Summary: "分页列出 ReturnRoute 返程路由配置与最近一次实测状态（按服务器与运营商升序）", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "server-name", Type: TypeString, Description: "按服务器名或 ID 过滤"},
+				{Name: "carrier", Type: TypeString, Description: "按运营商代码过滤（如 CT、CU、CM、EDU）"},
+				{Name: "enabled", Type: TypeBool, Description: "按启用状态过滤"},
+				{Name: "include-deleted", Type: TypeBool, Description: "包含已软删除的返程路由"},
+			},
+			Columns: []string{"id", "server_id", "carrier", "enabled", "route_type", "entry_ip", "entry_asn", "tested_at"}},
+		{Path: []string{"return-route", "get"}, Summary: "查看单条 ReturnRoute 返程路由配置与最近实测状态", Class: ClassRead,
+			Args: []Arg{{Name: "id", Description: "返程路由 ID（return-route list 里的 id）"}}},
+		{Path: []string{"return-route", "test"}, Summary: "启动关联服务器长任务实测返程路由（默认测整机已启用线路，支持 --carrier 单测）并回写状态不抬版本", Class: ClassAction, Shape: ShapeJob,
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "carrier", Type: TypeString, Description: "可选：仅测试指定运营商线路（省略时测试该服务器全部已启用线路）"},
+			}},
+	}
 }
 
 // tunnelCommands 是 m2-17 的服务器偷取模式、任意门单跳/复用隧道与 N 台链式隧道命令（node-steal-and-tunnels）。

@@ -33,4 +33,4 @@ description: "管理节点上的 nginx 站点（kind Website）：查站点、�
 
 - **同机 443 防抢占**：主控同机节点（`same_host_as_master=true`）严禁在 `Website` 中开启 `use_443=true` 直接抢占主控 443 端口；`website build`、`plan`、`apply` 与节点侧 `nginx.websites.apply` 均会拦截并返回 `conflict`。
 - **同机七组动态人类验证**：远程节点上的 `Website` 允许合规 API 令牌（含 MCP）直接执行 `satchel apply`；但当目标服务器实时 `same_host_as_master=true` 时，`plan` 会标出 `requires_human: true`，`apply` 会在写库与推节点前动态触发七组当场人类验证——API 令牌一律返回 `human_required`，需请管理员在主控本机终端（带 `--verify-user <管理员账号>`）或登录网页完成当场验密。
-- 节点的 `nginx` 安装/卸载、服务启停与 stream 端口巡检清理见 `satchel-servers`。
+- 节点的 `nginx` 安装/卸载、服务启停与 stream 端口巡检清理见 `satchel-servers`；从节点校验远程伪装目标站点的 TLS/HTTP2 与 Reality 适用性（`website validate`）见 `satchel-network`。
