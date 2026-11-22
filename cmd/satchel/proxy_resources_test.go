@@ -116,7 +116,7 @@ func TestProxyResourcesEndToEnd(t *testing.T) {
 		}
 
 		// 2. inbound batch plan + apply -> batch_inbounds + audit_logs.plan_id
-		bpOut, stderr, code := h.cli("inbound", "batch", "plan", "--servers", "hk-p1,hk-p2", "--protocol", "trojan", "--port", "28443", "--security", "tls", "--tag", "batch-tr", "--json")
+		bpOut, stderr, code := h.cli("inbound", "batch", "plan", "--servers", "hk-p1", "--servers", "hk-p2", "--protocol", "trojan", "--port", "28443", "--security", "tls", "--tag", "batch-tr", "--json")
 		if code != 0 {
 			t.Fatalf("inbound batch plan failed (%d): %s", code, stderr)
 		}

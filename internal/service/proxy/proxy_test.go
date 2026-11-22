@@ -165,7 +165,7 @@ func TestProxyServiceAllCommandsAndPermissions(t *testing.T) {
 
 		// 2. inbound batch plan
 		if _, err := b["inbound batch plan"](adminFull, &command.Invocation{Flags: map[string]any{
-			"servers": []string{"hk-1,jp-land"}, "protocol": "trojan", "port": 28443, "security": "tls",
+			"servers": []string{"hk-1", "jp-land"}, "protocol": "trojan", "port": 28443, "security": "tls",
 		}}); err != nil {
 			t.Fatal(err)
 		}
@@ -269,4 +269,102 @@ func mustCall(t *testing.T, fn command.Handler, ctx context.Context, inv *comman
 func itoa(n int64) string {
 	b, _ := json.Marshal(n)
 	return string(b)
+}
+
+func TestBatchPlanServersArraySemantics(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		st := store.New(bdb, schema.Default())
+		srvRepo := coreservers.New(bdb, st)
+		inRepo := coreinbounds.New(bdb, st)
+		setRepo := coresettings.New(bdb, st, schema.Default())
+		if err := setRepo.EnsureSingleton(ctx); err != nil {
+			t.Fatal(err)
+		}
+		planner := &stubPlanner{}
+		svc := New(Deps{
+			Servers:  srvRepo,
+			Inbounds: inRepo,
+			Settings: setRepo,
+			Planner:  planner,
+		})
+		b := svc.Bindings()
+		admin := v1.WithIdentity(ctx, v1.LocalAdmin("root"))
+
+		sComma, err := srvRepo.CreateWith(admin, coreservers.CreateParams{Name: "hk,1", Mode: coreservers.ModeAuto})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sPlain, err := srvRepo.CreateWith(admin, coreservers.CreateParams{Name: "jp-land", Mode: coreservers.ModeAuto})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		parseServerIDs := func(specJSON string) []int64 {
+			t.Helper()
+			var ops []struct {
+				Spec struct {
+					ServerID int64 `json:"server_id"`
+				} `json:"spec"`
+			}
+			if err := json.Unmarshal([]byte(specJSON), &ops); err != nil {
+				t.Fatalf("unmarshal ops failed: %v (%s)", err, specJSON)
+			}
+			ids := make([]int64, 0, len(ops))
+			for _, op := range ops {
+				ids = append(ids, op.Spec.ServerID)
+			}
+			return ids
+		}
+
+		// 1. 名字带逗号的服务器在 inbound batch plan 与 outbound batch plan 中都能按原样匹配，并按 ID 去重。
+		if _, err := b["inbound batch plan"](admin, &command.Invocation{Flags: map[string]any{
+			"servers": []string{"hk,1", itoa(sComma.Metadata.ID), "jp-land"}, "protocol": "trojan", "port": 28443, "security": "tls",
+		}}); err != nil {
+			t.Fatalf("inbound batch plan should match comma server name verbatim: %v", err)
+		}
+		gotIn := parseServerIDs(planner.lastSpec)
+		if len(gotIn) != 2 || gotIn[0] != sComma.Metadata.ID || gotIn[1] != sPlain.Metadata.ID {
+			t.Fatalf("inbound batch plan expected server IDs [%d %d], got %v", sComma.Metadata.ID, sPlain.Metadata.ID, gotIn)
+		}
+
+		if _, err := b["outbound batch plan"](admin, &command.Invocation{Flags: map[string]any{
+			"servers": []string{"hk,1"}, "tag": "direct-out", "protocol": "direct",
+		}}); err != nil {
+			t.Fatalf("outbound batch plan should match comma server name verbatim: %v", err)
+		}
+		gotOut := parseServerIDs(planner.lastSpec)
+		if len(gotOut) != 1 || gotOut[0] != sComma.Metadata.ID {
+			t.Fatalf("outbound batch plan expected server IDs [%d], got %v", sComma.Metadata.ID, gotOut)
+		}
+
+		// 2. 不再按逗号拆元素：把两台服务器拼成单个逗号串应报 not_found。
+		if _, err := b["inbound batch plan"](admin, &command.Invocation{Flags: map[string]any{
+			"servers": []string{"hk,1,jp-land"}, "protocol": "trojan", "port": 28443, "security": "tls",
+		}}); v1.AsError(err) == nil || v1.AsError(err).Code != v1.CodeNotFound {
+			t.Fatalf("comma-joined --servers should not be split, expected not_found, got %v", err)
+		}
+		if _, err := b["outbound batch plan"](admin, &command.Invocation{Flags: map[string]any{
+			"servers": []string{"hk,1,jp-land"}, "tag": "direct-out", "protocol": "direct",
+		}}); v1.AsError(err) == nil || v1.AsError(err).Code != v1.CodeNotFound {
+			t.Fatalf("comma-joined --servers should not be split for outbound, expected not_found, got %v", err)
+		}
+
+		// 3. 数组与 --all 互斥、空数组、空白项均报 bad_request（与 m2-10 server update batch 一致）。
+		badCases := []struct {
+			name  string
+			flags map[string]any
+		}{
+			{"neither servers nor all", map[string]any{"tag": "direct-out", "protocol": "direct"}},
+			{"servers and all both set", map[string]any{"servers": []string{"hk,1"}, "all": true, "tag": "direct-out", "protocol": "direct"}},
+			{"empty servers with all", map[string]any{"servers": []string{}, "all": true, "tag": "direct-out", "protocol": "direct"}},
+			{"empty servers", map[string]any{"servers": []string{}, "tag": "direct-out", "protocol": "direct"}},
+			{"blank item in servers", map[string]any{"servers": []string{"hk,1", "   "}, "tag": "direct-out", "protocol": "direct"}},
+		}
+		for _, tc := range badCases {
+			if _, err := b["outbound batch plan"](admin, &command.Invocation{Flags: tc.flags}); v1.AsError(err) == nil || v1.AsError(err).Code != v1.CodeBadRequest {
+				t.Fatalf("%s: expected bad_request, got %v", tc.name, err)
+			}
+		}
+	})
 }

@@ -127,7 +127,7 @@ func proxyCommands() []*Command {
 		{Name: "server-name", Type: TypeString, Description: "目标服务器名或 ID（必填）"},
 	}, inboundBuildFlags...)
 	batchInboundFlags := append([]Flag{
-		{Name: "servers", Type: TypeStrings, Description: "目标服务器名或 ID（可重复或逗号分隔；与 --all 二选一）"},
+		{Name: "servers", Type: TypeStrings, Description: "目标服务器名或 ID 列表（每个值为完整服务器名或 ID，与 --all 二选一）"},
 		{Name: "all", Type: TypeBool, Description: "对当前全部服务器批量规划（与 --servers 二选一）"},
 		{Name: "spec", Type: TypeString, Secret: true, Description: "可选：直接提供 Inbound spec 模板 JSON（不传则使用向导参数逐机生成独立密钥）"},
 	}, inboundBuildFlags...)
@@ -203,7 +203,7 @@ func proxyCommands() []*Command {
 			Columns: []string{"id", "batch_id", "server_id", "tag", "protocol", "created_at"}},
 		{Path: []string{"outbound", "batch", "plan"}, Summary: "为多台服务器批量规划出站并生成一份待确认 Plan（提交经 apply 原子落库与记录批次）", Class: ClassConfig,
 			Flags: []Flag{
-				{Name: "servers", Type: TypeStrings, Description: "目标服务器名或 ID（可重复或逗号分隔；与 --all 二选一）"},
+				{Name: "servers", Type: TypeStrings, Description: "目标服务器名或 ID 列表（每个值为完整服务器名或 ID，与 --all 二选一）"},
 				{Name: "all", Type: TypeBool, Description: "对当前全部服务器批量规划（与 --servers 二选一）"},
 				{Name: "tag", Type: TypeString, Description: "出站 tag（必填）"},
 				{Name: "protocol", Type: TypeString, Description: "出站协议（必填）"},

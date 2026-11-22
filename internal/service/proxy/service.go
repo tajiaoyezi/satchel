@@ -126,21 +126,20 @@ func (s *Service) resolveServer(ctx context.Context, ref string) (*coreservers.S
 	return srv, err
 }
 
-// resolveTargetServers 解析 --servers（逗号或可重复列表）与 --all 二选一，返回按 ID 升序去重的目标服务器列表。
-func (s *Service) resolveTargetServers(ctx context.Context, rawList []string, all bool) ([]*coreservers.Server, error) {
-	var names []string
-	for _, entry := range rawList {
-		for _, part := range strings.Split(entry, ",") {
-			if t := strings.TrimSpace(part); t != "" {
-				names = append(names, t)
-			}
+// resolveTargetServers 解析 --servers（字符串数组，每项为完整服务器名或 ID）与 --all 二选一，返回按 ID 升序去重的目标服务器列表。
+func (s *Service) resolveTargetServers(ctx context.Context, inv *command.Invocation) ([]*coreservers.Server, error) {
+	var hasServers bool
+	var rawList []string
+	var all bool
+	if inv != nil {
+		if inv.Flags != nil {
+			_, hasServers = inv.Flags["servers"]
 		}
+		rawList = inv.Strings("servers")
+		all = inv.Bool("all")
 	}
-	if all && len(names) > 0 {
-		return nil, v1.New(v1.CodeBadRequest, "--servers 与 --all 不能同时指定")
-	}
-	if !all && len(names) == 0 {
-		return nil, v1.New(v1.CodeBadRequest, "必须指定 --servers 或 --all 选择目标服务器")
+	if (!hasServers && !all) || (hasServers && all) {
+		return nil, v1.New(v1.CodeBadRequest, "--servers 与 --all 必须且只能选一个")
 	}
 	if all {
 		srvs, err := s.deps.Servers.ListAll(ctx)
@@ -153,9 +152,16 @@ func (s *Service) resolveTargetServers(ctx context.Context, rawList []string, al
 		sort.Slice(srvs, func(i, j int) bool { return srvs[i].Metadata.ID < srvs[j].Metadata.ID })
 		return srvs, nil
 	}
+	if len(rawList) == 0 {
+		return nil, v1.New(v1.CodeBadRequest, "--servers 不能为空")
+	}
 	seen := map[int64]bool{}
-	out := make([]*coreservers.Server, 0, len(names))
-	for _, ref := range names {
+	out := make([]*coreservers.Server, 0, len(rawList))
+	for _, entry := range rawList {
+		ref := strings.TrimSpace(entry)
+		if ref == "" {
+			return nil, v1.New(v1.CodeBadRequest, "--servers 中不能包含空白服务器名")
+		}
 		srv, err := s.resolveServer(ctx, ref)
 		if err != nil {
 			return nil, err
@@ -243,31 +249,4 @@ func newBatchID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return "batch-" + hex.EncodeToString(b[:])
-}
-
-func stringSliceFlag(inv *command.Invocation, name string) []string {
-	if inv == nil || inv.Flags == nil {
-		return nil
-	}
-	v, ok := inv.Flags[name]
-	if !ok || v == nil {
-		return nil
-	}
-	switch x := v.(type) {
-	case []string:
-		return x
-	case string:
-		if strings.TrimSpace(x) != "" {
-			return []string{x}
-		}
-	case []any:
-		out := make([]string, 0, len(x))
-		for _, item := range x {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	return nil
 }

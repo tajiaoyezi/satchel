@@ -350,7 +350,7 @@ func (s *Service) outboundBatchPlan(ctx context.Context, inv *command.Invocation
 	if s.deps.Planner == nil {
 		return nil, v1.New(v1.CodeInternal, "配置计划服务未装配")
 	}
-	targets, err := s.resolveTargetServers(ctx, stringSliceFlag(inv, "servers"), inv.Bool("all"))
+	targets, err := s.resolveTargetServers(ctx, inv)
 	if err != nil {
 		return nil, err
 	}
