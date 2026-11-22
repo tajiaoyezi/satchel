@@ -66,6 +66,7 @@ type evalResult struct {
 	AffectedServers        []int64 // 排序后需要推送配置的已有活跃服务器 ID
 	KernelAffectedServers  map[int64]bool
 	WebsiteAffectedServers map[int64]bool
+	StealAffectedServers   map[int64]bool
 	DeletedServerIDs       map[int64]bool
 	RequiresHuman          bool
 }
@@ -151,6 +152,7 @@ func (s *Service) evaluateOps(ctx context.Context, ops []Operation, checkVersion
 		AffectedCount:          int64(len(ops)),
 		KernelAffectedServers:  map[int64]bool{},
 		WebsiteAffectedServers: map[int64]bool{},
+		StealAffectedServers:   map[int64]bool{},
 		DeletedServerIDs:       map[int64]bool{},
 	}
 	dangerSet := map[v1.Danger]bool{}
@@ -231,6 +233,9 @@ func (s *Service) evaluateOps(ctx context.Context, ops []Operation, checkVersion
 		if err != nil {
 			return nil, err
 		}
+		if sdiff.StealChanged {
+			ev.StealAffectedServers[srvID] = true
+		}
 		ev.Servers = append(ev.Servers, sdiff)
 	}
 
@@ -265,6 +270,20 @@ func (s *Service) evalServer(ctx context.Context, op Operation, checkVersion boo
 		norm, err := coreservers.NormalizeSpec(spec)
 		if err != nil {
 			return evaluatedItem{}, 0, nil, err
+		}
+		if norm.Use443 {
+			if s.isSameHost443Protected(ctx, nil, norm) {
+				return evaluatedItem{}, 0, nil, v1.New(v1.CodeConflict, "主控同机节点禁止启用 use_443（防止抢占主控 HTTPS 443 端口）")
+			}
+			if err := nginx.ValidateStealInput(nginx.StealRenderInput{
+				Domain:    norm.Domain,
+				StealMode: norm.StealMode,
+				SiteType:  norm.SiteType,
+				SiteValue: norm.SiteValue,
+				SameHost:  false,
+			}); err != nil {
+				return evaluatedItem{}, 0, nil, err
+			}
 		}
 		if _, err := s.deps.Servers.ByNameIncludeDeleted(ctx, norm.Name); err == nil {
 			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNameTaken, "Server 名字 %q 已被占用（含保留期内软删除对象）", norm.Name)
@@ -322,6 +341,21 @@ func (s *Service) evalServer(ctx context.Context, op Operation, checkVersion boo
 		norm, err := coreservers.NormalizeSpec(merged)
 		if err != nil {
 			return evaluatedItem{}, 0, nil, err
+		}
+		if norm.Use443 {
+			if s.isSameHost443Protected(ctx, cur, norm) {
+				return evaluatedItem{}, 0, nil, v1.New(v1.CodeConflict, "主控同机节点禁止启用 use_443（防止抢占主控 HTTPS 443 端口）")
+			}
+			if err := nginx.ValidateStealInput(nginx.StealRenderInput{
+				ServerID:  op.ID,
+				Domain:    norm.Domain,
+				StealMode: norm.StealMode,
+				SiteType:  norm.SiteType,
+				SiteValue: norm.SiteValue,
+				SameHost:  false,
+			}); err != nil {
+				return evaluatedItem{}, 0, nil, err
+			}
 		}
 		if norm.Name != cur.Spec.Name {
 			if _, err := s.deps.Servers.ByNameIncludeDeleted(ctx, norm.Name); err == nil {
@@ -397,6 +431,9 @@ func (s *Service) evalServer(ctx context.Context, op Operation, checkVersion boo
 		if checkVersion && cur.Metadata.ResourceVersion != op.ResourceVersion {
 			return evaluatedItem{}, 0, nil, versionConflictErr("Server", op.ResourceVersion, cur.Metadata.ResourceVersion)
 		}
+		if cur.Spec.Use443 && s.isSameHost443Protected(ctx, cur, cur.Spec) {
+			return evaluatedItem{}, 0, nil, v1.New(v1.CodeConflict, "主控同机节点禁止恢复启用 use_443 的服务器（防止抢占主控 HTTPS 443 端口）")
+		}
 		beforeRaw, _, err := marshalRawServerSpec(cur.Spec)
 		if err != nil {
 			return evaluatedItem{}, 0, nil, err
@@ -425,8 +462,12 @@ func (s *Service) evalInbound(ctx context.Context, op Operation, checkVersion bo
 		if err != nil {
 			return evaluatedItem{}, 0, nil, err
 		}
-		if err := s.ensureActiveServer(ctx, norm.ServerID); err != nil {
+		srv, err := s.getActiveServer(ctx, norm.ServerID)
+		if err != nil {
 			return evaluatedItem{}, 0, nil, err
+		}
+		if norm.Enabled && norm.Port == 443 && s.isSameHost443Protected(ctx, srv, srv.Spec) {
+			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeConflict, "主控同机节点禁止启用监听 443 端口的入站 %s（防止抢占主控 HTTPS 443 端口）", norm.Tag)
 		}
 		if _, err := s.deps.Inbounds.ByServerTagIncludeDeleted(ctx, norm.ServerID, norm.Tag); err == nil {
 			return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeNameTaken, "服务器 %d 下的入站 tag %q 已被占用", norm.ServerID, norm.Tag)
@@ -488,6 +529,15 @@ func (s *Service) evalInbound(ctx context.Context, op Operation, checkVersion bo
 		norm, err := coreinbounds.NormalizeSpec(merged)
 		if err != nil {
 			return evaluatedItem{}, 0, nil, err
+		}
+		if norm.Enabled && norm.Port == 443 {
+			srv, err := s.getActiveServer(ctx, norm.ServerID)
+			if err != nil {
+				return evaluatedItem{}, 0, nil, err
+			}
+			if s.isSameHost443Protected(ctx, srv, srv.Spec) {
+				return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeConflict, "主控同机节点禁止启用监听 443 端口的入站 %s（防止抢占主控 HTTPS 443 端口）", norm.Tag)
+			}
 		}
 		if norm.Tag != cur.Spec.Tag {
 			if _, err := s.deps.Inbounds.ByServerTagIncludeDeleted(ctx, norm.ServerID, norm.Tag); err == nil {
@@ -551,6 +601,15 @@ func (s *Service) evalInbound(ctx context.Context, op Operation, checkVersion bo
 		}
 		if checkVersion && cur.Metadata.ResourceVersion != op.ResourceVersion {
 			return evaluatedItem{}, 0, nil, versionConflictErr("Inbound", op.ResourceVersion, cur.Metadata.ResourceVersion)
+		}
+		if cur.Spec.Enabled && cur.Spec.Port == 443 {
+			srv, err := s.getActiveServer(ctx, cur.Spec.ServerID)
+			if err != nil {
+				return evaluatedItem{}, 0, nil, err
+			}
+			if s.isSameHost443Protected(ctx, srv, srv.Spec) {
+				return evaluatedItem{}, 0, nil, v1.Newf(v1.CodeConflict, "主控同机节点禁止恢复启用监听 443 端口的入站 %s（防止抢占主控 HTTPS 443 端口）", cur.Spec.Tag)
+			}
 		}
 		beforeRaw, _, err := marshalRawInboundSpec(cur.Spec)
 		if err != nil {
@@ -1136,6 +1195,7 @@ func (s *Service) simulateServerConfig(ctx context.Context, serverID int64, item
 	}
 
 	afterServer := srv.Spec
+	serverRestored := false
 	var extraIn []v1.InboundSpec
 	var extraOut []v1.OutboundSpec
 	var extraRR []v1.RoutingRuleSpec
@@ -1145,6 +1205,9 @@ func (s *Service) simulateServerConfig(ctx context.Context, serverID int64, item
 		case coreservers.KindName:
 			if it.Op.ID == serverID && it.ServerSpec != nil {
 				afterServer = *it.ServerSpec
+				if it.Op.Op == "restore" {
+					serverRestored = true
+				}
 			}
 		case coreinbounds.KindName:
 			if it.Planned.ServerID != serverID {
@@ -1203,18 +1266,26 @@ func (s *Service) simulateServerConfig(ctx context.Context, serverID int64, item
 	}
 	afterRR = append(afterRR, extraRR...)
 
+	protect443 := s.isSameHost443Protected(ctx, srv, afterServer)
+	if afterServer.Use443 && protect443 {
+		return ServerConfigDiff{}, v1.New(v1.CodeConflict, "主控同机节点禁止启用 use_443（防止抢占主控 HTTPS 443 端口）")
+	}
+
 	afterRendered, err := singbox.Render(singbox.ServerInput{
-		Server:       afterServer,
-		Inbounds:     afterIn,
-		Outbounds:    afterOut,
-		RoutingRules: afterRR,
+		Server:           afterServer,
+		Inbounds:         afterIn,
+		Outbounds:        afterOut,
+		RoutingRules:     afterRR,
+		ProtectMaster443: protect443,
 	})
 	if err != nil {
 		return ServerConfigDiff{}, err
 	}
 
+	// 计算变更后的活跃 Website 集合（既用于 websiteDiffs 预览，也用于校验偷自己域名不与同机 Website 冲突）。
 	var websiteDiffs []WebsiteConfigDiff
-	if websiteAffected && s.deps.Websites != nil {
+	afterWebsiteDomains := map[string]bool{}
+	if (websiteAffected || afterServer.Use443) && s.deps.Websites != nil {
 		ws, err := s.deps.Websites.ListByServer(ctx, serverID)
 		if err != nil {
 			return ServerConfigDiff{}, err
@@ -1253,46 +1324,102 @@ func (s *Service) simulateServerConfig(ctx context.Context, serverID int64, item
 			spec v1.WebsiteSpec
 		}
 		entries := make([]wsEntry, 0, len(byID)+len(extraWS))
-		activeDomains := map[string]bool{}
 		for id, sp := range byID {
 			entries = append(entries, wsEntry{id: id, spec: sp})
-			activeDomains[sp.Domain] = true
+			afterWebsiteDomains[strings.ToLower(strings.TrimSpace(sp.Domain))] = true
 		}
 		for _, sp := range extraWS {
 			entries = append(entries, wsEntry{id: 0, spec: sp})
-			activeDomains[sp.Domain] = true
+			afterWebsiteDomains[strings.ToLower(strings.TrimSpace(sp.Domain))] = true
 		}
-		sort.Slice(entries, func(i, j int) bool {
-			if entries[i].spec.Domain != entries[j].spec.Domain {
-				return entries[i].spec.Domain < entries[j].spec.Domain
+		if websiteAffected {
+			sort.Slice(entries, func(i, j int) bool {
+				if entries[i].spec.Domain != entries[j].spec.Domain {
+					return entries[i].spec.Domain < entries[j].spec.Domain
+				}
+				return entries[i].id < entries[j].id
+			})
+			for _, e := range entries {
+				rs, err := nginx.RenderWebsite(e.id, e.spec, protect443)
+				if err != nil {
+					return ServerConfigDiff{}, err
+				}
+				websiteDiffs = append(websiteDiffs, WebsiteConfigDiff{
+					Domain:   rs.Domain,
+					Action:   "apply",
+					ConfPath: rs.ConfPath,
+					Conf:     rs.Conf,
+				})
 			}
-			return entries[i].id < entries[j].id
+			removedDomains := make([]string, 0, len(removedSet))
+			for d := range removedSet {
+				if !afterWebsiteDomains[strings.ToLower(strings.TrimSpace(d))] {
+					removedDomains = append(removedDomains, d)
+				}
+			}
+			sort.Strings(removedDomains)
+			for _, d := range removedDomains {
+				websiteDiffs = append(websiteDiffs, WebsiteConfigDiff{
+					Domain:   d,
+					Action:   "remove",
+					ConfPath: nginx.ManagedConfPath(d),
+				})
+			}
+		}
+	}
+
+	// 计算偷自己本地 nginx 预览（启停 use_443、变更伪装站/域名/模式/IPv6 或变更 use_443=true 服务器的 WS 入站）。
+	stealChanged := false
+	var stealConfig *WebsiteConfigDiff
+	if afterServer.Use443 {
+		normDom := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(afterServer.Domain), "."))
+		if afterWebsiteDomains[normDom] {
+			return ServerConfigDiff{}, v1.Newf(v1.CodeConflict, "服务器 %s 偷自己域名 %q 与同机已有 Website 域名冲突", afterServer.Name, afterServer.Domain)
+		}
+		afterSteal, err := nginx.RenderStealSite(nginx.StealRenderInput{
+			ServerID:     serverID,
+			Domain:       afterServer.Domain,
+			StealMode:    afterServer.StealMode,
+			SiteType:     afterServer.SiteType,
+			SiteValue:    afterServer.SiteValue,
+			Ipv6Enabled:  afterServer.Ipv6Enabled,
+			SameHost:     protect443,
+			WSSLocations: nginx.ExtractWSSLocations(afterIn),
 		})
-		for _, e := range entries {
-			rs, err := nginx.RenderWebsite(e.id, e.spec, srv.Status.SameHostAsMaster)
-			if err != nil {
-				return ServerConfigDiff{}, err
+		if err != nil {
+			return ServerConfigDiff{}, err
+		}
+		if !srv.Spec.Use443 || serverRestored {
+			stealChanged = true
+		} else {
+			beforeSteal, berr := nginx.RenderStealSite(nginx.StealRenderInput{
+				ServerID:     serverID,
+				Domain:       srv.Spec.Domain,
+				StealMode:    srv.Spec.StealMode,
+				SiteType:     srv.Spec.SiteType,
+				SiteValue:    srv.Spec.SiteValue,
+				Ipv6Enabled:  srv.Spec.Ipv6Enabled,
+				SameHost:     false,
+				WSSLocations: nginx.ExtractWSSLocations(beforeIn),
+			})
+			if berr != nil || beforeSteal.Conf != afterSteal.Conf || beforeSteal.HTMLContent != afterSteal.HTMLContent {
+				stealChanged = true
 			}
-			websiteDiffs = append(websiteDiffs, WebsiteConfigDiff{
-				Domain:   rs.Domain,
+		}
+		if stealChanged {
+			stealConfig = &WebsiteConfigDiff{
+				Domain:   afterSteal.Domain,
 				Action:   "apply",
-				ConfPath: rs.ConfPath,
-				Conf:     rs.Conf,
-			})
-		}
-		removedDomains := make([]string, 0, len(removedSet))
-		for d := range removedSet {
-			if !activeDomains[d] {
-				removedDomains = append(removedDomains, d)
+				ConfPath: afterSteal.ConfPath,
+				Conf:     afterSteal.Conf,
 			}
 		}
-		sort.Strings(removedDomains)
-		for _, d := range removedDomains {
-			websiteDiffs = append(websiteDiffs, WebsiteConfigDiff{
-				Domain:   d,
-				Action:   "remove",
-				ConfPath: nginx.ManagedConfPath(d),
-			})
+	} else if srv.Spec.Use443 && !afterServer.Use443 {
+		stealChanged = true
+		stealConfig = &WebsiteConfigDiff{
+			Domain:   strings.ToLower(strings.TrimSpace(srv.Spec.Domain)),
+			Action:   "remove",
+			ConfPath: nginx.ManagedStealConfPath(),
 		}
 	}
 
@@ -1314,6 +1441,8 @@ func (s *Service) simulateServerConfig(ctx context.Context, serverID int64, item
 		AfterConfig:         string(afterRendered.Pretty),
 		WebsiteChanged:      websiteAffected,
 		Websites:            websiteDiffs,
+		StealChanged:        stealChanged,
+		StealConfig:         stealConfig,
 	}, nil
 }
 

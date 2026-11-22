@@ -275,70 +275,33 @@ func (s *Service) applyCmd(ctx context.Context, inv *command.Invocation) (any, e
 			Status:     "unchanged",
 		}
 		srvFailed := false
+		sd := sdiffByID[srvID]
+		needKernel := ev.KernelAffectedServers[srvID]
+		needWebsite := ev.WebsiteAffectedServers[srvID]
+		needSteal := ev.StealAffectedServers[srvID]
+		needNginx := needWebsite || needSteal
 
-		if ev.KernelAffectedServers[srvID] {
-			rendered, err := s.RenderServerConfig(ctx, srvID)
-			if err != nil {
+		// 下发顺序：开启或维持偷自己（use_443=true）时先同步 nginx 确保 127.0.0.1:8001 就绪再推内核；
+		// 关闭偷自己（use_443=false）或其他场景先推内核释放 443 再同步/清理 nginx。
+		if needSteal && srv.Spec.Use443 {
+			if err := s.syncServerWebsites(ctx, srv, ev.Items, needWebsite, needSteal, &srvRes); err != nil {
 				srvFailed = true
-				srvRes.Status = "failed"
-				srvRes.Code = string(v1.AsError(err).Code)
-				srvRes.Error = v1.AsError(err).Reason
-			} else {
-				sd := sdiffByID[srvID]
-				if !sd.ConfigChanged && srv.Status.AppliedHash != "" && srv.Status.AppliedHash == rendered.Hash {
-					srvRes.AppliedHash = srv.Status.AppliedHash
-					srvRes.Generation = uint64(srv.Status.AppliedGeneration)
-					srvRes.Inbounds = rendered.Inbounds
-				} else if s.deps.Nodes == nil {
+			}
+			if !srvFailed && needKernel {
+				if !s.pushKernelConfig(ctx, srv, sd, applyID, &srvRes) {
 					srvFailed = true
-					srvRes.Status = "failed"
-					srvRes.Code = string(v1.CodeUnavailable)
-					srvRes.Error = "节点通道未装配"
-				} else {
-					params := xrpc.ConfigApplyParams{
-						Config:  string(rendered.Pretty),
-						ApplyID: applyID,
-					}
-					if srv.Status.AppliedHash == "" || srv.Status.FirstApplyEligible {
-						params.ForceInitial = true
-					} else {
-						params.ExpectedCurrentHash = srv.Status.AppliedHash
-					}
-					res, callErr := s.deps.Nodes.CallConfigApply(ctx, srvID, params)
-					if callErr != nil {
-						ae := v1.AsError(callErr)
-						srvFailed = true
-						srvRes.Status = "failed"
-						srvRes.Code = string(ae.Code)
-						srvRes.Error = ae.Reason
-					} else if !res.Applied {
-						srvFailed = true
-						srvRes.Status = "failed"
-						srvRes.Code = string(v1.CodeInternal)
-						srvRes.Error = res.Error
-						srvRes.RolledBack = res.RolledBack
-						srvRes.RollbackError = res.RollbackError
-						srvRes.CurrentHash = res.CurrentHash
-					} else if err := s.deps.Servers.MarkAppliedConfig(ctx, srvID, res.AppliedHash, int64(res.Generation)); err != nil {
-						srvFailed = true
-						srvRes.Status = "failed"
-						srvRes.Code = string(v1.AsError(err).Code)
-						srvRes.Error = "节点已应用配置但更新主控 applied_hash 失败：" + v1.AsError(err).Reason
-						srvRes.AppliedHash = res.AppliedHash
-						srvRes.Generation = res.Generation
-					} else {
-						srvRes.Status = "applied"
-						srvRes.AppliedHash = res.AppliedHash
-						srvRes.Generation = res.Generation
-						srvRes.Inbounds = res.Inbounds
-					}
 				}
 			}
-		}
-
-		if !srvFailed && ev.WebsiteAffectedServers[srvID] {
-			if err := s.syncServerWebsites(ctx, srv, ev.Items, &srvRes); err != nil {
-				srvFailed = true
+		} else {
+			if needKernel {
+				if !s.pushKernelConfig(ctx, srv, sd, applyID, &srvRes) {
+					srvFailed = true
+				}
+			}
+			if !srvFailed && needNginx {
+				if err := s.syncServerWebsites(ctx, srv, ev.Items, needWebsite, needSteal, &srvRes); err != nil {
+					srvFailed = true
+				}
 			}
 		}
 
@@ -622,31 +585,91 @@ func (s *Service) checkLiveSameHostNginx(ctx context.Context, plannedObjs []Plan
 	return false, nil
 }
 
-func (s *Service) syncServerWebsites(ctx context.Context, srv *coreservers.Server, items []evaluatedItem, srvRes *ServerApplyResult) error {
-	if s.deps.Websites == nil {
+func (s *Service) pushKernelConfig(ctx context.Context, srv *coreservers.Server, sd ServerConfigDiff, applyID string, srvRes *ServerApplyResult) bool {
+	srvID := srv.Metadata.ID
+	rendered, err := s.RenderServerConfig(ctx, srvID)
+	if err != nil {
+		srvRes.Status = "failed"
+		srvRes.Code = string(v1.AsError(err).Code)
+		srvRes.Error = v1.AsError(err).Reason
+		return false
+	}
+	if !sd.ConfigChanged && srv.Status.AppliedHash != "" && srv.Status.AppliedHash == rendered.Hash {
+		srvRes.AppliedHash = srv.Status.AppliedHash
+		srvRes.Generation = uint64(srv.Status.AppliedGeneration)
+		srvRes.Inbounds = rendered.Inbounds
+		return true
+	}
+	if s.deps.Nodes == nil {
+		srvRes.Status = "failed"
+		srvRes.Code = string(v1.CodeUnavailable)
+		srvRes.Error = "节点通道未装配"
+		return false
+	}
+	params := xrpc.ConfigApplyParams{
+		Config:           string(rendered.Pretty),
+		ApplyID:          applyID,
+		ProtectMaster443: s.isSameHost443Protected(ctx, srv, srv.Spec),
+	}
+	if srv.Status.AppliedHash == "" || srv.Status.FirstApplyEligible {
+		params.ForceInitial = true
+	} else {
+		params.ExpectedCurrentHash = srv.Status.AppliedHash
+	}
+	res, callErr := s.deps.Nodes.CallConfigApply(ctx, srvID, params)
+	if callErr != nil {
+		ae := v1.AsError(callErr)
+		srvRes.Status = "failed"
+		srvRes.Code = string(ae.Code)
+		srvRes.Error = ae.Reason
+		return false
+	}
+	if !res.Applied {
 		srvRes.Status = "failed"
 		srvRes.Code = string(v1.CodeInternal)
-		srvRes.Error = "Website 仓储未装配"
-		return v1.New(v1.CodeInternal, srvRes.Error)
+		srvRes.Error = res.Error
+		srvRes.RolledBack = res.RolledBack
+		srvRes.RollbackError = res.RollbackError
+		srvRes.CurrentHash = res.CurrentHash
+		return false
 	}
+	if err := s.deps.Servers.MarkAppliedConfig(ctx, srvID, res.AppliedHash, int64(res.Generation)); err != nil {
+		srvRes.Status = "failed"
+		srvRes.Code = string(v1.AsError(err).Code)
+		srvRes.Error = "节点已应用配置但更新主控 applied_hash 失败：" + v1.AsError(err).Reason
+		srvRes.AppliedHash = res.AppliedHash
+		srvRes.Generation = res.Generation
+		return false
+	}
+	srvRes.Status = "applied"
+	srvRes.AppliedHash = res.AppliedHash
+	srvRes.Generation = res.Generation
+	srvRes.Inbounds = res.Inbounds
+	return true
+}
+
+func (s *Service) syncServerWebsites(ctx context.Context, srv *coreservers.Server, items []evaluatedItem, websiteAffected, stealChanged bool, srvRes *ServerApplyResult) error {
 	if s.deps.WebsiteNodes == nil {
 		srvRes.Status = "failed"
 		srvRes.Code = string(v1.CodeUnavailable)
 		srvRes.Error = "节点网站同步通道未装配"
 		return v1.New(v1.CodeUnavailable, srvRes.Error)
 	}
-	active, err := s.deps.Websites.ListByServer(ctx, srv.Metadata.ID)
-	if err != nil {
-		ae := v1.AsError(err)
-		srvRes.Status = "failed"
-		srvRes.Code = string(ae.Code)
-		srvRes.Error = ae.Reason
-		return err
-	}
-	files := make([]xrpc.ManagedWebsiteFile, 0, len(active))
-	idByDomain := make(map[string]int64, len(active))
-	for _, w := range active {
-		rs, err := nginx.RenderWebsite(w.Metadata.ID, w.Spec, srv.Status.SameHostAsMaster)
+	protect443 := s.isSameHost443Protected(ctx, srv, srv.Spec)
+
+	files := []xrpc.ManagedWebsiteFile{}
+	idByDomain := map[string]int64{}
+	var removeDomains []string
+	var deletedIDs []int64
+
+	if websiteAffected {
+		if s.deps.Websites == nil {
+			srvRes.Status = "failed"
+			srvRes.Code = string(v1.CodeInternal)
+			srvRes.Error = "Website 仓储未装配"
+			return v1.New(v1.CodeInternal, srvRes.Error)
+		}
+		active, err := s.deps.Websites.ListByServer(ctx, srv.Metadata.ID)
 		if err != nil {
 			ae := v1.AsError(err)
 			srvRes.Status = "failed"
@@ -654,40 +677,93 @@ func (s *Service) syncServerWebsites(ctx context.Context, srv *coreservers.Serve
 			srvRes.Error = ae.Reason
 			return err
 		}
-		files = append(files, xrpc.ManagedWebsiteFile{
-			Domain:      rs.Domain,
-			Conf:        rs.Conf,
-			HTMLPath:    rs.HTMLPath,
-			HTMLContent: rs.HTMLContent,
-		})
-		idByDomain[rs.Domain] = w.Metadata.ID
-	}
-	removeSet := map[string]bool{}
-	var deletedIDs []int64
-	for _, it := range items {
-		if it.Op.Kind != corewebsites.KindName || it.Planned.ServerID != srv.Metadata.ID {
-			continue
+		files = make([]xrpc.ManagedWebsiteFile, 0, len(active))
+		for _, w := range active {
+			rs, err := nginx.RenderWebsite(w.Metadata.ID, w.Spec, protect443)
+			if err != nil {
+				ae := v1.AsError(err)
+				srvRes.Status = "failed"
+				srvRes.Code = string(ae.Code)
+				srvRes.Error = ae.Reason
+				return err
+			}
+			files = append(files, xrpc.ManagedWebsiteFile{
+				Domain:      rs.Domain,
+				Conf:        rs.Conf,
+				HTMLPath:    rs.HTMLPath,
+				HTMLContent: rs.HTMLContent,
+			})
+			idByDomain[rs.Domain] = w.Metadata.ID
 		}
-		if it.WebsiteRemovedDomain != "" {
-			if _, stillActive := idByDomain[it.WebsiteRemovedDomain]; !stillActive {
-				removeSet[it.WebsiteRemovedDomain] = true
+		removeSet := map[string]bool{}
+		for _, it := range items {
+			if it.Op.Kind != corewebsites.KindName || it.Planned.ServerID != srv.Metadata.ID {
+				continue
+			}
+			if it.WebsiteRemovedDomain != "" {
+				if _, stillActive := idByDomain[it.WebsiteRemovedDomain]; !stillActive {
+					removeSet[it.WebsiteRemovedDomain] = true
+				}
+			}
+			if it.Op.Op == "delete" && it.Op.ID > 0 {
+				deletedIDs = append(deletedIDs, it.Op.ID)
 			}
 		}
-		if it.Op.Op == "delete" && it.Op.ID > 0 {
-			deletedIDs = append(deletedIDs, it.Op.ID)
+		removeDomains = make([]string, 0, len(removeSet))
+		for d := range removeSet {
+			removeDomains = append(removeDomains, d)
 		}
+		sort.Strings(removeDomains)
 	}
-	removeDomains := make([]string, 0, len(removeSet))
-	for d := range removeSet {
-		removeDomains = append(removeDomains, d)
-	}
-	sort.Strings(removeDomains)
 
-	res, callErr := s.deps.WebsiteNodes.CallNginxWebsitesApply(ctx, srv.Metadata.ID, xrpc.NginxWebsitesApplyParams{
+	params := xrpc.NginxWebsitesApplyParams{
 		Sites:            files,
 		RemoveDomains:    removeDomains,
-		ProtectMaster443: srv.Status.SameHostAsMaster,
-	})
+		ProtectMaster443: protect443,
+	}
+	if stealChanged {
+		if srv.Spec.Use443 {
+			ibs, err := s.deps.Inbounds.ListByServer(ctx, srv.Metadata.ID)
+			if err != nil {
+				ae := v1.AsError(err)
+				srvRes.Status = "failed"
+				srvRes.Code = string(ae.Code)
+				srvRes.Error = ae.Reason
+				return err
+			}
+			inSpecs := make([]v1.InboundSpec, len(ibs))
+			for i, x := range ibs {
+				inSpecs[i] = x.Spec
+			}
+			rs, err := nginx.RenderStealSite(nginx.StealRenderInput{
+				ServerID:     srv.Metadata.ID,
+				Domain:       srv.Spec.Domain,
+				StealMode:    srv.Spec.StealMode,
+				SiteType:     srv.Spec.SiteType,
+				SiteValue:    srv.Spec.SiteValue,
+				Ipv6Enabled:  srv.Spec.Ipv6Enabled,
+				SameHost:     protect443,
+				WSSLocations: nginx.ExtractWSSLocations(inSpecs),
+			})
+			if err != nil {
+				ae := v1.AsError(err)
+				srvRes.Status = "failed"
+				srvRes.Code = string(ae.Code)
+				srvRes.Error = ae.Reason
+				return err
+			}
+			params.StealSite = &xrpc.ManagedWebsiteFile{
+				Domain:      rs.Domain,
+				Conf:        rs.Conf,
+				HTMLPath:    rs.HTMLPath,
+				HTMLContent: rs.HTMLContent,
+			}
+		} else {
+			params.RemoveSteal = true
+		}
+	}
+
+	res, callErr := s.deps.WebsiteNodes.CallNginxWebsitesApply(ctx, srv.Metadata.ID, params)
 	if callErr != nil {
 		ae := v1.AsError(callErr)
 		srvRes.Status = "failed"
@@ -706,25 +782,32 @@ func (s *Service) syncServerWebsites(ctx context.Context, srv *coreservers.Serve
 		srvRes.RollbackError = res.RollbackError
 		return v1.New(v1.CodeInternal, srvRes.Error)
 	}
-	appliedDomains := make([]string, 0, len(res.Applied))
-	for _, f := range res.Applied {
-		appliedDomains = append(appliedDomains, f.Domain)
-		if wid, ok := idByDomain[f.Domain]; ok {
-			if err := s.deps.Websites.UpdateManagedStatus(ctx, wid, true, f.ConfPath); err != nil {
-				ae := v1.AsError(err)
-				srvRes.Status = "failed"
-				srvRes.Code = string(ae.Code)
-				srvRes.Error = "节点 nginx 站点已生效但回写 managed/conf_path 失败：" + ae.Reason
-				return err
+	if websiteAffected {
+		appliedDomains := make([]string, 0, len(res.Applied))
+		for _, f := range res.Applied {
+			appliedDomains = append(appliedDomains, f.Domain)
+			if wid, ok := idByDomain[f.Domain]; ok {
+				if err := s.deps.Websites.UpdateManagedStatus(ctx, wid, true, f.ConfPath); err != nil {
+					ae := v1.AsError(err)
+					srvRes.Status = "failed"
+					srvRes.Code = string(ae.Code)
+					srvRes.Error = "节点 nginx 站点已生效但回写 managed/conf_path 失败：" + ae.Reason
+					return err
+				}
 			}
 		}
+		for _, delID := range deletedIDs {
+			_ = s.deps.Websites.UpdateManagedStatus(ctx, delID, false, "")
+		}
+		sort.Strings(appliedDomains)
+		srvRes.WebsitesApplied = appliedDomains
+		srvRes.WebsitesRemoved = res.Removed
 	}
-	for _, delID := range deletedIDs {
-		_ = s.deps.Websites.UpdateManagedStatus(ctx, delID, false, "")
+	if stealChanged {
+		srvRes.StealApplied = res.StealApplied
+		srvRes.StealRemoved = res.StealRemoved
+		srvRes.StealConfPath = res.StealConfPath
 	}
-	sort.Strings(appliedDomains)
-	srvRes.WebsitesApplied = appliedDomains
-	srvRes.WebsitesRemoved = res.Removed
 	srvRes.NginxReloaded = res.Reloaded
 	srvRes.Status = "applied"
 	return nil

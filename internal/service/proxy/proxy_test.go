@@ -271,6 +271,125 @@ func itoa(n int64) string {
 	return string(b)
 }
 
+func TestInboundBuildAutoPortAndStealModeDefaults(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		st := store.New(bdb, schema.Default())
+		setRepo := coresettings.New(bdb, st, schema.Default())
+		if err := setRepo.EnsureSingleton(ctx); err != nil {
+			t.Fatal(err)
+		}
+		srvRepo := coreservers.New(bdb, st)
+		inRepo := coreinbounds.New(bdb, st)
+		rrRepo := corerouting.New(bdb, st)
+		svc := New(Deps{
+			Servers:      srvRepo,
+			Inbounds:     inRepo,
+			RoutingRules: rrRepo,
+			Settings:     setRepo,
+		})
+		admin := v1.WithIdentity(ctx, v1.LocalAdmin("root"))
+		b := svc.Bindings()
+
+		// 1. fallback 偷自己服务器：省略 --port 自动选 443 + sni + handshake 127.0.0.1:8001。
+		fbSrv, err := srvRepo.Create(ctx, "hk-fb", coreservers.ModeAuto)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fbSpec := fbSrv.Spec
+		fbSpec.Use443 = true
+		fbSpec.StealMode = "fallback"
+		fbSpec.Domain = "fb.example.com"
+		if err := bdb.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+			_, err := srvRepo.UpdateSpecTx(ctx, tx, fbSrv.Metadata.ID, fbSrv.Metadata.ResourceVersion, false, fbSpec)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		fbRes := mustCall(t, b["inbound build"], admin, &command.Invocation{Flags: map[string]any{
+			"server-name": "hk-fb",
+			"protocol":    "vless",
+			"security":    "reality",
+		}}).(map[string]any)
+		fbOut := fbRes["spec"].(map[string]any)
+		if fbOut["port"].(int64) != 443 || fbOut["listen"].(string) != "" {
+			t.Fatalf("fallback 模式期望 port=443 listen=\"\"，实际：%v", fbOut)
+		}
+		tlsStr := string(fbOut["tls"].(json.RawMessage))
+		if !strings.Contains(tlsStr, `"server_name":"fb.example.com"`) || !strings.Contains(tlsStr, `"server":"127.0.0.1"`) || !strings.Contains(tlsStr, `"server_port":8001`) {
+			t.Fatalf("fallback 模式未填充偷自己 sni/handshake：%s", tlsStr)
+		}
+
+		// 2. tunnel 偷自己服务器：省略 --port 自动在 31000..31010 选空闲端口 + listen 127.0.0.1 + sni + handshake 127.0.0.1:8001。
+		tunSrv, err := srvRepo.Create(ctx, "hk-tun", coreservers.ModeAuto)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tunSpec := tunSrv.Spec
+		tunSpec.Use443 = true
+		tunSpec.StealMode = "tunnel"
+		tunSpec.Domain = "tun.example.com"
+		tunSpec.PortRangeMin = 31000
+		tunSpec.PortRangeMax = 31010
+		if err := bdb.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+			_, err := srvRepo.UpdateSpecTx(ctx, tx, tunSrv.Metadata.ID, tunSrv.Metadata.ResourceVersion, false, tunSpec)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		tunRes := mustCall(t, b["inbound build"], admin, &command.Invocation{Flags: map[string]any{
+			"server-name": "hk-tun",
+			"protocol":    "vless",
+			"security":    "reality",
+		}}).(map[string]any)
+		tunOut := tunRes["spec"].(map[string]any)
+		tunPort := tunOut["port"].(int64)
+		if tunPort < 31000 || tunPort > 31010 || tunOut["listen"].(string) != "127.0.0.1" {
+			t.Fatalf("tunnel 模式期望 31000..31010 且 listen=127.0.0.1，实际：%v", tunOut)
+		}
+		tunTLS := string(tunOut["tls"].(json.RawMessage))
+		if !strings.Contains(tunTLS, `"server_name":"tun.example.com"`) || !strings.Contains(tunTLS, `"server_port":8001`) {
+			t.Fatalf("tunnel 模式未填充偷自己 sni/handshake：%s", tunTLS)
+		}
+
+		// 3. 同机节点禁止显式或自动分配 443。
+		localSrv, err := srvRepo.Create(ctx, "local-build", coreservers.ModeAuto)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := srvRepo.SetSameHost(ctx, localSrv.Metadata.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		localSpec := localSrv.Spec
+		localSpec.PortRangeMin = 443
+		localSpec.PortRangeMax = 444
+		if err := bdb.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+			_, err := srvRepo.UpdateSpecTx(ctx, tx, localSrv.Metadata.ID, localSrv.Metadata.ResourceVersion, false, localSpec)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b["inbound build"](admin, &command.Invocation{Flags: map[string]any{
+			"server-name": "local-build", "protocol": "vless", "port": 443, "security": "reality", "sni": "www.microsoft.com",
+		}}); err == nil || v1.AsError(err).Code != v1.CodeConflict {
+			t.Fatalf("同机节点显式 443 应报 conflict，得到：%v", err)
+		}
+		localRes := mustCall(t, b["inbound build"], admin, &command.Invocation{Flags: map[string]any{
+			"server-name": "local-build", "protocol": "vless", "security": "reality", "sni": "www.microsoft.com",
+		}}).(map[string]any)
+		if p := localRes["spec"].(map[string]any)["port"].(int64); p != 444 {
+			t.Fatalf("同机节点端口范围 443..444 应跳过 443 并分配 444，实际 %d", p)
+		}
+
+		// 4. 非法负端口报 bad_request。
+		if _, err := b["inbound build"](admin, &command.Invocation{Flags: map[string]any{
+			"server-name": "hk-fb", "protocol": "vless", "port": -5,
+		}}); err == nil || v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Fatalf("负端口应报 bad_request，得到：%v", err)
+		}
+	})
+}
+
 func TestBatchPlanServersArraySemantics(t *testing.T) {
 	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
 		ctx := context.Background()

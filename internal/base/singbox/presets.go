@@ -3,7 +3,9 @@ package singbox
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode"
 
 	v1 "github.com/satchel/satchel/pkg/api/v1"
 )
@@ -129,7 +131,7 @@ var deprecatedRoutingKeys = map[string]string{
 	"user":    `sing-box 中 "user" 表示本地 OS 进程用户名，按代理入站凭据名匹配请使用 "auth_user"`,
 }
 
-// ValidateRoutingMatch 校验路由规则 match JSON 对象是否合法且不含已废弃的 sing-box 键。
+// ValidateRoutingMatch 校验路由规则 match JSON 对象是否合法、不含已废弃的 sing-box 键，且 override_address/override_port 合法。
 func ValidateRoutingMatch(raw json.RawMessage) error {
 	obj, err := decodeOptionalObject(raw, "RoutingRule.spec.match")
 	if err != nil {
@@ -140,7 +142,54 @@ func ValidateRoutingMatch(raw json.RawMessage) error {
 			return v1.New(v1.CodeBadRequest, hint)
 		}
 	}
+	if rawAddr, exists := obj["override_address"]; exists {
+		addr, ok := rawAddr.(string)
+		if !ok {
+			return v1.New(v1.CodeBadRequest, "RoutingRule.spec.match.override_address 必须是非空字符串")
+		}
+		trimmed := strings.TrimSpace(addr)
+		if trimmed == "" {
+			return v1.New(v1.CodeBadRequest, "RoutingRule.spec.match.override_address 不能为空")
+		}
+		for _, r := range trimmed {
+			if unicode.IsSpace(r) || r < 0x20 || r == 0x7f {
+				return v1.Newf(v1.CodeBadRequest, "RoutingRule.spec.match.override_address %q 不能包含空白或控制字符", addr)
+			}
+		}
+	}
+	if rawPort, exists := obj["override_port"]; exists {
+		port, ok := parseExactPortInt(rawPort)
+		if !ok || port < 1 || port > 65535 {
+			return v1.Newf(v1.CodeBadRequest, "RoutingRule.spec.match.override_port %v 必须是 1..65535 的整数", rawPort)
+		}
+	}
 	return nil
+}
+
+func parseExactPortInt(v any) (int, bool) {
+	switch x := v.(type) {
+	case json.Number:
+		s := strings.TrimSpace(string(x))
+		if s == "" || strings.ContainsAny(s, ".eE") {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return int(n), true
+	case int:
+		return x, true
+	case int64:
+		return int(x), true
+	case float64:
+		if float64(int(x)) != x {
+			return 0, false
+		}
+		return int(x), true
+	default:
+		return 0, false
+	}
 }
 
 // RoutingRuleInput 是路由遮蔽分析的输入行（按 sort_order ASC, id ASC 排序）。

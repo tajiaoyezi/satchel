@@ -16,10 +16,11 @@ import (
 
 // ServerInput 是单台服务器渲染 kernel.json 所需的只读输入快照。
 type ServerInput struct {
-	Server       v1.ServerSpec
-	Inbounds     []v1.InboundSpec
-	Outbounds    []v1.OutboundSpec
-	RoutingRules []v1.RoutingRuleSpec
+	Server           v1.ServerSpec
+	Inbounds         []v1.InboundSpec
+	Outbounds        []v1.OutboundSpec
+	RoutingRules     []v1.RoutingRuleSpec
+	ProtectMaster443 bool
 }
 
 // Rendered 是确定性渲染结果：Canonical 为紧凑字典序 JSON，Pretty 为 2 空格缩进的可读 JSON，
@@ -77,18 +78,26 @@ func Render(in ServerInput) (*Rendered, error) {
 		net    string // "tcp" | "udp" | "both"
 	}
 	var binds []portBind
+	seenInTags := make(map[string]bool, len(sortedIn))
 
 	for _, ib := range sortedIn {
+		if seenInTags[ib.Tag] {
+			return nil, v1.Newf(v1.CodeBadRequest, "入站 tag %q 重复", ib.Tag)
+		}
+		seenInTags[ib.Tag] = true
+		if in.ProtectMaster443 && ib.Port == 443 {
+			return nil, v1.Newf(v1.CodeConflict, "主控同机节点禁止启用监听 443 端口的入站 %s（防止抢占主控 HTTPS 443 端口）", ib.Tag)
+		}
 		if err := ValidateInboundSpec(ib); err != nil {
 			return nil, err
 		}
 		entry := map[string]any{}
-		if settingsObj, err := decodeOptionalObject(ib.Settings.Reveal(), "inbound.settings"); err != nil {
+		settingsObj, err := decodeOptionalObject(ib.Settings.Reveal(), "inbound.settings")
+		if err != nil {
 			return nil, fmt.Errorf("入站 %s: %w", ib.Tag, err)
-		} else {
-			for k, v := range settingsObj {
-				entry[k] = v
-			}
+		}
+		for k, v := range settingsObj {
+			entry[k] = v
 		}
 		listen := strings.TrimSpace(ib.Listen)
 		if listen == "" {
@@ -98,7 +107,7 @@ func Render(in ServerInput) (*Rendered, error) {
 				listen = "0.0.0.0"
 			}
 		}
-		curNet := inboundTransportNet(ib.Protocol)
+		curNet := inboundTransportNet(ib.Protocol, settingsObj)
 		for _, prev := range binds {
 			if prev.port == ib.Port && listensOverlap(prev.listen, listen) && netsOverlap(prev.net, curNet) {
 				return nil, v1.Newf(v1.CodeBadRequest, "入站 %s 与入站 %s 在 %s:%d 存在端口冲突", ib.Tag, prev.tag, listen, ib.Port)
@@ -395,11 +404,13 @@ func stripRealityPublicKey(tlsObj map[string]any) {
 	delete(realMap, "public_key")
 }
 
-func inboundTransportNet(protocol string) string {
+func inboundTransportNet(protocol string, settingsObj map[string]any) string {
 	switch strings.ToLower(strings.TrimSpace(protocol)) {
 	case "hysteria", "hysteria2", "tuic":
 		return "udp"
-	case "shadowsocks", "direct", "socks", "mixed":
+	case "direct":
+		return directNetFromSettings(settingsObj)
+	case "shadowsocks", "socks", "mixed":
 		return "both"
 	default:
 		return "tcp"

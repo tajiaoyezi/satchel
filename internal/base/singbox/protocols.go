@@ -257,6 +257,15 @@ func ValidateInboundSpec(spec v1.InboundSpec) error {
 		}
 	}
 
+	// direct 入站校验 settings.network 仅允许省略、"tcp"、"udp" 或 ["tcp","udp"]（拒绝非法 "tcp,udp" 字符串）。
+	if proto == "direct" {
+		if rawNet, exists := settingsObj["network"]; exists {
+			if err := validateDirectNetworkValue(spec.Tag, rawNet); err != nil {
+				return err
+			}
+		}
+	}
+
 	// SS2022 校验算法名（若给出 2022- 前缀则校验合法算法名）
 	if proto == "shadowsocks" {
 		if method, _ := settingsObj["method"].(string); strings.HasPrefix(method, "2022-") {

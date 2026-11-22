@@ -11,7 +11,7 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 
 - 加一台：`satchel server add <名字>`（可选参数 `--mode <模式>`、`--domain`、`--domain-v6`、`--listen-port`、`--pull-address`、`--pull-address-v6`、`--pull-port`）。它属于配置类，令牌要有日常运维权限（`operate`）；名字不能和已有的重复（重复时是 `name_taken`）。
 - `--mode` 支持 `auto`、`websocket`、`http`、`pull`（省略时默认是 `auto`：WebSocket 优先 → 加密 HTTP 上报 → 轮询兜底）；建机时一次生成 `token`（节点上行认证）、`agent_token`（主控管理节点口，默认 `23889`）与 `pull_token`（主控只读轮询口，默认 `23890`）三把互不相同的 43 字符凭据。`pull` 模式必须至少提供一个可达地址。
-- 服务器建好后的完整规格编辑（含连接模式、地址端口、内核全局配置 `core_log_level`/`core_dns`/`core_stats_enabled`、排序等）、软删除与恢复，以及管理 `Inbound`/`Outbound`/`RoutingRule`/`Website`，统一经 `satchel plan` 与 `satchel apply` 两阶段配置事务执行（见 `satchel-basics`）；代理入站向导、密钥生成、出站探活、中转落地、路由预设与多机批量规划见 `satchel-proxy`；nginx 站点查询、扫盘与向导见 `satchel-websites`；修改连接模式或地址端口会触发 `permission` 危险类，若需在线无中断热切管理/轮询端口请优先使用 `satchel server switch-listen-port`。
+- 服务器建好后的完整规格编辑（含连接模式、地址端口、内核全局配置 `core_log_level`/`core_dns`/`core_stats_enabled`、排序等）、软删除与恢复，以及管理 `Inbound`/`Outbound`/`RoutingRule`/`Website`，统一经 `satchel plan` 与 `satchel apply` 两阶段配置事务执行（见 `satchel-basics`）；代理入站向导、密钥生成、出站探活、中转落地、路由预设与多机批量规划见 `satchel-proxy`；nginx 站点查询、扫盘与向导见 `satchel-websites`；偷取模式与任意门/链式隧道编排见 `satchel-tunnels`；修改连接模式或地址端口会触发 `permission` 危险类，若需在线无中断热切管理/轮询端口请优先使用 `satchel server switch-listen-port`。
 - 结果是这台服务器的完整对象，`status.status` 是 `pending`；里面的三把凭据一律是打码的，原文只经安装命令或 `server token show` 取。
 
 ## 取安装命令
@@ -90,6 +90,11 @@ description: "加服务器（节点）、取安装命令、看节点是否在线
 - 远程卸载 nginx：`satchel server nginx uninstall <名字> --confirm <名字>`（长任务，需 `delete` 危险类；Docker 容器节点直接拒绝卸载并提示更换或移除容器；同机节点在建长任务前触发七组当场验证）。
 - 巡检 nginx server 与 stream 块：`satchel server nginx servers <名字>`（读类列表；扫描白名单配置目录并返回每个块的 `kind`、`conf_path`、`managed`、`server_names`、`listen_ports` 与 `has_ssl`，清晰区分是否带 `# satchel-managed:` 标记）。
 - 清理 Satchel 管理的 stream 端口：`satchel server nginx clear-stream <名字> --port 8443 --confirm <名字>`（动作类，需 `delete` 危险类；只清理 `/etc/nginx/stream_servers/` 下监听指定端口且带 `# satchel-managed:` 的文件，绝不删未纳管文件，失败自动回滚；同机节点触发七组当场验证且严禁清理主控 443 端口配置，遇主控 443 报 `conflict`）。站点管理见 `satchel-websites`。
+
+## 服务器偷取模式（tunnel / fallback / off）
+
+- 查看偷取模式状态与预览：`satchel server steal status <名字>`（读类，纯读主控数据库，返回 `same_host_as_master`、`use_443`、`steal_mode`、`domain`、`tunnel-in` 绑定与路由、推荐空闲端口 `next_free_port` 以及 `use_443=true` 时的本地偷自己 nginx 配置预览）。
+- 声明式部署、切换或关闭偷自己：`satchel server steal plan <名字> --mode tunnel --domain decoy.example.com`（也支持 `--mode fallback` 与 `--mode off`，可选 `--site-type`、`--site-value`、`--internal-port`、`--inbound-tag`），生成单一待确认 `Plan`，再经 `satchel apply --plan <计划号>` 按序同步 `/etc/nginx/servers/satchel-steal.conf` 与 `kernel.json`。主控同机节点严禁开启 `use_443` 或监听 443 端口；完整偷取模式原理与任意门/链式隧道编排见 `satchel-tunnels`。
 
 ## 注意
 

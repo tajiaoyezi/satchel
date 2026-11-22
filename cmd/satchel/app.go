@@ -73,6 +73,7 @@ import (
 	svcservers "github.com/satchel/satchel/internal/service/servers"
 	svcsettings "github.com/satchel/satchel/internal/service/settings"
 	svctokens "github.com/satchel/satchel/internal/service/tokens"
+	svctunnels "github.com/satchel/satchel/internal/service/tunnels"
 	svcupdate "github.com/satchel/satchel/internal/service/update"
 	svcwebsites "github.com/satchel/satchel/internal/service/websites"
 	v1 "github.com/satchel/satchel/pkg/api/v1"
@@ -232,6 +233,14 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		Servers:  serversRepo,
 		Websites: websitesRepo,
 		Scanner:  serversSvc,
+	})
+	tunnelsSvc := svctunnels.New(svctunnels.Deps{
+		Servers:      serversRepo,
+		Inbounds:     inboundsRepo,
+		RoutingRules: routingRepo,
+		Websites:     websitesRepo,
+		Settings:     settingsRepo,
+		Planner:      applySvc,
 	})
 	proxySvc := svcproxy.New(svcproxy.Deps{
 		Servers:        serversRepo,
@@ -421,6 +430,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		bindings[name] = h
 	}
 	for name, h := range websitesSvc.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range tunnelsSvc.Bindings() {
 		bindings[name] = h
 	}
 	if err := table.CheckBindings(bindings); err != nil {

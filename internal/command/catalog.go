@@ -38,6 +38,10 @@ var GroupSummaries = map[string]string{
 	"server config":            "节点只读配置检查与无侵入校验（配置文件只读，改动须经 plan / apply）",
 	"server service":           "节点运行服务（kernel / nginx / agent）状态查询与启停控制（同机 nginx 控制需当场人类验证）",
 	"server nginx":             "节点 nginx 远程安装/卸载、server 块巡检与受保护的 stream 清理（同机操作需当场人类验证并保护 443）",
+	"server steal":             "服务器偷取模式（tunnel / fallback / off）：查 443 绑定状态与偷自己本地 nginx 预览、声明式部署与切换",
+	"tunnel":                   "任意门单跳转发、复用分流与 N 台链式隧道编排（零迁移，全部写操作一律经 plan / apply）",
+	"tunnel multiplex":         "复用已有 direct 入站按域名/IP 分流转发（不另开端口，自动排在兜底规则之前）",
+	"tunnel chain":             "N 台服务器首尾相接链式隧道查询、单 Plan 原子编排与整链清理",
 	"website":                  "网站（kind Website）：查询、扫盘（未纳管零覆盖）、无状态向导与模板目录（所有写操作一律经 plan / apply）",
 	"inbound":                  "代理入站：查询、协议矩阵、配置示例、密钥生成、无状态向导与多机批量规划（只对管理员开放）",
 	"inbound batch":            "多机批量入站规划与批次记录查询（所有写操作一律经 plan / apply）",
@@ -68,8 +72,82 @@ func catalogCommands() []*Command {
 	all = append(all, configTxCommands()...)
 	all = append(all, proxyCommands()...)
 	all = append(all, websiteCommands()...)
+	all = append(all, tunnelCommands()...)
 	all = append(all, serverCommands()...)
 	return all
+}
+
+// tunnelCommands 是 m2-17 的服务器偷取模式、任意门单跳/复用隧道与 N 台链式隧道命令（node-steal-and-tunnels）。
+func tunnelCommands() []*Command {
+	name := Arg{Name: "name", Description: "服务器的名字或 ID"}
+	targetFlags := []Flag{
+		{Name: "target-address", Type: TypeString, Description: "固定转发目标主机或 IP（与 --target-port 成对，和 --target-server/--target-inbound 二选一）"},
+		{Name: "target-port", Type: TypeInt, Description: "固定转发目标端口（1..65535）"},
+		{Name: "target-server", Type: TypeString, Description: "目标服务器名或 ID（与 --target-inbound 成对，自动解析地址与端口）"},
+		{Name: "target-inbound", Type: TypeString, Description: "目标服务器上的活跃入站 tag（禁止同机同端口自环）"},
+	}
+	tunnelPlanFlags := append([]Flag{
+		{Name: "server-name", Type: TypeString, Description: "入口服务器名或 ID（必填）"},
+		{Name: "tag", Type: TypeString, Description: "可选：direct 入站 tag（默认 tunnel-<listen_port>，禁止 tunnel-in 或链式命名）"},
+		{Name: "listen-port", Type: TypeInt, Description: "入口监听端口（1..65535；省略或 0 时自动在服务器端口范围内分配，同机节点禁止 443）"},
+		{Name: "listen", Type: TypeString, Description: "监听地址（留空由服务器 IPv6 设置决定）"},
+		{Name: "network", Type: TypeString, Description: "监听协议：tcp,udp（默认）、tcp 或 udp（引用已有入站时默认按目标协议推导）"},
+		{Name: "sort-order", Type: TypeInt, Default: "50", Description: "入站与路由规则排序值（默认 50）"},
+	}, targetFlags...)
+	multiplexPlanFlags := append([]Flag{
+		{Name: "server-name", Type: TypeString, Description: "入口服务器名或 ID（必填）"},
+		{Name: "inbound-tag", Type: TypeString, Description: "要复用的已有活跃 direct 入站 tag（必填，禁止 tunnel-in）"},
+		{Name: "domain", Type: TypeStrings, Description: "精确匹配的 SNI/HTTP 域名（至少提供一种匹配条件）"},
+		{Name: "domain-suffix", Type: TypeStrings, Description: "后缀匹配的域名列表"},
+		{Name: "ip-cidr", Type: TypeStrings, Description: "目标 IP/CIDR 列表"},
+		{Name: "source-ip-cidr", Type: TypeStrings, Description: "来源 IP/CIDR 列表"},
+		{Name: "sort-order", Type: TypeInt, Description: "可选：规则排序值（省略或 0 时自动排在现有兜底规则之前）"},
+	}, targetFlags...)
+	chainPlanFlags := append([]Flag{
+		{Name: "label", Type: TypeString, Description: "链式隧道唯一标签（2..32 位小写字母/数字/短横线，首尾字母或数字；必填）"},
+		{Name: "servers", Type: TypeStrings, Description: "按入口到出口顺序排列的至少 2 台互不重复服务器名或 ID 列表（每个值为完整服务器名或 ID；必填）"},
+		{Name: "entry-port", Type: TypeInt, Description: "可选：入口机监听端口（1..65535；省略或 0 时自动分配，同机节点禁止 443）"},
+		{Name: "network", Type: TypeString, Description: "监听协议：tcp,udp（默认）、tcp 或 udp"},
+	}, targetFlags...)
+
+	return []*Command{
+		{Path: []string{"server", "steal", "status"}, Summary: "查询服务器偷取模式状态、443 绑定、tunnel-in 规则、推荐空闲端口与偷自己本地 nginx 预览（纯读库）", Class: ClassRead,
+			Args: []Arg{name}},
+		{Path: []string{"server", "steal", "plan"}, Summary: "规划服务器偷取模式部署、模式切换（tunnel / fallback）或关闭（off），生成单一待确认 Plan（同机节点禁止开启 443）", Class: ClassConfig,
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "mode", Type: TypeString, Description: "偷取模式：tunnel（443 direct SNI 分流）、fallback（Reality 握手偷自己）或 off（关闭）（必填）"},
+				{Name: "domain", Type: TypeString, Description: "伪装站与 SNI 域名（可选，留空沿用服务器当前 domain）"},
+				{Name: "site-type", Type: TypeString, Description: "伪装站类型：decoy（默认）、static 或 proxy"},
+				{Name: "site-value", Type: TypeString, Description: "伪装站值：内置模板名（landing/blog/docs/empty）、静态目录或上游 URL"},
+				{Name: "internal-port", Type: TypeInt, Description: "可选（仅 tunnel 模式）：内部代理入站回环转发端口（1..65535，留空自动复用或分配）"},
+				{Name: "inbound-tag", Type: TypeString, Description: "可选：指定要重映射的非 WS Reality 入站 tag（留空自动选择主 Reality 入站）"},
+			}},
+		{Path: []string{"tunnel", "list"}, Summary: "从主控数据库聚合分页列出散装任意门隧道（单跳入站与复用分流规则，排除 tunnel-in 与链式隧道）", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "server-name", Type: TypeString, Description: "按入口服务器名或 ID 过滤"},
+				{Name: "kind", Type: TypeString, Description: "按类型过滤：inbound（单跳入站）或 multiplex（复用分流规则）"},
+			},
+			Columns: []string{"kind", "server_name", "tag", "listen_port", "network", "target_address", "target_port", "enabled"}},
+		{Path: []string{"tunnel", "plan"}, Summary: "规划单跳任意门端口转发（direct 入站 + 路由覆盖规则，支持固定目标或引用已有服务器入站）并生成待确认 Plan", Class: ClassConfig,
+			Flags: tunnelPlanFlags},
+		{Path: []string{"tunnel", "multiplex", "plan"}, Summary: "复用已有 direct 入站新增按域名/IP 分流转发的路由规则（不另开端口，自动排在兜底规则之前）并生成待确认 Plan", Class: ClassConfig,
+			Flags: multiplexPlanFlags},
+		{Path: []string{"tunnel", "delete-plan"}, Summary: "规划删除单跳任意门隧道（--server-name + --tag 连带删绑定规则）或单条复用分流规则（--rule-id）", Class: ClassConfig,
+			Flags: []Flag{
+				{Name: "server-name", Type: TypeString, Description: "删除单跳隧道时的服务器名或 ID（与 --tag 成对，和 --rule-id 二选一）"},
+				{Name: "tag", Type: TypeString, Description: "要删除的单跳 direct 入站 tag（连带清理绑定规则；禁止 tunnel-in 与链式跳）"},
+				{Name: "rule-id", Type: TypeInt, Description: "删除单条复用分流规则时的 RoutingRule ID（保留共享 direct 入站）"},
+			}},
+		{Path: []string{"tunnel", "chain", "list"}, Summary: "按 label 字典序分页聚合列出所有 N 台链式隧道（tunnel-<label>-h<i>）及完整性状态", Class: ClassRead, List: true,
+			Columns: []string{"label", "hop_count", "entry_server_name", "entry_port", "final_target", "network", "complete"}},
+		{Path: []string{"tunnel", "chain", "plan"}, Summary: "编排 N 台服务器（N>=2）首尾相接链式隧道：按跳分配端口并将全部 2N 个变更打包进单一原子 Plan", Class: ClassConfig,
+			Flags: chainPlanFlags},
+		{Path: []string{"tunnel", "chain", "delete-plan"}, Summary: "按 --label 一次性规划软删除整条链式隧道在全部服务器上的入站与绑定路由规则", Class: ClassConfig,
+			Flags: []Flag{
+				{Name: "label", Type: TypeString, Description: "要整链软删除的链式隧道标签（必填）"},
+			}},
+	}
 }
 
 // websiteCommands 是 m2-15 的网站（kind Website）查询、目录扫描、无状态向导与模板目录命令（node-nginx-websites）。
@@ -106,7 +184,7 @@ func proxyCommands() []*Command {
 	inboundBuildFlags := []Flag{
 		{Name: "tag", Type: TypeString, Description: "入站 tag（留空按 <protocol>-<port> 自动生成）"},
 		{Name: "protocol", Type: TypeString, Description: "入站协议（见 inbound protocols）"},
-		{Name: "port", Type: TypeInt, Description: "监听端口（1..65535）"},
+		{Name: "port", Type: TypeInt, Description: "监听端口（1..65535；省略或 0 时按目标服务器偷取模式与端口范围自动分配，同机节点禁止 443）"},
 		{Name: "listen", Type: TypeString, Description: "监听地址（留空由服务器 IPv6 设置决定）"},
 		{Name: "transport", Type: TypeString, Description: "传输层：tcp、ws、grpc、http、httpupgrade 或 quic"},
 		{Name: "security", Type: TypeString, Description: "安全层：none、tls 或 reality"},

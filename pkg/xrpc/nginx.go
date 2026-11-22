@@ -144,6 +144,8 @@ type NginxWebsitesApplyParams struct {
 	Sites            []ManagedWebsiteFile `json:"sites"`
 	RemoveDomains    []string             `json:"remove_domains,omitempty"`
 	ProtectMaster443 bool                 `json:"protect_master_443,omitempty"`
+	StealSite        *ManagedWebsiteFile  `json:"steal_site,omitempty"`
+	RemoveSteal      bool                 `json:"remove_steal,omitempty"`
 }
 
 // AppliedWebsiteFile 记录单条站点配置实际落盘路径。
@@ -160,4 +162,7 @@ type NginxWebsitesApplyResult struct {
 	RolledBack    bool                 `json:"rolled_back,omitempty"`
 	RollbackError string               `json:"rollback_error,omitempty"`
 	Error         string               `json:"error,omitempty"`
+	StealApplied  bool                 `json:"steal_applied,omitempty"`
+	StealRemoved  bool                 `json:"steal_removed,omitempty"`
+	StealConfPath string               `json:"steal_conf_path,omitempty"`
 }

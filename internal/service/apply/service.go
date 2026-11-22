@@ -17,6 +17,7 @@ import (
 
 	"github.com/uptrace/bun"
 
+	"github.com/satchel/satchel/internal/base/nginx"
 	"github.com/satchel/satchel/internal/base/singbox"
 	"github.com/satchel/satchel/internal/command"
 	corebatch "github.com/satchel/satchel/internal/core/batch"
@@ -111,6 +112,27 @@ func requireAdmin(ctx context.Context) error {
 	return nil
 }
 
+func (s *Service) masterURL(ctx context.Context) string {
+	if s.deps.Settings == nil {
+		return ""
+	}
+	st, err := s.deps.Settings.Load(ctx)
+	if err != nil || st == nil {
+		return ""
+	}
+	return st.Gates().MasterURL
+}
+
+func (s *Service) isSameHost443Protected(ctx context.Context, srv *coreservers.Server, spec v1.ServerSpec) bool {
+	sameHost := false
+	status := ""
+	if srv != nil {
+		sameHost = srv.Status.SameHostAsMaster
+		status = srv.Status.Status
+	}
+	return nginx.IsSameHost443Protected(sameHost, status, spec.Domain, s.masterURL(ctx))
+}
+
 // RenderServerConfig 根据当前库内某台服务器的期望 spec 与启用资源渲染规范 sing-box 配置（供 server config status/test 复用）。
 func (s *Service) RenderServerConfig(ctx context.Context, serverID int64) (*singbox.Rendered, error) {
 	srv, err := s.deps.Servers.ByID(ctx, serverID)
@@ -145,10 +167,11 @@ func (s *Service) RenderServerConfig(ctx context.Context, serverID int64) (*sing
 		rrSpecs[i] = x.Spec
 	}
 	return singbox.Render(singbox.ServerInput{
-		Server:       srv.Spec,
-		Inbounds:     inSpecs,
-		Outbounds:    outSpecs,
-		RoutingRules: rrSpecs,
+		Server:           srv.Spec,
+		Inbounds:         inSpecs,
+		Outbounds:        outSpecs,
+		RoutingRules:     rrSpecs,
+		ProtectMaster443: s.isSameHost443Protected(ctx, srv, srv.Spec),
 	})
 }
 
@@ -205,6 +228,8 @@ type ServerConfigDiff struct {
 	AfterConfig         string              `json:"after_config,omitempty"`
 	WebsiteChanged      bool                `json:"website_changed,omitempty"`
 	Websites            []WebsiteConfigDiff `json:"websites,omitempty"`
+	StealChanged        bool                `json:"steal_changed,omitempty"`
+	StealConfig         *WebsiteConfigDiff  `json:"steal_config,omitempty"`
 }
 
 // BatchMeta 记录多机批量入站/出站规划附带的批次追踪元数据（存于 Plan.diff 内，零迁移）。
@@ -278,6 +303,9 @@ type ServerApplyResult struct {
 	Inbounds        []string `json:"inbounds,omitempty"`
 	WebsitesApplied []string `json:"websites_applied,omitempty"`
 	WebsitesRemoved []string `json:"websites_removed,omitempty"`
+	StealApplied    bool     `json:"steal_applied,omitempty"`
+	StealRemoved    bool     `json:"steal_removed,omitempty"`
+	StealConfPath   string   `json:"steal_conf_path,omitempty"`
 	NginxReloaded   bool     `json:"nginx_reloaded,omitempty"`
 	Code            string   `json:"code,omitempty"`
 	Error           string   `json:"error,omitempty"`

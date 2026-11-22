@@ -75,4 +75,52 @@ func TestNginxAndServiceRPCJSONRoundTrip(t *testing.T) {
 	if gotClear.Port != 8443 || !gotClear.ProtectMaster443 {
 		t.Fatalf("NginxClearStreamParams 回环不一致：%+v", gotClear)
 	}
+
+	// 验证 steal_site / remove_steal 及回复字段 omitempty 向后兼容与完整往返。
+	minimalRaw, err := json.Marshal(NginxWebsitesApplyParams{Sites: []ManagedWebsiteFile{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(minimalRaw) != `{"sites":[]}` {
+		t.Fatalf("steal 可选字段零值时应省略，实际：%s", minimalRaw)
+	}
+	stealReq := NginxWebsitesApplyParams{
+		Sites: []ManagedWebsiteFile{},
+		StealSite: &ManagedWebsiteFile{
+			Domain:      "decoy.example.com",
+			Conf:        SatchelManagedHeader + " steal_self=true\nserver { listen 127.0.0.1:8001 ssl; }\n",
+			HTMLPath:    "/etc/nginx/html/satchel-steal/index.html",
+			HTMLContent: "<html>decoy</html>",
+		},
+	}
+	raw, err = json.Marshal(stealReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotSteal NginxWebsitesApplyParams
+	if err := json.Unmarshal(raw, &gotSteal); err != nil {
+		t.Fatal(err)
+	}
+	if gotSteal.StealSite == nil || gotSteal.StealSite.Domain != "decoy.example.com" || gotSteal.RemoveSteal {
+		t.Fatalf("StealSite 回环不一致：%+v", gotSteal)
+	}
+
+	stealRes := NginxWebsitesApplyResult{
+		Applied:       []AppliedWebsiteFile{},
+		Removed:       []string{},
+		Reloaded:      true,
+		StealApplied:  true,
+		StealConfPath: "/etc/nginx/servers/satchel-steal.conf",
+	}
+	raw, err = json.Marshal(stealRes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotRes NginxWebsitesApplyResult
+	if err := json.Unmarshal(raw, &gotRes); err != nil {
+		t.Fatal(err)
+	}
+	if !gotRes.StealApplied || gotRes.StealRemoved || gotRes.StealConfPath != "/etc/nginx/servers/satchel-steal.conf" {
+		t.Fatalf("NginxWebsitesApplyResult steal 字段回环不一致：%+v", gotRes)
+	}
 }

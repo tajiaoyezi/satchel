@@ -80,6 +80,7 @@ type ConfigApplyParams struct {
 	ForceInitial        bool   `json:"force_initial,omitempty"`
 	Restart             *bool  `json:"restart,omitempty"`
 	ApplyID             string `json:"apply_id,omitempty"`
+	ProtectMaster443    bool   `json:"protect_master_443,omitempty"`
 }
 
 // WantRestart 返回本次 config.apply 是否要求落盘后重启内核（默认 true）。

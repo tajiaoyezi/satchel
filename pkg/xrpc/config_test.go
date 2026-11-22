@@ -76,7 +76,7 @@ func TestConfigRPCRoundTrip(t *testing.T) {
 		},
 		ConfigTestParams{Config: `{"log":{"level":"info"}}`},
 		ConfigTestResult{OK: true, Inbounds: []string{"in-1"}, Hash: "abcd"},
-		ConfigApplyParams{Config: `{}`, ExpectedCurrentHash: "old", ForceInitial: true, ApplyID: "apply-1"},
+		ConfigApplyParams{Config: `{}`, ExpectedCurrentHash: "old", ForceInitial: true, ApplyID: "apply-1", ProtectMaster443: true},
 		ConfigApplyResult{Applied: false, RolledBack: true, RollbackError: "", Error: "bind: address already in use", CurrentHash: "old", Generation: 2},
 		ConfigFilesParams{Scope: "all"},
 		ConfigFilesResult{Files: []ConfigFileInfo{{Scope: "kernel", Path: "/etc/satchel-agent/kernel.json", Name: "kernel.json", Size: 128, Modified: now}}},
@@ -92,6 +92,25 @@ func TestConfigRPCRoundTrip(t *testing.T) {
 		if len(b) == 0 {
 			t.Fatalf("case %d empty json", i)
 		}
+	}
+	// 验证 ProtectMaster443 omitempty 向后兼容：false 时不序列化该字段，true 时完整往返。
+	rawFalse, err := json.Marshal(ConfigApplyParams{Config: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rawFalse) != `{"config":"{}"}` {
+		t.Fatalf("expected protect_master_443 omitted when false, got %s", rawFalse)
+	}
+	rawTrue, err := json.Marshal(ConfigApplyParams{Config: `{}`, ProtectMaster443: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotApply ConfigApplyParams
+	if err := json.Unmarshal(rawTrue, &gotApply); err != nil {
+		t.Fatal(err)
+	}
+	if !gotApply.ProtectMaster443 {
+		t.Fatalf("expected ProtectMaster443=true after round-trip, got %+v", gotApply)
 	}
 	if CodeConflict != "conflict" {
 		t.Fatalf("CodeConflict = %q, want conflict", CodeConflict)

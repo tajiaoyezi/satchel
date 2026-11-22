@@ -87,6 +87,25 @@ func NormalizeSpec(spec v1.ServerSpec) (v1.ServerSpec, error) {
 	if spec.PullPort < 0 || spec.PullPort > 65535 {
 		return spec, v1.Newf(v1.CodeBadRequest, "Server.spec.pull_port %d 必须在 0..65535 之间", spec.PullPort)
 	}
+	if spec.PortRangeMin < 0 || spec.PortRangeMin > 65535 {
+		return spec, v1.Newf(v1.CodeBadRequest, "Server.spec.port_range_min %d 必须在 0..65535 之间", spec.PortRangeMin)
+	}
+	if spec.PortRangeMax < 0 || spec.PortRangeMax > 65535 {
+		return spec, v1.Newf(v1.CodeBadRequest, "Server.spec.port_range_max %d 必须在 0..65535 之间", spec.PortRangeMax)
+	}
+	if (spec.PortRangeMin == 0) != (spec.PortRangeMax == 0) {
+		return spec, v1.New(v1.CodeBadRequest, "Server.spec.port_range_min 与 port_range_max 必须同时为 0 或同时在 1..65535 之间")
+	}
+	if spec.PortRangeMin > 0 && spec.PortRangeMin > spec.PortRangeMax {
+		return spec, v1.Newf(v1.CodeBadRequest, "Server.spec.port_range_min (%d) 不能大于 port_range_max (%d)", spec.PortRangeMin, spec.PortRangeMax)
+	}
+	spec.SiteType = strings.ToLower(strings.TrimSpace(spec.SiteType))
+	spec.SiteValue = strings.TrimSpace(spec.SiteValue)
+	switch spec.SiteType {
+	case "", "static", "proxy", "decoy":
+	default:
+		return spec, v1.Newf(v1.CodeBadRequest, "Server.spec.site_type %q 不合法（支持空值、static、proxy 或 decoy）", spec.SiteType)
+	}
 	if len(bytes.TrimSpace(spec.CoreDNS)) == 0 || bytes.Equal(bytes.TrimSpace(spec.CoreDNS), []byte("null")) {
 		spec.CoreDNS = json.RawMessage(`{}`)
 	} else if !json.Valid(spec.CoreDNS) {

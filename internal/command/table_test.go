@@ -49,6 +49,9 @@ func TestCatalog(t *testing.T) {
 		"server service status": ClassRead, "server service control": ClassAction,
 		"server nginx install": ClassAction, "server nginx uninstall": ClassAction,
 		"server nginx servers": ClassRead, "server nginx clear-stream": ClassAction,
+		"server steal status": ClassRead, "server steal plan": ClassConfig,
+		"tunnel list": ClassRead, "tunnel plan": ClassConfig, "tunnel multiplex plan": ClassConfig, "tunnel delete-plan": ClassConfig,
+		"tunnel chain list": ClassRead, "tunnel chain plan": ClassConfig, "tunnel chain delete-plan": ClassConfig,
 		"website list": ClassRead, "website get": ClassRead, "website scan": ClassAction, "website build": ClassRead, "website templates": ClassRead,
 		"inbound list": ClassRead, "inbound get": ClassRead, "inbound protocols": ClassRead, "inbound examples": ClassRead,
 		"inbound keygen": ClassRead, "inbound build": ClassRead, "inbound batch list": ClassRead, "inbound batch plan": ClassConfig,
@@ -69,7 +72,7 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 的类别应当是 %s，得到 %s", name, class, c.Class)
 		}
 	}
-	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "plans list", "snapshot list", "server logs list", "server logs files", "server config files", "server nginx servers", "website list", "inbound list", "inbound batch list", "outbound list", "outbound batch list", "routing list", "routing preset list"} {
+	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "plans list", "snapshot list", "server logs list", "server logs files", "server config files", "server nginx servers", "website list", "tunnel list", "tunnel chain list", "inbound list", "inbound batch list", "outbound list", "outbound batch list", "routing list", "routing preset list"} {
 		if c, _ := table.Lookup(name); !c.List {
 			t.Errorf("%s 应当是列表命令", name)
 		}

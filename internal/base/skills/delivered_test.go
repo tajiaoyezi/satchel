@@ -27,10 +27,34 @@ func TestSkillsDelivered(t *testing.T) {
 	for _, s := range skills {
 		names = append(names, s.Name)
 	}
-	want := "satchel-access,satchel-backup,satchel-basics,satchel-database,satchel-proxy,satchel-servers,satchel-settings,satchel-troubleshoot,satchel-upgrade,satchel-websites"
+	want := "satchel-access,satchel-backup,satchel-basics,satchel-database,satchel-proxy,satchel-servers,satchel-settings,satchel-troubleshoot,satchel-tunnels,satchel-upgrade,satchel-websites"
 	if strings.Join(names, ",") != want {
-		t.Fatalf("应当恰好是 M1 的七份加 satchel-servers、satchel-proxy 与 satchel-websites：%v", names)
+		t.Fatalf("应当恰好是 M1 的七份加 satchel-servers、satchel-proxy、satchel-websites 与 satchel-tunnels：%v", names)
 	}
+}
+
+func TestTunnelsSkillMentions(t *testing.T) {
+	skills, _, err := Load(Files())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range skills {
+		if s.Name != "satchel-tunnels" {
+			continue
+		}
+		for _, want := range []string{
+			"satchel server steal status", "satchel server steal plan",
+			"satchel tunnel list", "satchel tunnel plan", "satchel tunnel multiplex plan", "satchel tunnel delete-plan",
+			"satchel tunnel chain list", "satchel tunnel chain plan", "satchel tunnel chain delete-plan",
+			"satchel apply", "proxy_protocol", "same_host_as_master", "override_address",
+		} {
+			if !strings.Contains(s.Content, want) {
+				t.Errorf("satchel-tunnels 里应当有 %s", want)
+			}
+		}
+		return
+	}
+	t.Fatal("没有 satchel-tunnels")
 }
 
 func TestWebsitesSkillMentions(t *testing.T) {
@@ -106,6 +130,7 @@ func TestServersSkillMentions(t *testing.T) {
 			"satchel server config status", "satchel server config files", "satchel server config read", "satchel server config test",
 			"satchel server service status", "satchel server service control",
 			"satchel server nginx install", "satchel server nginx uninstall", "satchel server nginx servers", "satchel server nginx clear-stream",
+			"satchel server steal status", "satchel server steal plan", "satchel-tunnels",
 			"agent_log_enabled"} {
 			if !strings.Contains(s.Content, want) {
 				t.Errorf("satchel-servers 里应当有 %s", want)
@@ -155,8 +180,8 @@ func TestCurrentCommandsCovered(t *testing.T) {
 			visible++
 		}
 	}
-	if visible != 126 || !used["overview"] || !used["token create"] || !used["serve"] || !used["inbound build"] || !used["outbound probe"] || !used["routing preset save"] || !used["website build"] || !used["server service control"] || !used["server nginx clear-stream"] {
-		t.Fatalf("应当覆盖 126 条非隐藏命令，含 overview、token create、serve、代理资源与网站/服务命令：%d %v", visible, used)
+	if visible != 135 || !used["overview"] || !used["token create"] || !used["serve"] || !used["inbound build"] || !used["outbound probe"] || !used["routing preset save"] || !used["website build"] || !used["server service control"] || !used["server nginx clear-stream"] || !used["server steal plan"] || !used["tunnel plan"] || !used["tunnel chain plan"] {
+		t.Fatalf("应当覆盖 135 条非隐藏命令，含 overview、token create、serve、代理资源、网站/服务与偷取模式/隧道命令：%d %v", visible, used)
 	}
 	extra := command.MustNew(append(command.Catalog().All(), &command.Command{Path: []string{"demo", "ping"}, Summary: "测试", Class: command.ClassRead})...)
 	if missing := Coverage(extra, refs); strings.Join(missing, ",") != "demo ping" {

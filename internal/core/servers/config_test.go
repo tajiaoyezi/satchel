@@ -103,3 +103,53 @@ func TestServerConfigTxLifecycle(t *testing.T) {
 		}
 	})
 }
+
+func TestNormalizeSpecPortRangeAndSiteType(t *testing.T) {
+	base := DefaultSpec()
+	base.Name = "hk-norm"
+
+	// 合法组合
+	good := []v1.ServerSpec{
+		base,
+		func() v1.ServerSpec {
+			s := base
+			s.PortRangeMin = 20000
+			s.PortRangeMax = 30000
+			s.SiteType = "Decoy"
+			s.SiteValue = "landing"
+			return s
+		}(),
+		func() v1.ServerSpec {
+			s := base
+			s.PortRangeMin = 15000
+			s.PortRangeMax = 15000
+			s.SiteType = "static"
+			return s
+		}(),
+		func() v1.ServerSpec { s := base; s.SiteType = "proxy"; s.SiteValue = "http://127.0.0.1:8080"; return s }(),
+	}
+	for i, tc := range good {
+		norm, err := NormalizeSpec(tc)
+		if err != nil {
+			t.Errorf("合法用例 %d 失败：%v", i, err)
+		}
+		if tc.SiteType == "Decoy" && norm.SiteType != "decoy" {
+			t.Errorf("site_type 应规范化为小写 decoy，得到 %q", norm.SiteType)
+		}
+	}
+
+	// 非法组合
+	bad := []v1.ServerSpec{
+		func() v1.ServerSpec { s := base; s.PortRangeMin = -1; return s }(),
+		func() v1.ServerSpec { s := base; s.PortRangeMax = 70000; return s }(),
+		func() v1.ServerSpec { s := base; s.PortRangeMin = 10000; s.PortRangeMax = 0; return s }(),
+		func() v1.ServerSpec { s := base; s.PortRangeMin = 0; s.PortRangeMax = 20000; return s }(),
+		func() v1.ServerSpec { s := base; s.PortRangeMin = 30000; s.PortRangeMax = 20000; return s }(),
+		func() v1.ServerSpec { s := base; s.SiteType = "php"; return s }(),
+	}
+	for i, tc := range bad {
+		if _, err := NormalizeSpec(tc); err == nil || v1.AsError(err).Code != v1.CodeBadRequest {
+			t.Errorf("非法用例 %d 应报 bad_request，实际：%v", i, err)
+		}
+	}
+}

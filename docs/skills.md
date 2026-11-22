@@ -15,6 +15,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `satchel-servers` | 加服务器（节点）、取安装命令、看节点是否在线，以及给节点上的凭据临时限速、踢线、看连接与流量、重启节点内核时用：安装命令要 https 主控地址，token 原文要请人取。 |
 | `satchel-settings` | 看与改系统设置时用：日常运维档的设置、logo 与登录壁纸的图片上传、写前快照与回滚；主控地址与门这两组要请人改。 |
 | `satchel-troubleshoot` | 主控出问题时用：看日志、内置定时任务的运行记录、长任务、审计与安全事件，主控起不来或被挡在门外时请人在主控本机处理。 |
+| `satchel-tunnels` | 部署与切换服务器 443 偷取模式（tunnel 与 fallback）、编排任意门单跳端口转发、复用已有 direct 入站按域名/IP 分流以及 N 台服务器首尾相接链式隧道时用：零新增表，全部写操作一律经 plan/apply 原子落地，严守同机 443 防抢占与 sing-box v1.14.4 规范。 |
 | `satchel-upgrade` | 升级主控时用：检查更新、升到所选渠道的最新版、更新 CDN 的开关、升级失败时的自动回退。 |
 | `satchel-websites` | 管理节点上的 nginx 站点（kind Website）：查站点、扫盘区分已纳管与未纳管文件、查模板目录、用无状态向导生成静态/普通反代/WSS反代/伪装站配置并经 plan/apply 声明式落盘，严守未纳管零覆盖与同机七组/443 双闸门。 |
 
@@ -29,7 +30,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `account totp disable` | `satchel-access` |
 | `account totp setup` | `satchel-access` |
 | `admin reset-password` | `satchel-troubleshoot` |
-| `apply` | `satchel-basics`、`satchel-proxy`、`satchel-servers`、`satchel-websites` |
+| `apply` | `satchel-basics`、`satchel-proxy`、`satchel-servers`、`satchel-tunnels`、`satchel-websites` |
 | `audit list` | `satchel-troubleshoot` |
 | `backup create` | `satchel-backup`、`satchel-basics`、`satchel-upgrade` |
 | `backup download` | `satchel-backup` |
@@ -107,6 +108,8 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `server service control` | `satchel-servers` |
 | `server service status` | `satchel-servers` |
 | `server speed` | `satchel-servers` |
+| `server steal plan` | `satchel-servers`、`satchel-tunnels` |
+| `server steal status` | `satchel-servers`、`satchel-tunnels` |
 | `server switch-listen-port` | `satchel-servers` |
 | `server system-info` | `satchel-servers`、`satchel-troubleshoot` |
 | `server token revoke` | `satchel-servers` |
@@ -134,11 +137,18 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `setup status` | `satchel-backup` |
 | `snapshot get` | `satchel-basics` |
 | `snapshot list` | `satchel-basics` |
-| `snapshot rollback` | `satchel-basics`、`satchel-websites` |
+| `snapshot rollback` | `satchel-basics`、`satchel-tunnels`、`satchel-websites` |
 | `token create` | `satchel-access` |
 | `token list` | `satchel-access`、`satchel-basics` |
 | `token revoke` | `satchel-access`、`satchel-basics` |
 | `token update` | `satchel-access`、`satchel-basics` |
+| `tunnel chain delete-plan` | `satchel-tunnels` |
+| `tunnel chain list` | `satchel-tunnels` |
+| `tunnel chain plan` | `satchel-tunnels` |
+| `tunnel delete-plan` | `satchel-tunnels` |
+| `tunnel list` | `satchel-tunnels` |
+| `tunnel multiplex plan` | `satchel-tunnels` |
+| `tunnel plan` | `satchel-tunnels` |
 | `update apply` | `satchel-basics`、`satchel-upgrade` |
 | `update check` | `satchel-basics`、`satchel-upgrade` |
 | `version` | `satchel-basics` |

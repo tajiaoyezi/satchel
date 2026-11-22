@@ -83,6 +83,8 @@
 | `server service control` | action | operate | restart | object (name) | 条件 | 否 | 否 | `POST /api/v1/server/service/control/{name}` |
 | `server service status` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/service/status/{name}` |
 | `server speed` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/speed/{name}` |
+| `server steal plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/steal/plan/{name}` |
+| `server steal status` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/steal/status/{name}` |
 | `server switch-listen-port` | action | operate | permission | object (name) | 否 | 否 | 否 | `POST /api/v1/server/switch-listen-port/{name}` |
 | `server system-info` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/system-info/{name}` |
 | `server token revoke` | action | operate | permission | object (name) | 否 | 否 | 否 | `POST /api/v1/server/token/revoke/{name}` |
@@ -115,6 +117,13 @@
 | `token list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/token` |
 | `token revoke` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/revoke/{id}` |
 | `token update` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/token/update/{id}` |
+| `tunnel chain delete-plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/tunnel/chain/delete-plan` |
+| `tunnel chain list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/tunnel/chain` |
+| `tunnel chain plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/tunnel/chain/plan` |
+| `tunnel delete-plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/tunnel/delete-plan` |
+| `tunnel list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/tunnel` |
+| `tunnel multiplex plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/tunnel/multiplex/plan` |
+| `tunnel plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/tunnel/plan` |
 | `update apply` | action | operate | master | object (version) | 否 | 否 | 否 | `POST /api/v1/update/apply/{version}` |
 | `update check` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/update/check` |
 | `website build` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/website/build` |
