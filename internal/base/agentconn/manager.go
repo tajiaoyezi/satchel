@@ -104,6 +104,8 @@ type NodeRuntime struct {
 	MachineID        string    `json:"machine_id,omitempty"`
 	MasterURL        string    `json:"master_url,omitempty"`
 	MinMasterVersion string    `json:"min_master_version,omitempty"`
+	PeerIP           string    `json:"peer_ip,omitempty"`
+	ExecEnabled      bool      `json:"exec_enabled"`
 	ExecRunning      bool      `json:"exec_running,omitempty"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
@@ -133,8 +135,12 @@ type Config struct {
 	OnTraffic func(ctx context.Context, serverID int64, snap xrpc.TrafficSnapshot) error
 	// OnSpeed 在节点经 WS speed 帧或加密 HTTP speed RPC 上报实时网速与系统网卡累计时回调。
 	OnSpeed func(ctx context.Context, serverID int64, report xrpc.SpeedReport)
-	// OnOffline 在节点 WS 断开或被主动 Disconnect 时回调，用于清零内存实时网速缓存。
+	// OnOffline 在节点 WS 断开或被主动 Disconnect 时回调，用于清零内存实时网速缓存与标记在途 exec 为 unknown。
 	OnOffline func(serverID int64)
+	// OnConnected 在节点 WS 认证成功或 HTTP 心跳上线后回调，用于对遗留 unknown 态 exec 任务补报终态。
+	OnConnected func(serverID int64)
+	// OnExecEvent 在节点经 WS 推送 exec_event 流式输出或终态帧时回调。
+	OnExecEvent func(serverID int64, ev xrpc.ExecEvent)
 
 	AuthTimeout      time.Duration
 	PingInterval     time.Duration
@@ -208,6 +214,7 @@ type session struct {
 	machineID        string
 	masterURL        string
 	minMasterVersion string
+	execEnabled      bool
 	isCurrentTok     bool
 	revoked          atomic.Bool
 }
@@ -431,6 +438,7 @@ func (m *Manager) authenticate(ctx context.Context, conn *xrpc.Conn, ip string) 
 		machineID:        strings.TrimSpace(auth.MachineID),
 		masterURL:        strings.TrimSpace(auth.MasterURL),
 		minMasterVersion: strings.TrimSpace(auth.MinMasterVersion),
+		execEnabled:      auth.ExecEnabled,
 		isCurrentTok:     isCurrent,
 	}
 	return s, m.heartbeatInterval(ctx), true
@@ -587,11 +595,16 @@ func (m *Manager) activate(ctx context.Context, s *session, interval time.Durati
 		MachineID:        s.machineID,
 		MasterURL:        s.masterURL,
 		MinMasterVersion: s.minMasterVersion,
+		PeerIP:           s.ip,
+		ExecEnabled:      s.execEnabled,
 	})
 	m.mu.Unlock()
 	if old != nil {
 		m.cfg.Logger.Info("同一台服务器的新连接取代旧连接", "server", s.node.Name, "old_ip", old.ip, "new_ip", s.ip)
 		go old.conn.Close(websocket.StatusNormalClosure, "replaced by a new connection")
+	}
+	if m.cfg.OnConnected != nil {
+		go m.cfg.OnConnected(s.node.ID)
 	}
 	return nil
 }
@@ -616,14 +629,17 @@ func (m *Manager) heartbeat(ctx context.Context, s *session, hb xrpc.Heartbeat) 
 	if hb.MasterURL != "" {
 		s.masterURL = strings.TrimSpace(hb.MasterURL)
 	}
-	if hb.AgentVersion != "" || hb.InDocker || hb.MachineID != "" || hb.MasterURL != "" {
+	if hb.AgentVersion != "" || hb.InDocker || hb.MachineID != "" || hb.MasterURL != "" || hb.ExecEnabled {
 		s.inDocker = hb.InDocker
+		s.execEnabled = hb.ExecEnabled
 	}
 	m.recordRuntimeLocked(s.node.ID, NodeRuntime{
 		AgentVersion: s.agentVersion,
 		InDocker:     s.inDocker,
 		MachineID:    s.machineID,
 		MasterURL:    s.masterURL,
+		PeerIP:       s.ip,
+		ExecEnabled:  s.execEnabled,
 	})
 	machineID := s.machineID
 	m.mu.Unlock()
@@ -704,6 +720,15 @@ func (m *Manager) readLoop(ctx context.Context, s *session) error {
 			m.touchConflict(s.node.ID, s.ip)
 			if m.cfg.OnSpeed != nil {
 				m.cfg.OnSpeed(ctx, s.node.ID, rep)
+			}
+		case xrpc.TypeExecEvent:
+			var ev xrpc.ExecEvent
+			if err := xrpc.Decode(msg, &ev); err != nil {
+				return err
+			}
+			m.touchConflict(s.node.ID, s.ip)
+			if m.cfg.OnExecEvent != nil {
+				m.cfg.OnExecEvent(s.node.ID, ev)
 			}
 		case xrpc.TypeReply:
 			var r xrpc.Reply
@@ -854,6 +879,11 @@ func (m *Manager) Connected(serverID int64) bool {
 	return s != nil && !s.revoked.Load()
 }
 
+// MasterMachineID 返回主控宿主机运行态 machine_id（用于同机 fail-closed 判定）。
+func (m *Manager) MasterMachineID() string {
+	return m.cfg.MasterMachineID
+}
+
 // Runtime 返回指定服务器最近缓存的节点运行态元数据（不存在时 ok 为 false）。
 func (m *Manager) Runtime(serverID int64) (NodeRuntime, bool) {
 	m.mu.Lock()
@@ -872,6 +902,20 @@ func (m *Manager) RecordRuntime(serverID int64, rt NodeRuntime) {
 	m.mu.Unlock()
 }
 
+// RecordPeerIP 仅刷新指定服务器最近通信的对端 IP（不改动 ExecEnabled / InDocker 等其余字段）。
+func (m *Manager) RecordPeerIP(serverID int64, peerIP string) {
+	peerIP = strings.TrimSpace(peerIP)
+	if serverID <= 0 || peerIP == "" {
+		return
+	}
+	m.mu.Lock()
+	cur := m.runtimes[serverID]
+	cur.PeerIP = peerIP
+	cur.UpdatedAt = m.now()
+	m.runtimes[serverID] = cur
+	m.mu.Unlock()
+}
+
 func (m *Manager) recordRuntimeLocked(serverID int64, rt NodeRuntime) {
 	cur := m.runtimes[serverID]
 	if v := strings.TrimSpace(rt.AgentVersion); v != "" {
@@ -886,8 +930,12 @@ func (m *Manager) recordRuntimeLocked(serverID int64, rt NodeRuntime) {
 	if v := strings.TrimSpace(rt.MinMasterVersion); v != "" {
 		cur.MinMasterVersion = v
 	}
-	if rt.AgentVersion != "" || rt.InDocker || rt.MachineID != "" || rt.MasterURL != "" {
+	if v := strings.TrimSpace(rt.PeerIP); v != "" {
+		cur.PeerIP = v
+	}
+	if rt.AgentVersion != "" || rt.InDocker || rt.MachineID != "" || rt.MasterURL != "" || rt.PeerIP != "" || rt.ExecEnabled {
 		cur.InDocker = rt.InDocker
+		cur.ExecEnabled = rt.ExecEnabled
 	}
 	cur.ExecRunning = rt.ExecRunning
 	cur.UpdatedAt = m.now()

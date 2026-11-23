@@ -12,14 +12,16 @@ import (
 
 // Entry 是要记的一条：除 id 外与 Record 相同。
 type Entry struct {
-	At         time.Time
-	Actor      string
-	ActorKind  v1.ActorKind
-	TokenID    *int64
-	Command    string
-	ArgsDigest string
-	PlanID     *int64
-	Result     string
+	At          time.Time
+	Actor       string
+	ActorKind   v1.ActorKind
+	TokenID     *int64
+	Command     string
+	ArgsDigest  string
+	FullCommand *string
+	Output      *string
+	PlanID      *int64
+	Result      string
 }
 
 // Retention 是审计记录的保留期（master-scheduler「本站的内置任务」的 audit_cleanup）。
@@ -42,7 +44,8 @@ func (s *Service) Record(ctx context.Context, e Entry) error {
 	}
 	return s.repo.Insert(ctx, core.Record{
 		At: e.At, Actor: e.Actor, ActorKind: e.ActorKind, TokenID: e.TokenID,
-		Command: e.Command, ArgsDigest: e.ArgsDigest, PlanID: e.PlanID, Result: e.Result,
+		Command: e.Command, ArgsDigest: e.ArgsDigest, FullCommand: e.FullCommand, Output: e.Output,
+		PlanID: e.PlanID, Result: e.Result,
 	})
 }
 

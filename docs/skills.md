@@ -11,6 +11,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `satchel-backup` | 备份与恢复主控时用：生成、列出、上传备份；下载与恢复要请人做；新装的主控用初始化向导建管理员或从备份恢复。 |
 | `satchel-basics` | 用 Satchel 之前先读：开局看总览与身份，怎么学命令、看输出与错误，危险操作与只有人能做的操作怎么处理，MCP 上怎么调用。 |
 | `satchel-database` | 看或更换主控的数据库时用：看当前的数据库、试连 PostgreSQL、从 SQLite 在线迁移。 |
+| `satchel-diag` | 无 SSH 排查节点故障时用：固定只读诊断集（server diag）、一键取证与证据包查询（server evidence / evidence list / evidence get），以及确实需要时在远程节点执行受控命令（server exec）。 |
 | `satchel-network` | 管理节点网络探测（端口扫描、站点 TLS/Reality 校验、最多 200 域名 16 并发延迟批量探测）、纯 Go WARP WireGuard 凭据与出站/防送中快捷路由规划，以及返程路由（kind ReturnRoute）的查询与测路长任务。 |
 | `satchel-proxy` | 管理 sing-box 代理入站（Inbound）、出站（Outbound）、路由规则（RoutingRule）、密钥生成、无状态建站向导、出站实时探活、中转落地规划、路由预设与多机批量规划时用：所有配置变更一律走 plan / apply。 |
 | `satchel-servers` | 加服务器（节点）、取安装命令、看节点是否在线，以及给节点上的凭据临时限速、踢线、看连接与流量、重启节点内核时用：安装命令要 https 主控地址，token 原文要请人取。 |
@@ -44,6 +45,8 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `db migrate` | `satchel-troubleshoot` |
 | `db status` | `satchel-troubleshoot` |
 | `db unlock` | `satchel-troubleshoot` |
+| `evidence get` | `satchel-diag` |
+| `evidence list` | `satchel-diag` |
 | `explain` | `satchel-basics`、`satchel-settings` |
 | `inbound batch list` | `satchel-proxy` |
 | `inbound batch plan` | `satchel-proxy` |
@@ -53,7 +56,7 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `inbound keygen` | `satchel-proxy` |
 | `inbound list` | `satchel-proxy` |
 | `inbound protocols` | `satchel-proxy` |
-| `job get` | `satchel-backup`、`satchel-basics`、`satchel-database`、`satchel-troubleshoot`、`satchel-upgrade` |
+| `job get` | `satchel-backup`、`satchel-basics`、`satchel-database`、`satchel-diag`、`satchel-troubleshoot`、`satchel-upgrade` |
 | `job list` | `satchel-basics`、`satchel-troubleshoot` |
 | `login` | `satchel-access`、`satchel-backup`、`satchel-basics`、`satchel-database`、`satchel-servers`、`satchel-settings`、`satchel-troubleshoot` |
 | `logout` | `satchel-basics` |
@@ -94,7 +97,10 @@ skills 是写给 AI 的操作手册：源文件在 `internal/base/skills/files/`
 | `server config status` | `satchel-servers` |
 | `server config test` | `satchel-servers` |
 | `server connections` | `satchel-servers` |
+| `server diag` | `satchel-diag` |
 | `server domain-latency` | `satchel-network` |
+| `server evidence` | `satchel-diag` |
+| `server exec` | `satchel-diag` |
 | `server get` | `satchel-servers` |
 | `server install-command` | `satchel-servers` |
 | `server kick` | `satchel-servers` |

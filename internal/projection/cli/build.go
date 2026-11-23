@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -66,6 +67,9 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 			use += " <" + a.Name + ">"
 		}
 	}
+	if c.TrailingCommandFlag != "" {
+		use += " [-- <" + c.TrailingCommandFlag + "...>]"
+	}
 	values := map[string]any{}
 	leaf := &cobra.Command{
 		Use:         use,
@@ -100,7 +104,20 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 		leaf.Flags().StringVar(&page.Cursor, "cursor", "", "上一页返回的 nextCursor")
 	}
 	leaf.RunE = func(cmd *cobra.Command, args []string) error {
-		inv := &command.Invocation{Path: c.Path, Args: args, Flags: map[string]any{}, Confirm: confirm}
+		posArgs := args
+		var trailingCmd string
+		hasTrailing := false
+		if c.TrailingCommandFlag != "" {
+			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+				if cmd.Flags().Changed(c.TrailingCommandFlag) {
+					return usageError("--%s 与 -- 后的命令不能同时使用", c.TrailingCommandFlag)
+				}
+				posArgs = args[:dash]
+				trailingCmd = strings.Join(args[dash:], " ")
+				hasTrailing = true
+			}
+		}
+		inv := &command.Invocation{Path: c.Path, Args: posArgs, Flags: map[string]any{}, Confirm: confirm}
 		for _, f := range c.Flags {
 			if !cmd.Flags().Changed(f.Name) {
 				continue
@@ -116,6 +133,9 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 				continue
 			}
 			inv.Flags[f.Name] = deref(values[f.Name])
+		}
+		if hasTrailing {
+			inv.Flags[c.TrailingCommandFlag] = trailingCmd
 		}
 		if c.List {
 			if cmd.Flags().Changed("limit") && (page.Limit < 1 || page.Limit > command.MaxLimit) {
@@ -179,9 +199,18 @@ func newLeaf(c *command.Command, opts Options, o *options) *cobra.Command {
 		switch c.Shape {
 		case command.ShapeJob:
 			if !noWait {
-				if result, err = followJob(cmd.Context(), result, runner, opts); err != nil {
-					return err
+				res, ferr := followJob(cmd.Context(), result, runner, opts)
+				if ferr != nil {
+					var je *jobExitError
+					if errors.As(ferr, &je) && res != nil {
+						if rerr := render(cmd.OutOrStdout(), c, res, opts, o); rerr != nil {
+							return rerr
+						}
+						return je
+					}
+					return ferr
 				}
+				result = res
 			}
 		case command.ShapeDownload:
 			if result, err = saveDownload(result, output); err != nil {
@@ -306,9 +335,23 @@ func noTerminal(c *command.Command, err error) error {
 		WithNext("在有终端的会话里执行" + orWeb(c.Name()))
 }
 
-// argsValidator 按表校验位置参数个数，文案点名缺的或多余的那个。
+// argsValidator 按表校验位置参数个数，文案点名缺的或多余的那个；支持 TrailingCommandFlag 的命令允许在 -- 后携带尾部命令片段。
 func argsValidator(c *command.Command) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
+		if c.TrailingCommandFlag != "" {
+			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+				if dash > len(c.Args) {
+					return usageError("多余的参数 %s", args[len(c.Args)])
+				}
+				if dash < c.RequiredArgs() {
+					return usageError("缺少位置参数 %s", c.Args[dash].Name)
+				}
+				if len(args[dash:]) == 0 {
+					return usageError("-- 后面缺少要执行的命令")
+				}
+				return nil
+			}
+		}
 		if len(args) > len(c.Args) {
 			return usageError("多余的参数 %s", args[len(c.Args)])
 		}

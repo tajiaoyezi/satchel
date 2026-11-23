@@ -25,6 +25,7 @@ const (
 	TypeHeartbeat       = "heartbeat"
 	TypeHeartbeatAck    = "heartbeat_ack"
 	TypeSpeed           = "speed"
+	TypeExecEvent       = "exec_event"
 	TypeCall            = "rpc_call"
 	TypeReply           = "rpc_reply"
 )
@@ -55,6 +56,7 @@ type Auth struct {
 	InDocker         bool   `json:"in_docker,omitempty"`
 	MachineID        string `json:"machine_id,omitempty"`
 	MasterURL        string `json:"master_url,omitempty"`
+	ExecEnabled      bool   `json:"exec_enabled,omitempty"`
 }
 
 // AgentConfig 是主控向节点统一下发的运行期配置：经 WS AuthResult、加密 HTTP 回复与 agent.config_update 同步。
@@ -89,6 +91,7 @@ type Heartbeat struct {
 	InDocker     bool      `json:"in_docker,omitempty"`
 	MachineID    string    `json:"machine_id,omitempty"`
 	MasterURL    string    `json:"master_url,omitempty"`
+	ExecEnabled  bool      `json:"exec_enabled,omitempty"`
 }
 
 // HeartbeatAck 是主控对心跳的确认。
@@ -142,6 +145,7 @@ type AgentInfo struct {
 	InDocker         bool   `json:"in_docker,omitempty"`
 	MachineID        string `json:"machine_id,omitempty"`
 	MasterURL        string `json:"master_url,omitempty"`
+	ExecEnabled      bool   `json:"exec_enabled,omitempty"`
 	ExecRunning      bool   `json:"exec_running,omitempty"`
 }
 

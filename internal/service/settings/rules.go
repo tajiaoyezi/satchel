@@ -85,6 +85,11 @@ var rules = map[string]func(v any) error{
 	"batch_single_threshold": between(1, 1000),
 	"batch_window_threshold": between(1, 10000),
 	"batch_window_minutes":   between(1, 1440),
+	// Satchel 新增：远程执行并发队列与一键取证配额（m2-21）。
+	"exec_max_concurrency":    between(1, 32),
+	"exec_queue_depth":        between(0, 100),
+	"evidence_max_bytes":      between(65536, 10485760),
+	"evidence_retention_days": between(1, 365),
 }
 
 func oneOf(allowed ...string) func(any) error {

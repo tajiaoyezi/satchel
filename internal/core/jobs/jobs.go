@@ -56,6 +56,15 @@ var ErrNotFound = errors.New("job not found")
 // master-self-update）。job 行保持 running。
 var ErrHandedOff = errors.New("job handed off")
 
+// Outcome 允许长任务（如 server exec）直接指定终态 status（done/failed/unknown）、真实 exit_code（unknown 时为 nil）、
+// output 与 output_truncated，而不强制压缩成固定 0/1。
+type Outcome struct {
+	Status          string
+	ExitCode        *int64
+	Output          string
+	OutputTruncated bool
+}
+
 // Repo 是长任务的仓储。
 type Repo struct {
 	db    *bun.DB
@@ -105,10 +114,48 @@ func (r *Repo) SetRunning(ctx context.Context, id int64, at time.Time) error {
 
 // Finish 把一个处在 from 状态（通常是 running；改 running 失败时是 queued）的 job 改成结束状态，写结束时间、退出码与输出。
 func (r *Repo) Finish(ctx context.Context, id int64, from, status string, exitCode int64, output string, truncated bool, at time.Time) error {
+	return r.FinishWithOptionalExit(ctx, id, from, status, &exitCode, output, truncated, at)
+}
+
+// FinishWithOptionalExit 同 Finish，但允许 exitCode 为 nil（如 server exec 断连标 unknown 时没有可靠退出码）。
+func (r *Repo) FinishWithOptionalExit(ctx context.Context, id int64, from, status string, exitCode *int64, output string, truncated bool, at time.Time) error {
 	finished := utc(at)
-	row := &model.Job{ID: id, Status: status, FinishedAt: &finished, ExitCode: &exitCode, Output: &output, OutputTruncated: truncated}
+	row := &model.Job{ID: id, Status: status, FinishedAt: &finished, ExitCode: exitCode, Output: &output, OutputTruncated: truncated}
 	return r.store.UpdateStatus(ctx, row, []string{"status", "finished_at", "exit_code", "output", "output_truncated"},
 		store.Cond{Column: "status", Value: from})
+}
+
+// MarkUnknown 将 running 态长任务（server exec 节点断连）置为 unknown，保留已收到输出且不写入退出码。
+func (r *Repo) MarkUnknown(ctx context.Context, id int64, output string, truncated bool, at time.Time) error {
+	return r.FinishWithOptionalExit(ctx, id, StatusRunning, StatusUnknown, nil, output, truncated, at)
+}
+
+// ReconcileUnknown 将 unknown 态长任务按节点重连补报的终态收敛到 done 或 failed。
+func (r *Repo) ReconcileUnknown(ctx context.Context, id int64, status string, exitCode int64, output string, truncated bool, at time.Time) error {
+	if status != StatusDone && status != StatusFailed {
+		return v1.Newf(v1.CodeBadRequest, "补报终态只能是 done 或 failed，得到 %q", status)
+	}
+	return r.Finish(ctx, id, StatusUnknown, status, exitCode, output, truncated, at)
+}
+
+// ListUnknownByServer 列出指定服务器所有仍处于 unknown 态的某类长任务（按 id 升序），用于节点重连后补报终态。
+func (r *Repo) ListUnknownByServer(ctx context.Context, serverID int64, kind string) ([]*Job, error) {
+	var rows []model.Job
+	q := r.db.NewSelect().Model(&rows).
+		Where("deleted_at IS NULL").
+		Where("status = ?", StatusUnknown).
+		Where("server_id = ?", serverID)
+	if kind != "" {
+		q = q.Where("kind = ?", kind)
+	}
+	if err := q.OrderExpr("id ASC").Scan(ctx); err != nil {
+		return nil, v1.Wrap(v1.CodeDatabase, "读取未知状态长任务失败", err)
+	}
+	out := make([]*Job, 0, len(rows))
+	for i := range rows {
+		out = append(out, jobOf(&rows[i]))
+	}
+	return out, nil
 }
 
 // MarkInterrupted 把还是 queued 或 running 的 job 改成 failed（serve 启动时调：它们是上次主控停止时还没结束的），返回改了几个。

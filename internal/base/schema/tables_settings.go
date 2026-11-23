@@ -124,6 +124,12 @@ func settingsKeys() []Column {
 		col("user_hidden_rule_templates", TypeJSON),
 		col("user_visible_owned_rule_templates", TypeJSON),
 
+		// Satchel 新增·日常运维·远程执行并发队列与一键取证配额（m2-21）
+		col("exec_max_concurrency", TypeInt),
+		col("exec_queue_depth", TypeInt),
+		col("evidence_max_bytes", TypeInt),
+		col("evidence_retention_days", TypeInt),
+
 		// 只读展示（第 07 章：没有写接口；节点通信强制加密在 Satchel 常开、不可关，第 06 章）
 		col("require_encryption", TypeBool).cls(ClassReadOnly),
 

@@ -109,6 +109,81 @@ func TestFollowJob(t *testing.T) {
 	}
 }
 
+func TestTrailingCommandFlagAndUnknownExecJob(t *testing.T) {
+	tbl, err := command.New(
+		&command.Command{Path: []string{"job", "get"}, Summary: "s", Class: command.ClassRead, Args: []command.Arg{{Name: "job"}}},
+		&command.Command{
+			Path: []string{"server", "exec"}, Summary: "s", Class: command.ClassAction, Shape: command.ShapeJob,
+			Danger: v1.DangerExec, Confirm: &command.Confirm{Kind: command.ConfirmObject, Arg: "name"},
+			TrailingCommandFlag: "command",
+			Args:                []command.Arg{{Name: "name"}},
+			Flags: []command.Flag{
+				{Name: "command", Type: command.TypeString},
+				{Name: "timeout", Type: command.TypeString, Default: "30s"},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotInv *command.Invocation
+	finalStatus := "done"
+	finalOut := `{"server":"hk-1","state":"done","exit_code":0,"output":"hello"}`
+	runner := command.RunnerFunc(func(_ context.Context, inv *command.Invocation) (any, error) {
+		switch inv.Name() {
+		case "server exec":
+			gotInv = inv
+			return map[string]any{"job_id": "job-exec1234567890ab", "status": "queued"}, nil
+		case "job get":
+			return map[string]any{"job_id": inv.Args[0], "status": finalStatus, "output": finalOut}, nil
+		}
+		return nil, v1.New(v1.CodeNotFound, "not found")
+	})
+
+	opts := Options{Table: tbl, Local: command.Bindings{}, Renderers: map[string]Renderer{},
+		Remote: func(string) command.Runner { return runner }, JobPoll: time.Millisecond}
+
+	// 1. CLI -- 尾部命令透传
+	out, errOut, code := runShape(opts, "server", "exec", "hk-1", "--confirm", "hk-1", "--json", "--", "echo", "hello", "world")
+	if code != 0 || errOut != "" {
+		t.Fatalf("trailing command 应成功：code=%d out=%s err=%s", code, out, errOut)
+	}
+	if gotInv == nil || len(gotInv.Args) != 1 || gotInv.Args[0] != "hk-1" || gotInv.Flags["command"] != "echo hello world" {
+		t.Fatalf("trailing command 解析不对：%+v", gotInv)
+	}
+
+	// 2. --command 与 -- 同时传入报 usage（退出码 2）
+	_, _, code = runShape(opts, "server", "exec", "hk-1", "--confirm", "hk-1", "--command", "a", "--", "b")
+	if code != 2 {
+		t.Fatalf("--command 与 -- 同传应退出码 2，得到 %d", code)
+	}
+
+	// 3. CLI 遇到 unknown 终态：输出完整 job JSON 并以非零退出码返回
+	finalStatus = "unknown"
+	finalOut = `{"server":"hk-1","state":"unknown","output":"partial"}`
+	out, _, code = runShape(opts, "server", "exec", "hk-1", "--confirm", "hk-1", "--json", "--", "sleep", "5")
+	if code == 0 || (!strings.Contains(out, `"status":"unknown"`) && !strings.Contains(out, `"status": "unknown"`)) || !strings.Contains(out, "partial") {
+		t.Fatalf("CLI unknown 终态应输出 job 且非零退出：code=%d out=%s", code, out)
+	}
+
+	// 4. MCP 模式（JobMaxWait > 0）遇到 unknown 终态直接返回 job 且退出码 0
+	mcpOpts := opts
+	mcpOpts.JobMaxWait = 50 * time.Millisecond
+	out, _, code = runShape(mcpOpts, "server", "exec", "hk-1", "--confirm", "hk-1", "--json", "--", "sleep", "5")
+	if code != 0 || (!strings.Contains(out, `"status":"unknown"`) && !strings.Contains(out, `"status": "unknown"`)) {
+		t.Fatalf("MCP 模式 unknown 终态应返回 job 且退出码 0：code=%d out=%s", code, out)
+	}
+
+	// 5. CLI 遇到带真实非零退出码的 exec failed 终态：输出完整 job JSON 且非零退出
+	finalStatus = "failed"
+	finalOut = `{"server":"hk-1","state":"failed","exit_code":7,"output":"boom"}`
+	out, _, code = runShape(opts, "server", "exec", "hk-1", "--confirm", "hk-1", "--json", "--", "exit", "7")
+	if code == 0 || (!strings.Contains(out, `"status":"failed"`) && !strings.Contains(out, `"status": "failed"`)) || !strings.Contains(out, "boom") {
+		t.Fatalf("CLI exec failed 终态应输出 job 且非零退出：code=%d out=%s", code, out)
+	}
+}
+
 // 上传：--file 的内容作为 Body，路径本身不进 Flags；下载：写到 --output（0600），已存在就是 usage、不覆盖。
 func TestUploadAndDownload(t *testing.T) {
 	dir := t.TempDir()

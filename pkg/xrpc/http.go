@@ -47,6 +47,7 @@ type AgentHTTPRPC struct {
 	InDocker         bool                  `json:"in_docker,omitempty"`
 	MachineID        string                `json:"machine_id,omitempty"`
 	MasterURL        string                `json:"master_url,omitempty"`
+	ExecEnabled      bool                  `json:"exec_enabled,omitempty"`
 	Heartbeat        *HTTPHeartbeatPayload `json:"heartbeat,omitempty"`
 	Traffic          *TrafficSnapshot      `json:"traffic,omitempty"`
 	Speed            *SpeedReport          `json:"speed,omitempty"`

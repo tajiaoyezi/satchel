@@ -69,5 +69,18 @@ func TestInsertListCount(t *testing.T) {
 		if err != nil || len(page2) != 3 || page2[0].ID != rows[3].ID {
 			t.Fatalf("beforeID 翻页不对：%v %v", page2, err)
 		}
+		// 写入含 full_command 与 output 的 server exec 审计记录。
+		fc := "uname -a"
+		out := "Linux node 6.1"
+		if err := r.Insert(ctx, Record{
+			At: base.Add(10 * time.Hour), Actor: "root", ActorKind: v1.ActorLocalAdmin,
+			Command: "server exec", ArgsDigest: `{"args":["hk-1"]}`, FullCommand: &fc, Output: &out, Result: "ok",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		execRows, err := r.List(ctx, Filter{CommandPrefix: "server exec"}, 5, 0)
+		if err != nil || len(execRows) != 1 || execRows[0].FullCommand == nil || *execRows[0].FullCommand != fc || execRows[0].Output == nil || *execRows[0].Output != out {
+			t.Fatalf("FullCommand/Output 读写异常：%+v err=%v", execRows, err)
+		}
 	})
 }

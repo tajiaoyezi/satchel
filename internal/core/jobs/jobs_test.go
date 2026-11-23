@@ -137,3 +137,50 @@ func TestInsertForServer(t *testing.T) {
 		}
 	})
 }
+
+func TestUnknownLifecycleAndMarkInterruptedPreservesUnknown(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		ctx := context.Background()
+		st := store.New(bdb, schema.Default())
+		r := New(bdb, st)
+		srv := &model.Server{Name: "srv-exec-unk", Token: "tok-exec-unk"}
+		if err := st.Insert(ctx, srv); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC()
+		j1, err := r.InsertForServer(ctx, "job-exec-00000001", "server exec", srv.ID, json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.SetRunning(ctx, j1.ID, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.MarkUnknown(ctx, j1.ID, `{"partial":"hi"}`, false, now.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		// 再插一条 running 的普通任务，模拟主控重启：running 变 failed，unknown 必须保留！
+		j2, err := r.Insert(ctx, "job-norm-00000002", "backup create", json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.SetRunning(ctx, j2.ID, now); err != nil {
+			t.Fatal(err)
+		}
+		n, err := r.MarkInterrupted(ctx, `{"code":"internal"}`, now.Add(2*time.Second))
+		if err != nil || n != 1 {
+			t.Fatalf("MarkInterrupted 应只改 1 条 running，得到 %d %v", n, err)
+		}
+		unkList, err := r.ListUnknownByServer(ctx, srv.ID, "server exec")
+		if err != nil || len(unkList) != 1 || unkList[0].JobID != j1.JobID || unkList[0].ExitCode != nil {
+			t.Fatalf("ListUnknownByServer 异常：%+v err=%v", unkList, err)
+		}
+		// 重连补报收敛为 done。
+		if err := r.ReconcileUnknown(ctx, j1.ID, StatusDone, 0, `{"output":"hi\nbye"}`, false, now.Add(3*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		final, err := r.Get(ctx, j1.JobID)
+		if err != nil || final.Status != StatusDone || final.ExitCode == nil || *final.ExitCode != 0 {
+			t.Fatalf("ReconcileUnknown 结果不对：%+v err=%v", final, err)
+		}
+	})
+}

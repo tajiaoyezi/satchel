@@ -168,6 +168,7 @@ func (s *Service) recordRuntime(id int64, info xrpc.AgentInfo) {
 			MachineID:        info.MachineID,
 			MasterURL:        info.MasterURL,
 			MinMasterVersion: info.MinMasterVersion,
+			ExecEnabled:      info.ExecEnabled,
 			ExecRunning:      info.ExecRunning,
 		})
 	}

@@ -163,8 +163,8 @@ func TestShow(t *testing.T) {
 		if _, ok := status["heartbeat_interval"]; ok {
 			t.Error("status 里不该有 heartbeat_interval")
 		}
-		if len(spec) != 100 || len(status) != 43 {
-			t.Errorf("spec 应当 100 个字段、status 43 个，得到 %d / %d", len(spec), len(status))
+		if len(spec) != 104 || len(status) != 43 {
+			t.Errorf("spec 应当 104 个字段、status 43 个，得到 %d / %d", len(spec), len(status))
 		}
 		if string(status["telegram_bot_token"]) != `""` || string(spec["probe_external_token_sha256"]) != `""` {
 			t.Errorf("空的打码字段输出空串：%s %s", status["telegram_bot_token"], spec["probe_external_token_sha256"])
@@ -635,6 +635,47 @@ func TestBatchThresholdSet(t *testing.T) {
 		}
 		if _, err := f.run(f.user, "settings batch-threshold set", []string{"batch_single_threshold", "8"}, map[string]any{"resource-version": 4}); v1.AsError(err).Code != v1.CodeForbidden {
 			t.Errorf("普通用户应报 forbidden：%v", err)
+		}
+	})
+}
+
+func TestDiagAndEvidenceSettings(t *testing.T) {
+	dbtest.ForEach(t, func(t *testing.T, bdb *bun.DB) {
+		f := setup(t, bdb)
+		obj := f.show()
+		if obj.Spec.ExecMaxConcurrency != 2 || obj.Spec.ExecQueueDepth != 8 || obj.Spec.EvidenceMaxBytes != 1<<20 || obj.Spec.EvidenceRetentionDays != 30 {
+			t.Fatalf("默认值不符：%+v", obj.Spec)
+		}
+		// 越界值拒绝。
+		for _, bad := range []map[string]any{
+			{"exec_max_concurrency": "0"},
+			{"exec_max_concurrency": "33"},
+			{"exec_queue_depth": "-1"},
+			{"exec_queue_depth": "101"},
+			{"evidence_max_bytes": "1024"},
+			{"evidence_max_bytes": "20000000"},
+			{"evidence_retention_days": "0"},
+			{"evidence_retention_days": "366"},
+		} {
+			if _, err := f.run(f.admin, "settings set", nil, map[string]any{"set": bad, "resource-version": 1}); v1.AsError(err).Code != v1.CodeBadRequest {
+				t.Errorf("越界 %v 应报 bad_request：%v", bad, err)
+			}
+		}
+		// 合法写入并校验更新后的 spec。
+		if _, err := f.run(f.admin, "settings set", nil, map[string]any{
+			"set": map[string]any{
+				"exec_max_concurrency":    "4",
+				"exec_queue_depth":        "16",
+				"evidence_max_bytes":      "2097152",
+				"evidence_retention_days": "14",
+			},
+			"resource-version": 1,
+		}); err != nil {
+			t.Fatalf("合法写入失败：%v", err)
+		}
+		updated := f.show()
+		if updated.Metadata.ResourceVersion != 2 || updated.Spec.ExecMaxConcurrency != 4 || updated.Spec.ExecQueueDepth != 16 || updated.Spec.EvidenceMaxBytes != 2097152 || updated.Spec.EvidenceRetentionDays != 14 {
+			t.Fatalf("更新后值不对：%+v", updated)
 		}
 	})
 }

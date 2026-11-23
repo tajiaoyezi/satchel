@@ -309,7 +309,7 @@ func (c *nodeClient) callOne(ctx context.Context, serverID int64, role, token, b
 		if err != nil {
 			return nil, err
 		}
-		respBytes, status, gotConn, err := c.doSignedHTTP(rctx, http.MethodPost, baseURL+rpcPath, rpcPath, token, ns.sessionID, env)
+		respBytes, status, gotConn, remoteIP, err := c.doSignedHTTP(rctx, http.MethodPost, baseURL+rpcPath, rpcPath, token, ns.sessionID, env)
 		if err != nil {
 			if !gotConn {
 				c.deleteSession(key)
@@ -319,6 +319,9 @@ func (c *nodeClient) callOne(ctx context.Context, serverID int64, role, token, b
 				return nil, xrpc.ErrTimeout
 			}
 			return nil, err
+		}
+		if remoteIP != "" {
+			c.m.RecordPeerIP(serverID, remoteIP)
 		}
 		if status == http.StatusPreconditionFailed {
 			c.deleteSession(key)
@@ -345,7 +348,7 @@ func (c *nodeClient) callOne(ctx context.Context, serverID int64, role, token, b
 
 func (c *nodeClient) handshake(ctx context.Context, key nodeSessionKey) (nodeSession, error) {
 	// 1. /handshake/init 取节点临时公钥与 handshake_id
-	initBytes, status, _, err := c.doSignedHTTP(ctx, http.MethodPost, key.baseURL+xrpc.HTTPNodePathHandshakeInit, xrpc.HTTPNodePathHandshakeInit, key.token, "", []byte("{}"))
+	initBytes, status, _, _, err := c.doSignedHTTP(ctx, http.MethodPost, key.baseURL+xrpc.HTTPNodePathHandshakeInit, xrpc.HTTPNodePathHandshakeInit, key.token, "", []byte("{}"))
 	if err != nil {
 		return nodeSession{}, err
 	}
@@ -384,7 +387,7 @@ func (c *nodeClient) handshake(ctx context.Context, key nodeSessionKey) (nodeSes
 	}
 
 	// 2. /handshake/finish 完成双向签名校验并取回 session_id
-	finBytes, status, _, err := c.doSignedHTTP(ctx, http.MethodPost, key.baseURL+xrpc.HTTPNodePathHandshakeFinish, xrpc.HTTPNodePathHandshakeFinish, key.token, "", finReq)
+	finBytes, status, _, _, err := c.doSignedHTTP(ctx, http.MethodPost, key.baseURL+xrpc.HTTPNodePathHandshakeFinish, xrpc.HTTPNodePathHandshakeFinish, key.token, "", finReq)
 	if err != nil {
 		return nodeSession{}, err
 	}
@@ -402,13 +405,20 @@ func (c *nodeClient) handshake(ctx context.Context, key nodeSessionKey) (nodeSes
 	}, nil
 }
 
-func (c *nodeClient) doSignedHTTP(ctx context.Context, method, fullURL, path, token, sessionID string, body []byte) (respBody []byte, status int, gotConn bool, err error) {
+func (c *nodeClient) doSignedHTTP(ctx context.Context, method, fullURL, path, token, sessionID string, body []byte) (respBody []byte, status int, gotConn bool, remoteIP string, err error) {
 	nonce, err := securechan.RandomNonce()
 	if err != nil {
-		return nil, 0, false, err
+		return nil, 0, false, "", err
 	}
 	tctx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-		GotConn: func(httptrace.GotConnInfo) { gotConn = true },
+		GotConn: func(info httptrace.GotConnInfo) {
+			gotConn = true
+			if info.Conn != nil && info.Conn.RemoteAddr() != nil {
+				if host, _, serr := net.SplitHostPort(info.Conn.RemoteAddr().String()); serr == nil {
+					remoteIP = host
+				}
+			}
+		},
 	})
 	var bodyReader io.Reader
 	if len(body) > 0 {
@@ -416,7 +426,7 @@ func (c *nodeClient) doSignedHTTP(ctx context.Context, method, fullURL, path, to
 	}
 	req, err := http.NewRequestWithContext(tctx, method, fullURL, bodyReader)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, 0, false, "", err
 	}
 	ver := c.m.cfg.Version
 	if ver == "" {
@@ -431,12 +441,12 @@ func (c *nodeClient) doSignedHTTP(ctx context.Context, method, fullURL, path, to
 	client := &http.Client{Transport: c.transport}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, 0, gotConn, err
+		return nil, 0, gotConn, remoteIP, err
 	}
 	defer resp.Body.Close()
 	data, rerr := io.ReadAll(io.LimitReader(resp.Body, xrpc.ReadLimit))
 	if rerr != nil {
-		return nil, resp.StatusCode, gotConn, rerr
+		return nil, resp.StatusCode, gotConn, remoteIP, rerr
 	}
-	return data, resp.StatusCode, gotConn, nil
+	return data, resp.StatusCode, gotConn, remoteIP, nil
 }

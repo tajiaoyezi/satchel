@@ -175,6 +175,8 @@ func (m *Manager) ServeRPC(w http.ResponseWriter, r *http.Request, ip string) {
 		MachineID:        req.MachineID,
 		MasterURL:        req.MasterURL,
 		MinMasterVersion: req.MinMasterVersion,
+		PeerIP:           ip,
+		ExecEnabled:      req.ExecEnabled,
 	}
 	m.RecordRuntime(node.ID, rt)
 
@@ -193,6 +195,9 @@ func (m *Manager) ServeRPC(w http.ResponseWriter, r *http.Request, ip string) {
 		writeEncryptedReply(w, sess, xrpc.AgentHTTPRPCReply{OK: true, HeartbeatInterval: cfg.HeartbeatInterval, Config: &cfg, ServerTime: &now})
 		if req.MasterURL != "" {
 			go m.maybeSyncMasterURL(node.ID, node.Name, req.MasterURL)
+		}
+		if m.cfg.OnConnected != nil {
+			go m.cfg.OnConnected(node.ID)
 		}
 	case xrpc.HTTPRPCMethodTraffic:
 		if req.Traffic == nil {

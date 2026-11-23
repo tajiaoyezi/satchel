@@ -184,6 +184,14 @@ func ExecuteContext(ctx context.Context, opts Options, args []string, stdout, st
 	if err == nil {
 		return v1.ExitOK
 	}
+	var je *jobExitError
+	if errors.As(err, &je) {
+		asJSON := o.json || (!o.preRunRan && wantsJSON(opts, args))
+		if !asJSON && je.err != nil {
+			writeError(stderr, je.err, false)
+		}
+		return je.code
+	}
 	e := normalizeError(err, o.preRunRan)
 	// 用法错误时 PersistentPreRun 没跑，--json 只能从原始参数与环境变量里看。
 	asJSON := o.json || (!o.preRunRan && wantsJSON(opts, args))

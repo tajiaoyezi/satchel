@@ -264,3 +264,51 @@ func (r *Repo) LoadBatchThresholds(ctx context.Context) (BatchThresholds, error)
 	}
 	return BatchThresholdsFromState(st), nil
 }
+
+// DiagLimits 汇总远程执行并发队列与一键取证证据包的生效限额。
+type DiagLimits struct {
+	ExecMaxConcurrency    int
+	ExecQueueDepth        int
+	EvidenceMaxBytes      int64
+	EvidenceRetentionDays int
+}
+
+// DefaultDiagLimits 返回系统默认的远程执行并发队列与证据包限额（2 / 8 / 1 MiB / 30 天）。
+func DefaultDiagLimits() DiagLimits {
+	return DiagLimits{
+		ExecMaxConcurrency:    2,
+		ExecQueueDepth:        8,
+		EvidenceMaxBytes:      1 << 20,
+		EvidenceRetentionDays: 30,
+	}
+}
+
+// DiagLimitsFromState 从设置快照中提取远程执行与证据包配额；缺失或非法时回退默认值。
+func DiagLimitsFromState(st *State) DiagLimits {
+	out := DefaultDiagLimits()
+	if st == nil {
+		return out
+	}
+	if v, ok := st.Values["exec_max_concurrency"].(int64); ok && v >= 1 && v <= 32 {
+		out.ExecMaxConcurrency = int(v)
+	}
+	if v, ok := st.Values["exec_queue_depth"].(int64); ok && v >= 0 && v <= 100 {
+		out.ExecQueueDepth = int(v)
+	}
+	if v, ok := st.Values["evidence_max_bytes"].(int64); ok && v >= 65536 && v <= 10485760 {
+		out.EvidenceMaxBytes = v
+	}
+	if v, ok := st.Values["evidence_retention_days"].(int64); ok && v >= 1 && v <= 365 {
+		out.EvidenceRetentionDays = int(v)
+	}
+	return out
+}
+
+// LoadDiagLimits 从库加载当前生效的远程执行与证据包限额。
+func (r *Repo) LoadDiagLimits(ctx context.Context) (DiagLimits, error) {
+	st, err := r.Load(ctx)
+	if err != nil {
+		return DiagLimits{}, err
+	}
+	return DiagLimitsFromState(st), nil
+}

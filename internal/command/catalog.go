@@ -40,6 +40,7 @@ var GroupSummaries = map[string]string{
 	"server nginx":             "节点 nginx 远程安装/卸载、server 块巡检与受保护的 stream 清理（同机操作需当场人类验证并保护 443）",
 	"server steal":             "服务器偷取模式（tunnel / fallback / off）：查 443 绑定状态与偷自己本地 nginx 预览、声明式部署与切换",
 	"server warp":              "节点纯 Go WARP WireGuard 凭据管理（状态、注册安装、授权/离线导入、移除）与出站/防送中快捷路由规划",
+	"evidence":                 "一键取证证据包：分页查询摘要与查看单份完整证据包（系统只写 kind EvidencePackage，只对管理员开放）",
 	"return-route":             "返程路由（kind ReturnRoute）：列表查询与节点返程测路长任务（增删改恢复走 plan / apply）",
 	"tunnel":                   "任意门单跳转发、复用分流与 N 台链式隧道编排（零迁移，全部写操作一律经 plan / apply）",
 	"tunnel multiplex":         "复用已有 direct 入站按域名/IP 分流转发（不另开端口，自动排在兜底规则之前）",
@@ -76,8 +77,41 @@ func catalogCommands() []*Command {
 	all = append(all, websiteCommands()...)
 	all = append(all, tunnelCommands()...)
 	all = append(all, networkCommands()...)
+	all = append(all, diagCommands()...)
 	all = append(all, serverCommands()...)
 	return all
+}
+
+// diagCommands 是 m2-21 的三层无 SSH 远程排障命令：固定只读诊断集、受控任意命令执行与一键取证/证据包查询。
+func diagCommands() []*Command {
+	name := Arg{Name: "name", Description: "服务器的名字或 ID"}
+	return []*Command{
+		{Path: []string{"server", "diag"}, Summary: "在节点运行固定只读诊断集（10 项：ports/services/logs/config/connectivity/firewall/clock/resources/certs/speedtest；无 secrets 时 config 自动打码）", Class: ClassRead,
+			Args: []Arg{
+				name,
+				{Name: "item", Optional: true, Description: "可选：仅运行单个诊断项（ports、services、logs、config、connectivity、firewall、clock、resources、certs 或 speedtest）"},
+			}},
+		{Path: []string{"server", "exec"}, Summary: "在本地已开启 allow_exec 的远程节点执行受控命令（第五类 exec 危险操作，同机永久禁止；支持 --command 或 -- <命令>，不做交互式 shell）",
+			Class: ClassAction, Shape: ShapeJob, Danger: v1.DangerExec, Confirm: &Confirm{Kind: ConfirmObject, Arg: "name"}, TrailingCommandFlag: "command",
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "command", Type: TypeString, Description: "在节点 /bin/sh -c 中执行的命令文本（CLI 与 MCP 也支持在 -- 之后直接传入）"},
+				{Name: "timeout", Type: TypeString, Default: "30s", Description: "命令执行超时（1s..300s，默认 30s）"},
+			}},
+		{Path: []string{"server", "evidence"}, Summary: "一键采集指定服务器排障证据包并落入 evidence_packages（离线或部分采集失败时记 collect_error 仍落库）", Class: ClassAction,
+			Args: []Arg{name},
+			Flags: []Flag{
+				{Name: "category", Type: TypeString, Default: "general", Description: "取证类别：general（默认）、offline、network、kernel、resources 或 cert"},
+			}},
+		{Path: []string{"evidence", "list"}, Summary: "按 id 倒序分页列出排障证据包摘要（不含 items 正文，只对管理员开放）", Class: ClassRead, List: true,
+			Flags: []Flag{
+				{Name: "server-name", Type: TypeString, Description: "按服务器名或 ID 过滤"},
+				{Name: "category", Type: TypeString, Description: "按取证类别过滤：general、offline、network、kernel、resources 或 cert"},
+			},
+			Columns: []string{"id", "category", "server_id", "collected_at", "size_bytes", "collect_error", "expires_at"}},
+		{Path: []string{"evidence", "get"}, Summary: "查看单份完整排障证据包（含结构化排障数据 items，只对管理员开放）", Class: ClassRead,
+			Args: []Arg{{Name: "id", Description: "证据包 ID（evidence list 里的 id）"}}},
+	}
 }
 
 // networkCommands 是 m2-19 的节点网络探测、纯 Go WARP 闭环与返程路由查询/测路命令（node-network-warp-and-return-routes）。

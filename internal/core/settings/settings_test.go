@@ -36,8 +36,8 @@ func wantCode(t *testing.T, err error, code v1.Code) *v1.Error {
 // master-settings「settings show」：每个 key 都有默认值，类型与目录一致，没有目录外的项。
 func TestDefaultsCoverCatalog(t *testing.T) {
 	table, _ := schema.Default().Table("system_config")
-	if len(table.Settings) != 97 {
-		t.Fatalf("目录应当 97 个 key，得到 %d", len(table.Settings))
+	if len(table.Settings) != 101 {
+		t.Fatalf("目录应当 101 个 key，得到 %d", len(table.Settings))
 	}
 	seen := map[string]bool{}
 	for _, k := range table.Settings {
@@ -201,8 +201,8 @@ func TestEnsureSingletonAndLoad(t *testing.T) {
 		if st.Version != 1 || st.CreatedAt.IsZero() || st.UpdatedAt.IsZero() {
 			t.Fatalf("单例行应当版本 1 带时间戳：%+v", st)
 		}
-		if len(st.Values) != 46+97 {
-			t.Fatalf("字段值表应当 143 项，得到 %d", len(st.Values))
+		if len(st.Values) != 46+101 {
+			t.Fatalf("字段值表应当 147 项，得到 %d", len(st.Values))
 		}
 		for name, want := range map[string]any{
 			"heartbeat_interval": int64(30), "enable_short_link": true, "enable_miaomiaowu_features": true, "sub_info_expire_prefix": "📅过期时间",
@@ -250,8 +250,8 @@ func TestEnsureSingletonAndLoad(t *testing.T) {
 		if _, ok := r.Field("id"); ok {
 			t.Error("元数据列不是字段")
 		}
-		if len(r.Fields()) != 143 {
-			t.Errorf("Fields 应当 143 项，得到 %d", len(r.Fields()))
+		if len(r.Fields()) != 147 {
+			t.Errorf("Fields 应当 147 项，得到 %d", len(r.Fields()))
 		}
 	})
 }
@@ -352,8 +352,8 @@ func TestWrite(t *testing.T) {
 				t.Errorf("快照内容里不该有 %s", absent)
 			}
 		}
-		if len(content) != 100 {
-			t.Errorf("快照应当含 100 个 spec 字段，得到 %d", len(content))
+		if len(content) != 104 {
+			t.Errorf("快照应当含 104 个 spec 字段，得到 %d", len(content))
 		}
 		// content_hash 是 canonical 字节的 SHA-256：PostgreSQL 的 jsonb 读回来的字节可能被重排，规范化后一定对得上。
 		canonical, err := Canonical(s.Content)

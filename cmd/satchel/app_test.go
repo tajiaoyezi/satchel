@@ -140,7 +140,10 @@ func (h *harness) cli(args ...string) (stdout, stderr string, code int) {
 	h.t.Helper()
 	var out, errOut bytes.Buffer
 	opts := options()
-	code = cli.Execute(opts, append(args, "--data-dir", h.dataDir), &out, &errOut)
+	head, tail := cli.SplitDashDash(args)
+	full := append(append([]string{}, head...), "--data-dir", h.dataDir)
+	full = append(full, tail...)
+	code = cli.Execute(opts, full, &out, &errOut)
 	return out.String(), errOut.String(), code
 }
 

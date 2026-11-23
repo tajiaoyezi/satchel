@@ -333,12 +333,17 @@ func (ck *checker) parse(args []string) (string, []string) {
 		allowed = flagsOf(cmd)
 	}
 	var positional []string
+	var trailing []string
 	help, dashdash, flagBad := false, false, false
 	for i := pathLen; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case dashdash:
-			positional = append(positional, a)
+			if cmd != nil && cmd.TrailingCommandFlag != "" {
+				trailing = append(trailing, a)
+			} else {
+				positional = append(positional, a)
+			}
 		case a == "--":
 			dashdash = true
 		case a == "--help" || a == "-h":
@@ -379,6 +384,9 @@ func (ck *checker) parse(args []string) (string, []string) {
 	// 有写错的 flag 时不知道它要不要带值，后面的词算不准，不再报位置参数的个数。
 	if !help && !flagBad && len(positional) > len(cmd.Args) {
 		problems = append(problems, fmt.Sprintf("%s 最多 %d 个位置参数，这里有 %d 个：%s", cmd.Name(), len(cmd.Args), len(positional), strings.Join(positional, " ")))
+	}
+	if !help && !flagBad && dashdash && cmd.TrailingCommandFlag != "" && len(trailing) == 0 {
+		problems = append(problems, fmt.Sprintf("%s 在 -- 后面缺少要执行的命令", cmd.Name()))
 	}
 	if cmd.Name() == "explain" && !help && len(positional) == 1 && !strings.Contains(positional[0], "<") {
 		target := positional[0]

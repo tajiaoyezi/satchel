@@ -32,6 +32,7 @@ import (
 	corebatch "github.com/satchel/satchel/internal/core/batch"
 	corebatchin "github.com/satchel/satchel/internal/core/batchinbounds"
 	corebatchout "github.com/satchel/satchel/internal/core/batchoutbounds"
+	coreevidence "github.com/satchel/satchel/internal/core/evidence"
 	coreinbounds "github.com/satchel/satchel/internal/core/inbounds"
 	corejobs "github.com/satchel/satchel/internal/core/jobs"
 	coreoutbounds "github.com/satchel/satchel/internal/core/outbounds"
@@ -65,6 +66,7 @@ import (
 	"github.com/satchel/satchel/internal/service/auth"
 	svcbackup "github.com/satchel/satchel/internal/service/backup"
 	svcdatabase "github.com/satchel/satchel/internal/service/database"
+	svcdiag "github.com/satchel/satchel/internal/service/diag"
 	"github.com/satchel/satchel/internal/service/jobs"
 	svclogs "github.com/satchel/satchel/internal/service/logs"
 	svcnetwork "github.com/satchel/satchel/internal/service/network"
@@ -82,6 +84,9 @@ import (
 	"github.com/satchel/satchel/pkg/release"
 	"github.com/satchel/satchel/pkg/xrpc"
 )
+
+// hostMachineID 读取主控宿主机标识（测试可替换为固定值以在非 Linux 宿主机验证同机 fail-closed 判定）。
+var hostMachineID = agentconn.HostMachineID
 
 // shutdownTimeout 是优雅停止等进行中请求的上限（master-serve「优雅停止」）。
 const shutdownTimeout = 10 * time.Second
@@ -268,8 +273,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 			AgentLogEnabled:        s.AgentLogEnabled(),
 		}
 	}
+	var diagSvc *svcdiag.Service
 	conns := agentconn.New(agentconn.Config{Identity: masterKey, Directory: serversSvc.Directory(), Version: buildinfo.Version,
-		MasterMachineID: agentconn.HostMachineID(),
+		MasterMachineID: hostMachineID(),
 		CurrentMasterURL: func(ctx context.Context) string {
 			s, err := settingsRepo.Load(ctx)
 			if err != nil {
@@ -287,6 +293,19 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		},
 		OnOffline: func(serverID int64) {
 			serversSvc.ClearSpeed(serverID, time.Now())
+			if diagSvc != nil {
+				diagSvc.HandleNodeOffline(serverID)
+			}
+		},
+		OnConnected: func(serverID int64) {
+			if diagSvc != nil {
+				diagSvc.HandleNodeConnected(serverID)
+			}
+		},
+		OnExecEvent: func(serverID int64, ev xrpc.ExecEvent) {
+			if diagSvc != nil {
+				diagSvc.HandleExecEvent(serverID, ev)
+			}
 		},
 		HeartbeatInterval: func(ctx context.Context) time.Duration {
 			s, err := settingsRepo.Load(ctx)
@@ -310,10 +329,24 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	}
 	// 长任务：上次主控停止时还没结束的先标为失败（master-jobs）。参数摘要用横切层 audit 的同一套打码。
 	// 升级标记里的那个 job 不动：它由 exec 之后的收尾写结局（master-self-update）。
-	jobsSvc := jobs.New(corejobs.New(bdb, st), table, mwaudit.Digest, logger)
+	jobsRepo := corejobs.New(bdb, st)
+	jobsSvc := jobs.New(jobsRepo, table, mwaudit.Digest, logger)
 	jobsSvc.SetServerLookup(serversSvc.LookupIDByName)
 	serversSvc.SetStartJob(func(ctx context.Context, serverID int64, inv *command.Invocation, run func(context.Context) (any, error), done func()) (any, error) {
 		return jobsSvc.StartForServer(ctx, serverID, inv, run, done)
+	})
+	evidenceRepo := coreevidence.New(bdb, st)
+	diagSvc = svcdiag.New(svcdiag.Deps{
+		Servers:          serversRepo,
+		Settings:         settingsRepo,
+		Evidence:         evidenceRepo,
+		JobsRepo:         jobsRepo,
+		AuditRepo:        auditRepo,
+		Nodes:            serversSvc,
+		StartJob:         jobsSvc.StartForServer,
+		ReconcileUnknown: jobsSvc.ReconcileUnknown,
+		ListUnknownJobs:  jobsSvc.ListUnknownByServer,
+		Logger:           logger,
 	})
 	networkSvc := svcnetwork.New(svcnetwork.Deps{
 		Servers:      serversRepo,
@@ -393,7 +426,7 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 	})
 	identity.SetSetupGuard(backups.SetupGuard)
 	sched := scheduler.New(scheduler.Tasks(scheduler.Deps{DB: bdb, Auth: identity, Audit: audits, Security: guard, Schedule: schedules,
-		Backup: backups, Jobs: jobsSvc, Servers: serversSvc, OfflineThreshold: cfg.OfflineThreshold, Logger: logger}), schedules, logger)
+		Backup: backups, Jobs: jobsSvc, Servers: serversSvc, PruneEvidence: diagSvc.PruneExpiredEvidence, OfflineThreshold: cfg.OfflineThreshold, Logger: logger}), schedules, logger)
 	schedules.SetTasks(sched.Infos())
 
 	bindings := command.Bindings{
@@ -452,6 +485,9 @@ func newApp(dataDir string, bdb *bun.DB, logger *slog.Logger, cfg db.ServeConfig
 		bindings[name] = h
 	}
 	for name, h := range networkSvc.Bindings() {
+		bindings[name] = h
+	}
+	for name, h := range diagSvc.Bindings() {
 		bindings[name] = h
 	}
 	if err := table.CheckBindings(bindings); err != nil {

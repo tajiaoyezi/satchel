@@ -291,6 +291,8 @@ type Command struct {
 	REST *REST
 	// Shape 是执行形状；空是普通命令。
 	Shape Shape
+	// TrailingCommandFlag 非空时，CLI 与 MCP 允许在 -- 后传入命令片段并按空格拼接写入该 string 类型 flag（REST 仍从 JSON 体读取）。
+	TrailingCommandFlag string
 }
 
 // Name 是命令路径各段用空格连起来的名字，也是 Bindings 与审计记录里的 command。
@@ -460,6 +462,12 @@ func (c *Command) validate() error {
 	}
 	if c.Danger != "" && !validDanger(c.Danger) {
 		return fmt.Errorf("命令 %q 的危险类 %q 不认识", name, c.Danger)
+	}
+	if c.TrailingCommandFlag != "" {
+		f, ok := c.FlagByName(c.TrailingCommandFlag)
+		if !ok || f.Type != TypeString {
+			return fmt.Errorf("命令 %q 的 TrailingCommandFlag %q 必须指向已登记的 string 类型 flag", name, c.TrailingCommandFlag)
+		}
 	}
 	if c.DynamicDanger {
 		if c.Class == ClassLocal || c.Class == ClassRead {

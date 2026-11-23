@@ -23,6 +23,8 @@
 | `database migrate` | action | operate | — | — | 是 | 否 | 否 | `POST /api/v1/database/migrate` |
 | `database show` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/database/show` |
 | `database test` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/database/test` |
+| `evidence get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/evidence/get/{id}` |
+| `evidence list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/evidence` |
 | `explain` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/explain/{target}` |
 | `inbound batch list` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/inbound/batch` |
 | `inbound batch plan` | config | operate | — | — | 否 | 否 | 否 | `POST /api/v1/inbound/batch/plan` |
@@ -68,7 +70,10 @@
 | `server config status` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/config/status/{name}` |
 | `server config test` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/config/test/{name}` |
 | `server connections` | read | read | — | — | 否 | 否 | 是 | `GET /api/v1/server/connections/{name}` |
+| `server diag` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/diag/{name}/{item}` |
 | `server domain-latency` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/domain-latency/{name}` |
+| `server evidence` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/evidence/{name}` |
+| `server exec` | action | operate | exec | object (name) | 否 | 否 | 否 | `POST /api/v1/server/exec/{name}` |
 | `server get` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/get/{name}` |
 | `server install-command` | read | read | — | — | 否 | 否 | 否 | `GET /api/v1/server/install-command/{name}` |
 | `server kick` | action | operate | — | — | 否 | 否 | 否 | `POST /api/v1/server/kick/{name}` |
@@ -155,6 +160,7 @@
 | `backup upload` | 上传 |
 | `database migrate` | 长任务 |
 | `return-route test` | 长任务 |
+| `server exec` | 长任务 |
 | `server nginx install` | 长任务 |
 | `server nginx uninstall` | 长任务 |
 | `server update apply` | 长任务 |

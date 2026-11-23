@@ -132,6 +132,12 @@ var defaults = map[string]any{
 	"user_hidden_rule_templates":        json.RawMessage(`[]`),
 	"user_visible_owned_rule_templates": json.RawMessage(`[]`),
 
+	// Satchel 新增·日常运维·远程执行并发队列与一键取证配额（m2-21）。
+	"exec_max_concurrency":    int64(2),
+	"exec_queue_depth":        int64(8),
+	"evidence_max_bytes":      int64(1 << 20),
+	"evidence_retention_days": int64(30),
+
 	// 只读展示：Satchel 常开、不可关（第 06 章）；Load 里恒置 true，这里的值只是让目录完整。
 	"require_encryption": true,
 

@@ -112,6 +112,17 @@ func (s *Scheduler) runOnce(ctx context.Context, t Task) {
 	s.rec.End(ctx, run, detail, err)
 }
 
+// RunNow 同步触发一次指定名称的内置任务（记入 task_runs，测试与按需维护用）。
+func (s *Scheduler) RunNow(ctx context.Context, name string) error {
+	for _, t := range s.tasks {
+		if t.Info.Name == name {
+			s.runOnce(ctx, t)
+			return nil
+		}
+	}
+	return fmt.Errorf("未找到内置任务 %q", name)
+}
+
 // safeRun 跑一次任务；panic 记成错误（detail 以 panic: 开头）并写一条带调用栈的 error 日志，别的任务照常。
 func (s *Scheduler) safeRun(ctx context.Context, t Task) (detail string, err error) {
 	defer func() {

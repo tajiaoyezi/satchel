@@ -49,6 +49,10 @@ const (
 	MethodWarpAuthorize          = "warp.authorize"            // WarpAuthorizeParams → WarpAuthorizeResult
 	MethodWarpRemove             = "warp.remove"               // WarpRemoveParams → WarpRemoveResult
 	MethodWarpCredentials        = "warp.credentials"          // 无参数 → WarpCredentialsResult
+	MethodDiagRun                = "diag.run"                  // DiagRunParams → DiagRunResult
+	MethodExecStart              = "exec.start"                // ExecStartParams → ExecStartResult
+	MethodExecStatus             = "exec.status"               // ExecStatusParams → ExecStatusResult
+	MethodExecCancel             = "exec.cancel"               // ExecCancelParams → ExecCancelResult
 )
 
 // 节点只读日志与只读配置拉取的上限，确保远低于单帧 ReadLimit（4 MiB）。

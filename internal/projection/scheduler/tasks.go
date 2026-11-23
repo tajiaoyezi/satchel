@@ -35,6 +35,8 @@ type Deps struct {
 	Backup   *svcbackup.Service
 	Jobs     *jobs.Service
 	Servers  *servers.Service
+	// PruneEvidence 是顺带清理过期证据包的回调（由 job_cleanup 每小时执行，不新增内置定时任务）。
+	PruneEvidence func(context.Context) (int, error)
 	// OfflineThreshold 是节点的离线阈值（SATCHEL_OFFLINE_THRESHOLD_SECONDS）；为零时用 db.DefaultOfflineThreshold。
 	OfflineThreshold time.Duration
 	Logger           *slog.Logger
@@ -65,8 +67,8 @@ func Tasks(d Deps) []Task {
 			Run: swept(d.Auth.Sweep)},
 		{Info: schedule.TaskInfo{Name: "backup_local", Summary: "在本机 backups/ 生成一份整库备份（最新一份不到 20 小时就跳过；最多留 7 份）", Every: 24 * time.Hour},
 			Run: backupLocal(d.Backup)},
-		{Info: schedule.TaskInfo{Name: "job_cleanup", Summary: "删掉 7 天以前、已经结束的长任务", Every: time.Hour},
-			Run: pruned(d.Jobs.Prune)},
+		{Info: schedule.TaskInfo{Name: "job_cleanup", Summary: "删掉 7 天以前、已经结束的长任务，并顺带清理已过期的取证证据包", Every: time.Hour},
+			Run: pruneJobsAndEvidence(d.Jobs.Prune, d.PruneEvidence)},
 		{Info: schedule.TaskInfo{Name: "server_offline_sweep", Summary: "把心跳超过离线阈值的在线服务器标为离线", Every: 30 * time.Second},
 			Run: d.Servers.SweepOffline(threshold, time.Now)},
 		{Info: schedule.TaskInfo{Name: "server_traffic_collect", Summary: "到了 traffic_collect_interval 就向在线的服务器拉一次流量快照，收进主控内存里的累计", Every: 10 * time.Second},
@@ -119,6 +121,27 @@ func pruned(prune func(context.Context) (int, error)) func(context.Context) (str
 			return "", err
 		}
 		return fmt.Sprintf("删掉 %d 条", n), nil
+	}
+}
+
+// pruneJobsAndEvidence 在 job_cleanup 内清理过期长任务，并顺带清理已超过 expires_at 的证据包（不新增定时任务）。
+func pruneJobsAndEvidence(pruneJobs, pruneEvidence func(context.Context) (int, error)) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		nJobs, err := pruneJobs(ctx)
+		if err != nil {
+			return "", err
+		}
+		if pruneEvidence == nil {
+			return fmt.Sprintf("删掉 %d 条", nJobs), nil
+		}
+		nEv, err := pruneEvidence(ctx)
+		if err != nil {
+			return "", err
+		}
+		if nEv > 0 {
+			return fmt.Sprintf("删掉长任务 %d 条，清理过期证据包 %d 份", nJobs, nEv), nil
+		}
+		return fmt.Sprintf("删掉 %d 条", nJobs), nil
 	}
 }
 

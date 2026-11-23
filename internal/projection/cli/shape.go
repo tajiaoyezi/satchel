@@ -135,9 +135,19 @@ func saveDownload(result any, path string) (any, error) {
 	return map[string]any{"name": f.Name, "size": n, "output": path}, nil
 }
 
+// jobExitError 表示长任务以 unknown 或带真实退出码的非四字段 failed 结束：CLI 先把完整 job 对象输出到 stdout，
+// 再以非零退出码返回（文本模式下同步在 stderr 提示原因）。
+type jobExitError struct {
+	code int
+	err  *v1.Error
+}
+
+func (e *jobExitError) Error() string { return e.err.Error() }
+
 // followJob 跟一个长任务到结束（master-jobs「三个投影怎么等 job」）：每隔 JobPoll 调一次 job get；done 时返回最终的 job，
-// failed 时返回 output 里的四字段错误（CLI 按它给退出码）。JobMaxWait 非 0 时到点就返回当时的 job（MCP 最多等 60 秒），
-// 这时即使失败也返回 job 本身，不当成错误。
+// failed 时若 output 为四字段错误则返回该错误（CLI 按它给退出码），否则（如 server exec 真实非零退出码）返回 job 并发出非零退出码；
+// unknown 时返回该 unknown 态 job 并以 unavailable 类退出码结束。JobMaxWait 非 0 时到点就返回当时的 job（MCP 最多等 60 秒），
+// 这时即使失败或 unknown 也返回 job 本身，不当成错误。
 func followJob(ctx context.Context, accepted any, runner command.Runner, opts Options) (any, error) {
 	job, err := asJob(accepted)
 	if err != nil {
@@ -185,12 +195,25 @@ func followJob(ctx context.Context, accepted any, runner command.Runner, opts Op
 			return nil, err
 		}
 	}
-	if job["status"] == "failed" && opts.JobMaxWait == 0 {
-		var e v1.Error
-		if err := json.Unmarshal([]byte(str(job["output"])), &e); err == nil && e.Code != "" {
-			return nil, &e
+	if opts.JobMaxWait == 0 {
+		switch job["status"] {
+		case "failed":
+			rawOut := str(job["output"])
+			var e v1.Error
+			if err := json.Unmarshal([]byte(rawOut), &e); err == nil && e.Code != "" {
+				return nil, &e
+			}
+			var obj map[string]any
+			if rawOut != "" && json.Unmarshal([]byte(rawOut), &obj) == nil && len(obj) > 0 {
+				fe := v1.Newf(v1.CodeInternal, "长任务 %s 执行失败", str(job["job_id"]))
+				return job, &jobExitError{code: v1.ExitCodeOf(fe), err: fe}
+			}
+			return nil, v1.Newf(v1.CodeInternal, "长任务 %s 失败", str(job["job_id"]))
+		case "unknown":
+			ue := v1.Newf(v1.CodeUnavailable, "长任务 %s 状态未知（执行期间与节点连接断开），结果未知不等于可重试", str(job["job_id"])).
+				WithNext("待节点重连后用 satchel job get " + str(job["job_id"]) + " 核查终态，切勿盲目重试")
+			return job, &jobExitError{code: v1.ExitCodeOf(ue), err: ue}
 		}
-		return nil, v1.Newf(v1.CodeInternal, "长任务 %s 失败", str(job["job_id"]))
 	}
 	return job, nil
 }

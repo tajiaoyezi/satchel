@@ -15,15 +15,17 @@ import (
 
 // Record 是一条审计记录；字段名就是 audit list 输出的字段名。
 type Record struct {
-	ID         int64        `json:"id"`
-	At         time.Time    `json:"at"`
-	Actor      string       `json:"actor"`
-	ActorKind  v1.ActorKind `json:"actor_kind"`
-	TokenID    *int64       `json:"token_id"`
-	Command    string       `json:"command"`
-	ArgsDigest string       `json:"args_digest"`
-	PlanID     *int64       `json:"plan_id"`
-	Result     string       `json:"result"`
+	ID          int64        `json:"id"`
+	At          time.Time    `json:"at"`
+	Actor       string       `json:"actor"`
+	ActorKind   v1.ActorKind `json:"actor_kind"`
+	TokenID     *int64       `json:"token_id"`
+	Command     string       `json:"command"`
+	ArgsDigest  string       `json:"args_digest"`
+	FullCommand *string      `json:"full_command"`
+	Output      *string      `json:"output"`
+	PlanID      *int64       `json:"plan_id"`
+	Result      string       `json:"result"`
 }
 
 // Filter 是 audit list 的过滤条件：actor 精确、command 前缀、at 不早于 since。
@@ -48,7 +50,8 @@ func New(db *bun.DB, st *store.Store) *Repo {
 func (r *Repo) Insert(ctx context.Context, rec Record) error {
 	row := &model.AuditLog{
 		At: rec.At, Actor: rec.Actor, ActorKind: string(rec.ActorKind), TokenID: rec.TokenID,
-		Command: rec.Command, ArgsDigest: rec.ArgsDigest, PlanID: rec.PlanID, Result: rec.Result,
+		Command: rec.Command, ArgsDigest: rec.ArgsDigest, FullCommand: rec.FullCommand, Output: rec.Output,
+		PlanID: rec.PlanID, Result: rec.Result,
 	}
 	return r.store.Insert(ctx, row)
 }
@@ -68,7 +71,8 @@ func (r *Repo) List(ctx context.Context, f Filter, limit int, beforeID int64) ([
 	for _, row := range rows {
 		out = append(out, Record{
 			ID: row.ID, At: row.At, Actor: row.Actor, ActorKind: v1.ActorKind(row.ActorKind), TokenID: row.TokenID,
-			Command: row.Command, ArgsDigest: row.ArgsDigest, PlanID: row.PlanID, Result: row.Result,
+			Command: row.Command, ArgsDigest: row.ArgsDigest, FullCommand: row.FullCommand, Output: row.Output,
+			PlanID: row.PlanID, Result: row.Result,
 		})
 	}
 	return out, nil
@@ -114,7 +118,8 @@ func (r *Repo) DeleteBefore(ctx context.Context, cutoff time.Time) (int, error) 
 func (r *Repo) InsertTx(ctx context.Context, tx bun.Tx, rec Record) error {
 	row := &model.AuditLog{
 		At: rec.At, Actor: rec.Actor, ActorKind: string(rec.ActorKind), TokenID: rec.TokenID,
-		Command: rec.Command, ArgsDigest: rec.ArgsDigest, PlanID: rec.PlanID, Result: rec.Result,
+		Command: rec.Command, ArgsDigest: rec.ArgsDigest, FullCommand: rec.FullCommand, Output: rec.Output,
+		PlanID: rec.PlanID, Result: rec.Result,
 	}
 	return r.store.WithTx(tx).Insert(ctx, row)
 }

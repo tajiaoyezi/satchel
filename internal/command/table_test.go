@@ -53,6 +53,8 @@ func TestCatalog(t *testing.T) {
 		"server scan": ClassAction, "server domain-latency": ClassAction,
 		"server warp status": ClassRead, "server warp install": ClassAction, "server warp authorize": ClassAction,
 		"server warp remove": ClassAction, "server warp outbound-plan": ClassConfig,
+		"server diag": ClassRead, "server exec": ClassAction, "server evidence": ClassAction,
+		"evidence list": ClassRead, "evidence get": ClassRead,
 		"return-route list": ClassRead, "return-route get": ClassRead, "return-route test": ClassAction,
 		"tunnel list": ClassRead, "tunnel plan": ClassConfig, "tunnel multiplex plan": ClassConfig, "tunnel delete-plan": ClassConfig,
 		"tunnel chain list": ClassRead, "tunnel chain plan": ClassConfig, "tunnel chain delete-plan": ClassConfig,
@@ -76,16 +78,19 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s 的类别应当是 %s，得到 %s", name, class, c.Class)
 		}
 	}
-	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "plans list", "snapshot list", "server logs list", "server logs files", "server config files", "server nginx servers", "website list", "return-route list", "tunnel list", "tunnel chain list", "inbound list", "inbound batch list", "outbound list", "outbound batch list", "routing list", "routing preset list"} {
+	for _, name := range []string{"audit list", "settings snapshots list", "token list", "mcp status", "security events list", "security bans list", "logs list", "logs files list", "schedule list", "schedule runs list", "job list", "backup list", "plans list", "snapshot list", "server logs list", "server logs files", "server config files", "server nginx servers", "website list", "return-route list", "tunnel list", "tunnel chain list", "inbound list", "inbound batch list", "outbound list", "outbound batch list", "routing list", "routing preset list", "evidence list"} {
 		if c, _ := table.Lookup(name); !c.List {
 			t.Errorf("%s 应当是列表命令", name)
 		}
 	}
 	// m1-07 的执行形状、人类专属与不要身份。
-	for name, shape := range map[string]Shape{"backup create": ShapeJob, "update apply": ShapeJob, "server nginx install": ShapeJob, "server nginx uninstall": ShapeJob, "server warp install": ShapeJob, "return-route test": ShapeJob, "backup upload": ShapeUpload, "setup restore": ShapeUpload, "settings image upload": ShapeUpload, "backup download": ShapeDownload} {
+	for name, shape := range map[string]Shape{"backup create": ShapeJob, "update apply": ShapeJob, "server nginx install": ShapeJob, "server nginx uninstall": ShapeJob, "server warp install": ShapeJob, "server exec": ShapeJob, "return-route test": ShapeJob, "backup upload": ShapeUpload, "setup restore": ShapeUpload, "settings image upload": ShapeUpload, "backup download": ShapeDownload} {
 		if c, _ := table.Lookup(name); c.Shape != shape {
 			t.Errorf("%s 的执行形状应当是 %s，得到 %q", name, shape, c.Shape)
 		}
+	}
+	if c, _ := table.Lookup("server exec"); c.Danger != v1.DangerExec || c.Confirm == nil || c.Confirm.Kind != ConfirmObject || c.Confirm.Arg != "name" || c.TrailingCommandFlag != "command" {
+		t.Errorf("server exec 应当是 exec 危险类、confirm 取 name 且 TrailingCommandFlag=command：%+v", c)
 	}
 	// m1-09：升级与更新 CDN 开关是主控自身类，confirm 取位置参数。
 	for name, arg := range map[string]string{"update apply": "version", "settings update-cdn set": "enabled"} {
